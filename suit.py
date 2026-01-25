@@ -362,7 +362,6 @@ class AutodartsView(tk.Frame, ServiceViewMixin):
         self._check_status_generic("autodarts", self.status_lbl)
 
     def do_install(self):
-        # Nutze die sichere Skript-Methode
         bash_script = """
 echo "Installing Autodarts..."
 bash <(curl -sL http://autodarts.io/install)
@@ -455,7 +454,7 @@ class AutoGlowView(tk.Frame, ServiceViewMixin):
         self._check_status_generic("autoglow", self.status_lbl)
 
     def do_install(self):
-        # Saubere Installation über Skript-Datei
+        # FIX: setup.sh statt install.sh
         bash_script = """
 echo "=== Installing AutoGlow ==="
 sudo apt-get update
@@ -472,12 +471,12 @@ else
     sudo git pull
 fi
 
-if [ -f "$TARGET/install.sh" ]; then
+if [ -f "$TARGET/setup.sh" ]; then
     echo "Running installer..."
-    sudo chmod +x "$TARGET/install.sh"
-    sudo "$TARGET/install.sh"
+    sudo chmod +x "$TARGET/setup.sh"
+    sudo "$TARGET/setup.sh"
 else
-    echo "ERROR: install.sh not found in $TARGET"
+    echo "ERROR: setup.sh not found in $TARGET"
 fi
 """
         self._run_bash_script(bash_script)
