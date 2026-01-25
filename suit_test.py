@@ -457,11 +457,12 @@ class AutoGlowView(tk.Frame, ServiceViewMixin):
         bash_script = """
 echo "=== Installing AutoGlow ==="
 sudo apt-get update
-# python3-venv und git installieren (wichtig für venv Fehler)
+# python3-venv ist wichtig für die virtuelle Umgebung
 sudo apt-get install -y git python3-venv
 
 TARGET="/opt/AutoGlow"
 
+# 1. Herunterladen (als Root, da /opt oft geschützt ist)
 if [ ! -d "$TARGET" ]; then
     echo "Cloning repository..."
     sudo git clone https://github.com/IteraThor/AutoGlow.git "$TARGET"
@@ -471,15 +472,20 @@ else
     sudo git pull
 fi
 
-# WICHTIG: Besitzrechte auf den aktuellen Benutzer übertragen, damit Schreibzugriff geht
+# 2. WICHTIG: Besitzrechte auf den User übertragen
+# Das verhindert den "Permission denied" Fehler, wenn das Skript intern
+# versucht, eine virtuelle Umgebung (venv) zu erstellen.
 echo "Fixing permissions..."
 sudo chown -R $USER:$USER "$TARGET"
 
 if [ -f "$TARGET/setup.sh" ]; then
     echo "Running installer..."
-    chmod +x "$TARGET/setup.sh"
-    # Setup als normaler User starten
-    "$TARGET/setup.sh"
+    sudo chmod +x "$TARGET/setup.sh"
+    
+    # 3. Starten MIT SUDO
+    # Das Skript benötigt Root-Rechte für Dienste/Pakete. Da der Ordner
+    # aber nun (Schritt 2) uns gehört, kann es trotzdem darin schreiben.
+    sudo "$TARGET/setup.sh"
 else
     echo "ERROR: setup.sh not found in $TARGET"
 fi
