@@ -4,6 +4,7 @@ import subprocess
 import webbrowser
 from shutil import which
 import os
+import glob # Neu: Für die Suche nach Firefox Profilen
 
 # --- FARBPALETTE (DARK MODE) ---
 COLORS = {
@@ -53,8 +54,8 @@ TEXTS = {
     "kiosk_inactive": {"de": "● Inaktiv (Autostart aus)", "en": "● Inactive (Autostart off)"},
     "btn_enable_kiosk": {"de": "Einschalten (Autostart)", "en": "Enable (Autostart)"},
     "btn_disable_kiosk": {"de": "Ausschalten", "en": "Disable"},
-    "kiosk_hint": {"de": "Startet Firefox im Vollbildmodus direkt zu play.autodarts.io", 
-                   "en": "Starts Firefox in fullscreen mode directly to play.autodarts.io"},
+    "kiosk_hint": {"de": "Firefox Normal-Modus (Login gespeichert).\nVerhindert 'Restore Session' Popup automatisch.", 
+                   "en": "Firefox Normal Mode (Login saved).\nPrevents 'Restore Session' popup automatically."},
 
     # Status Messages
     "st_active": {"de": "● Aktiv (Läuft)", "en": "● Active (Running)"},
@@ -83,7 +84,7 @@ class SuitApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("SUIT")
-        self.geometry("600x750") # Angepasst für 4 Menüpunkte
+        self.geometry("600x750") 
         self.resizable(False, False)
         self.configure(bg=COLORS["bg_main"])
         
@@ -446,7 +447,7 @@ class AutoGlowView(tk.Frame, ServiceViewMixin):
         self.after(2000, lambda: self._check_status_generic("autoglow", self.status_lbl))
 
 
-# --- ANSICHT 4: KIOSK MODE (NEU) ---
+# --- ANSICHT 4: KIOSK MODE ---
 class KioskView(tk.Frame):
     def __init__(self, parent, controller):
         super().__init__(parent, bg=COLORS["bg_main"])
@@ -499,6 +500,28 @@ class KioskView(tk.Frame):
         else:
             self.status_lbl.config(text=TEXTS["kiosk_inactive"][l], foreground=COLORS["danger"])
 
+    def _disable_crash_restore(self):
+        """Sucht alle Firefox Profile und deaktiviert die Absturz-Wiederherstellung"""
+        profiles_path = os.path.expanduser("~/.mozilla/firefox/*.default*")
+        profiles = glob.glob(profiles_path)
+        
+        pref_line = 'user_pref("browser.sessionstore.resume_from_crash", false);'
+        
+        for p in profiles:
+            user_js = os.path.join(p, "user.js")
+            try:
+                # Prüfen ob Einstellung schon da ist
+                content = ""
+                if os.path.exists(user_js):
+                    with open(user_js, "r") as f:
+                        content = f.read()
+                
+                if "browser.sessionstore.resume_from_crash" not in content:
+                    with open(user_js, "a") as f:
+                        f.write("\n" + pref_line + "\n")
+            except Exception as e:
+                print(f"Could not update profile {p}: {e}")
+
     def enable_kiosk(self):
         if not os.path.exists(self.autostart_dir):
             try:
@@ -506,12 +529,16 @@ class KioskView(tk.Frame):
             except OSError as e:
                 messagebox.showerror("Error", str(e))
                 return
+        
+        # 1. Profile patchen um Black Screen zu verhindern
+        self._disable_crash_restore()
 
+        # 2. Desktop File erstellen (Sleep 5s, Normal Mode)
         content = """[Desktop Entry]
 Type=Application
 Name=Autodarts Kiosk
 Comment=Start Autodarts in Firefox Kiosk Mode
-Exec=firefox --kiosk https://play.autodarts.io/
+Exec=bash -c "sleep 5; firefox --kiosk https://play.autodarts.io/"
 X-GNOME-Autostart-enabled=true
 """
         try:
@@ -531,7 +558,6 @@ X-GNOME-Autostart-enabled=true
             except Exception as e:
                 messagebox.showerror("Error", str(e))
         else:
-             # Already disabled, just refresh
              self.check_status()
 
 
