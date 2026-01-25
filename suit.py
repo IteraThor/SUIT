@@ -19,7 +19,7 @@ COLORS = {
     "danger": "#d9534f",       # Rot
     "success": "#28a745",      # Grün
     "warning": "#ff9800",      # Orange
-    "purple": "#6c5ce7",       # Lila (für UI Tweaks)
+    "purple": "#6c5ce7",       # Lila
     "select_indicator": "#000000"
 }
 
@@ -40,7 +40,7 @@ TEXTS = {
     "ad_header": {"de": "Autodarts Verwaltung", "en": "Autodarts Management"},
     "ag_header": {"de": "AutoGlow Verwaltung", "en": "AutoGlow Management"},
     "kiosk_header": {"de": "Kiosk Modus (Firefox)", "en": "Kiosk Mode (Firefox)"},
-    "dash_header": {"de": "Dash to Panel (UI Tweak)", "en": "Dash to Panel (UI Tweak)"},
+    "dash_header": {"de": "Dash to Panel (v72)", "en": "Dash to Panel (v72)"},
     
     # Common Actions
     "status_lbl": {"de": "Status:", "en": "Status:"},
@@ -53,9 +53,9 @@ TEXTS = {
     "hint": {"de": "Hinweis: Root-Passwort erforderlich.", "en": "Note: Root password required."},
     
     # Dash to Panel
-    "dash_desc": {"de": "Verschiebt die Taskleiste nach unten (ähnlich Windows).\nErfordert oft Logout/Login nach Installation.", 
-                  "en": "Moves taskbar to bottom (Windows style).\nOften requires Logout/Login after install."},
-    "dash_installed": {"de": "● Installiert", "en": "● Installed"},
+    "dash_desc": {"de": "Installiert Version 72 von GitHub.\nNach Installation bitte Abmelden & Anmelden!", 
+                  "en": "Installs Version 72 from GitHub.\nPlease Logout & Login after installation!"},
+    "dash_installed": {"de": "● Installiert (Lokal)", "en": "● Installed (Local)"},
     "dash_not_installed": {"de": "● Nicht installiert", "en": "● Not installed"},
 
     # Kiosk Texts
@@ -93,7 +93,7 @@ class SuitApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("SUIT")
-        self.geometry("600x800") # Noch etwas höher für 5 Menüpunkte
+        self.geometry("600x800")
         self.resizable(False, False)
         self.configure(bg=COLORS["bg_main"])
         
@@ -123,7 +123,7 @@ class SuitApp(tk.Tk):
         style.configure("Card.TLabel", background=COLORS["bg_panel"], foreground=COLORS["fg_text"])
         style.configure("Hint.TLabel", foreground=COLORS["fg_sub"], font=("Segoe UI", 9))
         
-        # Buttons (Modern Flat)
+        # Buttons
         style.configure("TButton", 
                         background=COLORS["btn_bg"], 
                         foreground=COLORS["btn_fg"], 
@@ -136,27 +136,22 @@ class SuitApp(tk.Tk):
                   background=[("active", COLORS["accent"]), ("pressed", COLORS["accent_hover"])],
                   foreground=[("active", "white")])
 
-        # Accent Button Style
+        # Custom Button Styles
         style.configure("Accent.TButton", background=COLORS["accent"], foreground="white")
         style.map("Accent.TButton", background=[("active", COLORS["accent_hover"])])
 
-        # AutoGlow Button Style (Orange/Warning Color)
         style.configure("Glow.TButton", background=COLORS["warning"], foreground="white")
         style.map("Glow.TButton", background=[("active", "#e68900")])
 
-        # UI Tweak Button Style (Purple)
         style.configure("Purple.TButton", background=COLORS["purple"], foreground="white")
         style.map("Purple.TButton", background=[("active", "#5649b9")])
 
-        # Danger Button Style
         style.configure("Danger.TButton", background=COLORS["danger"], foreground="white")
         style.map("Danger.TButton", background=[("active", "#c9302c")])
 
-        # Lang Buttons (Small)
         style.configure("Lang.TButton", font=("Segoe UI", 9), padding=2, width=4)
         style.configure("LangActive.TButton", background=COLORS["accent"], foreground="white", font=("Segoe UI", 9, "bold"), width=4)
 
-        # Labelframes
         style.configure("TLabelframe", background=COLORS["bg_panel"], foreground=COLORS["fg_sub"], relief="flat")
         style.configure("TLabelframe.Label", background=COLORS["bg_panel"], foreground=COLORS["accent"])
 
@@ -167,7 +162,6 @@ class SuitApp(tk.Tk):
         self.title_lbl = ttk.Label(header, text="SUIT", style="Header.TLabel")
         self.title_lbl.pack(side="left")
 
-        # Language Switcher
         lang_frame = tk.Frame(header, bg=COLORS["bg_main"])
         lang_frame.pack(side="right")
 
@@ -671,7 +665,7 @@ class TouchRotationView(tk.Frame, ServiceViewMixin):
         subprocess.run("pkexec reboot", shell=True)
 
 
-# --- ANSICHT 6: DASH TO PANEL (NEU) ---
+# --- ANSICHT 6: DASH TO PANEL ---
 class DashPanelView(tk.Frame, ServiceViewMixin):
     def __init__(self, parent, controller):
         super().__init__(parent, bg=COLORS["bg_main"])
@@ -717,30 +711,40 @@ class DashPanelView(tk.Frame, ServiceViewMixin):
 
     def check_status(self):
         l = self.controller.lang
-        # Check if package installed
-        res = subprocess.run("dpkg -s gnome-shell-extension-dash-to-panel", shell=True, capture_output=True)
-        if res.returncode == 0:
+        # Check User Folder
+        path = os.path.expanduser("~/.local/share/gnome-shell/extensions/dash-to-panel@jderose9.github.com")
+        if os.path.exists(path):
             self.status_lbl.config(text=TEXTS["dash_installed"][l], foreground=COLORS["purple"])
         else:
             self.status_lbl.config(text=TEXTS["dash_not_installed"][l], foreground="gray")
 
     def do_install(self):
-        # 1. Install package (Root)
-        # 2. Try enable (User)
-        cmd_install = "sudo apt-get update && sudo apt-get install -y gnome-shell-extension-dash-to-panel"
-        # Nach Install versuchen wir es zu aktivieren, auch wenn Gnome Shell manchmal Restart braucht
-        cmd_enable = "gnome-extensions enable dash-to-panel@jderose9.github.io"
+        url = "https://github.com/home-sweet-gnome/dash-to-panel/releases/download/v72/dash-to-panel@jderose9.github.com_v72.zip"
+        zip_file = "dtp.zip"
+        uuid = "dash-to-panel@jderose9.github.com"
+
+        # Befehlskette: Download -> Install -> Enable -> Clean -> Message
+        cmds = [
+            f"cd /tmp",
+            f"wget -O {zip_file} {url}",
+            f"gnome-extensions install --force {zip_file}",
+            f"gnome-extensions enable {uuid}",
+            f"rm {zip_file}",
+            "echo",
+            "echo '===================================='",
+            "echo 'WICHTIG / IMPORTANT:'",
+            "echo 'Bitte einmal Abmelden und Anmelden (Logout/Login), damit die Leiste erscheint!'",
+            "echo '===================================='"
+        ]
         
-        full_cmd = f"{cmd_install} && {cmd_enable}"
+        full_cmd = " && ".join(cmds)
         self._term_run(full_cmd)
         self.after(5000, self.check_status)
 
     def do_uninstall(self):
         if not messagebox.askyesno("SUIT", "Uninstall Dash to Panel?"): return
-        cmd_disable = "gnome-extensions disable dash-to-panel@jderose9.github.io"
-        cmd_remove = "sudo apt-get remove -y gnome-shell-extension-dash-to-panel"
-        
-        self._term_run(f"{cmd_disable}; {cmd_remove}")
+        uuid = "dash-to-panel@jderose9.github.com"
+        self._term_run(f"gnome-extensions uninstall {uuid}")
         self.after(2000, self.check_status)
 
 
