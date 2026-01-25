@@ -20,7 +20,6 @@ COLORS = {
     "danger": "#d9534f",       # Rot
     "success": "#28a745",      # Grün
     "warning": "#ff9800",      # Orange
-    "purple": "#6c5ce7",       # Lila
     "select_indicator": "#000000"
 }
 
@@ -34,14 +33,13 @@ TEXTS = {
     "btn_autoglow": {"de": "💡 AutoGlow Manager", "en": "💡 AutoGlow Manager"},
     "btn_touch": {"de": "🔄 Touch Screen Input Rotation", "en": "🔄 Touch Screen Input Rotation"},
     "btn_kiosk": {"de": "🖥️ Setup Kiosk Mode", "en": "🖥️ Setup Kiosk Mode"},
-    "btn_dash": {"de": "🎨 Dash to Panel (Windows Look)", "en": "🎨 Dash to Panel (Windows Look)"},
     "btn_back": {"de": "❮ Zurück", "en": "❮ Back"},
     
     # Headers
     "ad_header": {"de": "Autodarts Verwaltung", "en": "Autodarts Management"},
     "ag_header": {"de": "AutoGlow Verwaltung", "en": "AutoGlow Management"},
     "kiosk_header": {"de": "Kiosk Modus (Firefox)", "en": "Kiosk Mode (Firefox)"},
-    "dash_header": {"de": "Dash to Panel (v72)", "en": "Dash to Panel (v72)"},
+    "touch_header": {"de": "Touch Screen Input Rotation", "en": "Touch Screen Input Rotation"},
     
     # Common Actions
     "status_lbl": {"de": "Status:", "en": "Status:"},
@@ -53,20 +51,13 @@ TEXTS = {
     "btn_uninstall": {"de": "Deinstallieren", "en": "Uninstall"},
     "hint": {"de": "Hinweis: Root-Passwort erforderlich.", "en": "Note: Root password required."},
     
-    # Dash to Panel
-    "dash_desc": {"de": "Installiert v72. Um es zu sehen, musst du dich abmelden!\nDas Skript versucht die Aktivierung zu erzwingen.", 
-                  "en": "Installs v72. To see it, you must logout!\nThe script tries to force activation."},
-    "dash_installed": {"de": "● Installiert (Lokal)", "en": "● Installed (Local)"},
-    "dash_not_installed": {"de": "● Nicht installiert", "en": "● Not installed"},
-    "btn_logout": {"de": "⚠️ Jetzt Abmelden (Logout)", "en": "⚠️ Logout Now"},
-
     # Kiosk Texts
     "kiosk_active": {"de": "● Aktiv (Autostart an)", "en": "● Active (Autostart on)"},
     "kiosk_inactive": {"de": "● Inaktiv (Autostart aus)", "en": "● Inactive (Autostart off)"},
     "btn_enable_kiosk": {"de": "Einschalten (Autostart)", "en": "Enable (Autostart)"},
     "btn_disable_kiosk": {"de": "Ausschalten", "en": "Disable"},
-    "kiosk_hint": {"de": "Firefox Normal-Modus (Login gespeichert).\nVerhindert 'Restore Session' Popup automatisch.", 
-                   "en": "Firefox Normal Mode (Login saved).\nPrevents 'Restore Session' popup automatically."},
+    "kiosk_hint": {"de": "Startet Firefox (Wayland Mode).\nVerhindert 'Restore Session' Popup & Black Screen.", 
+                   "en": "Starts Firefox (Wayland Mode).\nPrevents 'Restore Session' popup & black screen."},
 
     # Status Messages
     "st_active": {"de": "● Aktiv (Läuft)", "en": "● Active (Running)"},
@@ -76,7 +67,6 @@ TEXTS = {
     "st_nofile": {"de": "● Nicht installiert", "en": "● Not installed"},
 
     # Touch Rotation
-    "touch_header": {"de": "Touch Screen Input Rotation", "en": "Touch Screen Input Rotation"},
     "lbl_direction": {"de": "Ausrichtung wählen:", "en": "Select Orientation:"},
     "rot_left": {"de": "Links (90° gegen Uhrzeigersinn)", "en": "Left (90° CCW)"},
     "rot_right": {"de": "Rechts (90° im Uhrzeigersinn)", "en": "Right (90° CW)"},
@@ -95,7 +85,7 @@ class SuitApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("SUIT")
-        self.geometry("600x800")
+        self.geometry("600x750") 
         self.resizable(False, False)
         self.configure(bg=COLORS["bg_main"])
         
@@ -144,9 +134,6 @@ class SuitApp(tk.Tk):
 
         style.configure("Glow.TButton", background=COLORS["warning"], foreground="white")
         style.map("Glow.TButton", background=[("active", "#e68900")])
-
-        style.configure("Purple.TButton", background=COLORS["purple"], foreground="white")
-        style.map("Purple.TButton", background=[("active", "#5649b9")])
 
         style.configure("Danger.TButton", background=COLORS["danger"], foreground="white")
         style.map("Danger.TButton", background=[("active", "#c9302c")])
@@ -201,9 +188,6 @@ class SuitApp(tk.Tk):
 
     def show_kiosk(self):
         self._switch(KioskView)
-
-    def show_dash(self):
-        self._switch(DashPanelView)
 
     def _switch(self, frame_class):
         if self.current_frame:
@@ -268,8 +252,6 @@ class MainMenu(tk.Frame):
         self._make_menu_btn(self.controller.show_kiosk, "btn_kiosk")
         tk.Label(self, bg=COLORS["bg_main"], height=1).pack() 
         self._make_menu_btn(self.controller.show_touch, "btn_touch")
-        tk.Label(self, bg=COLORS["bg_main"], height=1).pack() 
-        self._make_menu_btn(self.controller.show_dash, "btn_dash")
 
         self.update_texts()
 
@@ -285,7 +267,6 @@ class MainMenu(tk.Frame):
         self._btn_autoglow.config(text=TEXTS["btn_autoglow"][l])
         self._btn_kiosk.config(text=TEXTS["btn_kiosk"][l])
         self._btn_touch.config(text=TEXTS["btn_touch"][l])
-        self._btn_dash.config(text=TEXTS["btn_dash"][l])
 
 
 # --- ANSICHT 2: AUTODARTS ---
@@ -543,11 +524,12 @@ class KioskView(tk.Frame):
         
         self._disable_crash_restore()
 
+        # FIX: MOZ_ENABLE_WAYLAND=1 für Wayland-Systeme
         content = """[Desktop Entry]
 Type=Application
 Name=Autodarts Kiosk
 Comment=Start Autodarts in Firefox Kiosk Mode
-Exec=bash -c "sleep 5; firefox --kiosk https://play.autodarts.io/"
+Exec=bash -c "sleep 5; MOZ_ENABLE_WAYLAND=1 firefox --kiosk https://play.autodarts.io/"
 X-GNOME-Autostart-enabled=true
 """
         try:
@@ -665,134 +647,6 @@ class TouchRotationView(tk.Frame, ServiceViewMixin):
 
     def reboot(self):
         subprocess.run("pkexec reboot", shell=True)
-
-
-# --- ANSICHT 6: DASH TO PANEL ---
-class DashPanelView(tk.Frame, ServiceViewMixin):
-    def __init__(self, parent, controller):
-        super().__init__(parent, bg=COLORS["bg_main"])
-        self.controller = controller
-
-        self.btn_back = ttk.Button(self, command=controller.show_menu, style="TButton")
-        self.btn_back.pack(anchor="w", pady=(0, 10))
-
-        self.header = ttk.Label(self, text="", style="SubHeader.TLabel")
-        self.header.pack(pady=(0, 15))
-
-        # Status
-        card_status = ttk.LabelFrame(self, text="Status", style="TLabelframe", padding=15)
-        card_status.pack(fill="x", pady=5)
-        self.status_lbl = ttk.Label(card_status, text="", style="Card.TLabel", font=("Segoe UI", 12, "bold"))
-        self.status_lbl.pack(anchor="center")
-
-        # Description
-        self.lbl_desc = ttk.Label(self, justify="center", style="Hint.TLabel")
-        self.lbl_desc.pack(pady=10)
-
-        # Action Buttons
-        card_act = ttk.Frame(self, style="Card.TFrame", padding=20)
-        card_act.pack(fill="x", padx=10)
-
-        self.btn_install = ttk.Button(card_act, command=self.do_install, style="Purple.TButton")
-        self.btn_install.pack(fill="x", pady=5)
-        
-        self.btn_logout = ttk.Button(card_act, command=self.do_logout)
-        self.btn_logout.pack(fill="x", pady=5)
-        
-        self.btn_uninstall = ttk.Button(card_act, command=self.do_uninstall, style="Danger.TButton")
-        self.btn_uninstall.pack(fill="x", pady=5)
-
-        self.update_texts()
-        self.check_status()
-
-    def update_texts(self):
-        l = self.controller.lang
-        self.btn_back.config(text=TEXTS["btn_back"][l])
-        self.header.config(text=TEXTS["dash_header"][l])
-        self.lbl_desc.config(text=TEXTS["dash_desc"][l])
-        self.btn_install.config(text=TEXTS["btn_install"][l])
-        self.btn_logout.config(text=TEXTS["btn_logout"][l])
-        self.btn_uninstall.config(text=TEXTS["btn_uninstall"][l])
-        self.check_status()
-
-    def check_status(self):
-        l = self.controller.lang
-        # Check User Folder
-        path = os.path.expanduser("~/.local/share/gnome-shell/extensions/dash-to-panel@jderose9.github.com")
-        if os.path.exists(path):
-            self.status_lbl.config(text=TEXTS["dash_installed"][l], foreground=COLORS["purple"])
-        else:
-            self.status_lbl.config(text=TEXTS["dash_not_installed"][l], foreground="gray")
-
-    def do_install(self):
-        script_path = "/tmp/suit_install_dtp.sh"
-        uuid = "dash-to-panel@jderose9.github.com"
-        
-        # Verbesserter Installationsprozess mit Schema-Compile und DBus-Force
-        script_content = f"""#!/bin/bash
-cd /tmp
-wget -O dtp.zip https://github.com/home-sweet-gnome/dash-to-panel/releases/download/v72/dash-to-panel@jderose9.github.com_v72.zip
-gnome-extensions install --force dtp.zip
-
-# Wait for unpack
-sleep 1
-
-# Versuch 1: Normal Enable
-gnome-extensions enable {uuid}
-
-# Versuch 2: Compile Schemas (oft der Grund warum es klemmt)
-glib-compile-schemas ~/.local/share/gnome-shell/extensions/{uuid}/schemas/
-
-# Versuch 3: Gsettings Force Append (Nur falls nicht schon aktiv)
-current=$(gsettings get org.gnome.shell enabled-extensions)
-if [[ $current != *"{uuid}"* ]]; then
-  echo "Forcing enable via gsettings..."
-  new="${{current::-1}}, '{uuid}']"
-  gsettings set org.gnome.shell enabled-extensions "$new"
-fi
-
-rm dtp.zip
-echo
-echo '===================================='
-echo 'FERTIG! / DONE!'
-echo 'WICHTIG / IMPORTANT:'
-echo 'Damit die Leiste sichtbar wird, musst du dich JETZT ABMELDEN.'
-echo 'Please LOGOUT now to see the changes.'
-echo '===================================='
-echo
-read -p "Press Enter to close..."
-"""
-        try:
-            with open(script_path, "w") as f:
-                f.write(script_content)
-            
-            os.chmod(script_path, 0o755)
-            
-            term = which("xterm") or which("gnome-terminal")
-            if not term:
-                messagebox.showerror("Error", TEXTS["err_term"][self.controller.lang])
-                return
-
-            if "gnome-terminal" in term:
-                cmd = f"gnome-terminal -- {script_path}"
-            else:
-                cmd = f"{term} -e {script_path}"
-
-            subprocess.Popen(cmd, shell=True)
-            self.after(5000, self.check_status)
-            
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
-
-    def do_logout(self):
-        # Versucht den User abzumelden (Gnome Session)
-        subprocess.run("gnome-session-quit --no-prompt", shell=True)
-
-    def do_uninstall(self):
-        if not messagebox.askyesno("SUIT", "Uninstall Dash to Panel?"): return
-        uuid = "dash-to-panel@jderose9.github.com"
-        self._term_run(f"gnome-extensions uninstall {uuid}")
-        self.after(2000, self.check_status)
 
 
 if __name__ == "__main__":
