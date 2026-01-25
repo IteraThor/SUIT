@@ -225,15 +225,33 @@ class ServiceViewMixin:
         if which("pkexec"): return f"pkexec bash -c '{shell_cmd}'"
         return f"xterm -e 'sudo bash -c \"{shell_cmd}\"'"
 
-    def _term_run(self, shell_cmd):
-        term = which("xterm") or which("gnome-terminal")
-        if not term: 
-            messagebox.showerror("Error", TEXTS["err_term"][self.controller.lang])
-            return
-        prefix = "gnome-terminal --" if "gnome-terminal" in term else f"{term} -e"
-        wait = "read -p \"Press Enter...\""
-        full = f"{prefix} \"bash -c '{shell_cmd}; echo; {wait}'\""
-        subprocess.Popen(full, shell=True)
+    def _run_bash_script(self, bash_content):
+        """Erstellt eine temporäre Datei und führt sie im Terminal aus (vermeidet Quoting-Fehler)."""
+        filename = "/tmp/suit_exec.sh"
+        
+        # Füge Shebang und 'read' am Ende hinzu, damit das Fenster offen bleibt
+        full_content = "#!/bin/bash\n" + bash_content + "\n\necho\nread -p 'Press Enter to close...' "
+        
+        try:
+            with open(filename, "w") as f:
+                f.write(full_content)
+            
+            os.chmod(filename, 0o755)
+            
+            term = which("xterm") or which("gnome-terminal")
+            if not term:
+                messagebox.showerror("Error", TEXTS["err_term"][self.controller.lang])
+                return
+
+            if "gnome-terminal" in term:
+                cmd = f"gnome-terminal -- {filename}"
+            else:
+                cmd = f"{term} -e {filename}"
+
+            subprocess.Popen(cmd, shell=True)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to run script: {e}")
 
 
 # --- ANSICHT 1: HAUPTMENÜ ---
@@ -344,13 +362,26 @@ class AutodartsView(tk.Frame, ServiceViewMixin):
         self._check_status_generic("autodarts", self.status_lbl)
 
     def do_install(self):
-        self._term_run("bash <(curl -sL http://autodarts.io/install)")
+        # Nutze die sichere Skript-Methode
+        bash_script = """
+echo "Installing Autodarts..."
+bash <(curl -sL http://autodarts.io/install)
+"""
+        self._run_bash_script(bash_script)
         self.after(5000, lambda: self._check_status_generic("autodarts", self.status_lbl))
 
     def do_uninstall(self):
         if not messagebox.askyesno("SUIT", "Delete Autodarts?"): return
-        cmds = "systemctl stop autodarts; systemctl disable autodarts; rm /etc/systemd/system/autodarts.service; systemctl daemon-reload; rm -rf /usr/bin/autodarts /opt/autodarts"
-        self._term_run(cmds)
+        bash_script = """
+echo "Uninstalling Autodarts..."
+sudo systemctl stop autodarts
+sudo systemctl disable autodarts
+sudo rm /etc/systemd/system/autodarts.service
+sudo systemctl daemon-reload
+sudo rm -rf /usr/bin/autodarts /opt/autodarts
+echo "Done."
+"""
+        self._run_bash_script(bash_script)
         self.after(2000, lambda: self._check_status_generic("autodarts", self.status_lbl))
 
 
@@ -424,22 +455,47 @@ class AutoGlowView(tk.Frame, ServiceViewMixin):
         self._check_status_generic("autoglow", self.status_lbl)
 
     def do_install(self):
-        repo_url = "https://github.com/IteraThor/AutoGlow.git"
-        install_dir = "/opt/AutoGlow"
-        cmds = [
-            "sudo apt-get update",
-            "sudo apt-get install -y git",
-            f"if [ ! -d {install_dir} ]; then sudo git clone {repo_url} {install_dir}; else cd {install_dir} && sudo git pull; fi",
-            f"if [ -f {install_dir}/install.sh ]; then sudo chmod +x {install_dir}/install.sh && sudo {install_dir}/install.sh; else echo 'Kein install.sh gefunden! Bitte repo prüfen.'; fi"
-        ]
-        full_cmd = " && ".join(cmds)
-        self._term_run(full_cmd)
+        # Saubere Installation über Skript-Datei
+        bash_script = """
+echo "=== Installing AutoGlow ==="
+sudo apt-get update
+sudo apt-get install -y git
+
+TARGET="/opt/AutoGlow"
+
+if [ ! -d "$TARGET" ]; then
+    echo "Cloning repository..."
+    sudo git clone https://github.com/IteraThor/AutoGlow.git "$TARGET"
+else
+    echo "Updating repository..."
+    cd "$TARGET"
+    sudo git pull
+fi
+
+if [ -f "$TARGET/install.sh" ]; then
+    echo "Running installer..."
+    sudo chmod +x "$TARGET/install.sh"
+    sudo "$TARGET/install.sh"
+else
+    echo "ERROR: install.sh not found in $TARGET"
+fi
+"""
+        self._run_bash_script(bash_script)
         self.after(5000, lambda: self._check_status_generic("autoglow", self.status_lbl))
 
     def do_uninstall(self):
         if not messagebox.askyesno("SUIT", "Delete AutoGlow?"): return
-        cmds = "sudo systemctl stop autoglow; sudo systemctl disable autoglow; sudo rm /etc/systemd/system/autoglow.service; sudo systemctl daemon-reload; sudo rm -rf /opt/AutoGlow"
-        self._term_run(cmds)
+        
+        bash_script = """
+echo "=== Uninstalling AutoGlow ==="
+sudo systemctl stop autoglow
+sudo systemctl disable autoglow
+sudo rm /etc/systemd/system/autoglow.service
+sudo systemctl daemon-reload
+sudo rm -rf /opt/AutoGlow
+echo "Done."
+"""
+        self._run_bash_script(bash_script)
         self.after(2000, lambda: self._check_status_generic("autoglow", self.status_lbl))
 
 
