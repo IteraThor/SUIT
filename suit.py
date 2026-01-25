@@ -4,7 +4,7 @@ import subprocess
 import webbrowser
 from shutil import which
 import os
-import glob # Neu: Für die Suche nach Firefox Profilen
+import glob
 
 # --- FARBPALETTE (DARK MODE) ---
 COLORS = {
@@ -19,6 +19,7 @@ COLORS = {
     "danger": "#d9534f",       # Rot
     "success": "#28a745",      # Grün
     "warning": "#ff9800",      # Orange
+    "purple": "#6c5ce7",       # Lila (für UI Tweaks)
     "select_indicator": "#000000"
 }
 
@@ -32,12 +33,14 @@ TEXTS = {
     "btn_autoglow": {"de": "💡 AutoGlow Manager", "en": "💡 AutoGlow Manager"},
     "btn_touch": {"de": "🔄 Touch Screen Input Rotation", "en": "🔄 Touch Screen Input Rotation"},
     "btn_kiosk": {"de": "🖥️ Setup Kiosk Mode", "en": "🖥️ Setup Kiosk Mode"},
+    "btn_dash": {"de": "🎨 Dash to Panel (Windows Look)", "en": "🎨 Dash to Panel (Windows Look)"},
     "btn_back": {"de": "❮ Zurück", "en": "❮ Back"},
     
     # Headers
     "ad_header": {"de": "Autodarts Verwaltung", "en": "Autodarts Management"},
     "ag_header": {"de": "AutoGlow Verwaltung", "en": "AutoGlow Management"},
     "kiosk_header": {"de": "Kiosk Modus (Firefox)", "en": "Kiosk Mode (Firefox)"},
+    "dash_header": {"de": "Dash to Panel (UI Tweak)", "en": "Dash to Panel (UI Tweak)"},
     
     # Common Actions
     "status_lbl": {"de": "Status:", "en": "Status:"},
@@ -45,10 +48,16 @@ TEXTS = {
     "btn_start": {"de": "Starten", "en": "Start"},
     "btn_stop": {"de": "Stoppen", "en": "Stop"},
     "btn_restart": {"de": "Neustarten", "en": "Restart"},
-    "btn_install": {"de": "Installieren / Updaten", "en": "Install / Update"},
+    "btn_install": {"de": "Installieren", "en": "Install"},
     "btn_uninstall": {"de": "Deinstallieren", "en": "Uninstall"},
     "hint": {"de": "Hinweis: Root-Passwort erforderlich.", "en": "Note: Root password required."},
     
+    # Dash to Panel
+    "dash_desc": {"de": "Verschiebt die Taskleiste nach unten (ähnlich Windows).\nErfordert oft Logout/Login nach Installation.", 
+                  "en": "Moves taskbar to bottom (Windows style).\nOften requires Logout/Login after install."},
+    "dash_installed": {"de": "● Installiert", "en": "● Installed"},
+    "dash_not_installed": {"de": "● Nicht installiert", "en": "● Not installed"},
+
     # Kiosk Texts
     "kiosk_active": {"de": "● Aktiv (Autostart an)", "en": "● Active (Autostart on)"},
     "kiosk_inactive": {"de": "● Inaktiv (Autostart aus)", "en": "● Inactive (Autostart off)"},
@@ -84,7 +93,7 @@ class SuitApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("SUIT")
-        self.geometry("600x750") 
+        self.geometry("600x800") # Noch etwas höher für 5 Menüpunkte
         self.resizable(False, False)
         self.configure(bg=COLORS["bg_main"])
         
@@ -134,6 +143,10 @@ class SuitApp(tk.Tk):
         # AutoGlow Button Style (Orange/Warning Color)
         style.configure("Glow.TButton", background=COLORS["warning"], foreground="white")
         style.map("Glow.TButton", background=[("active", "#e68900")])
+
+        # UI Tweak Button Style (Purple)
+        style.configure("Purple.TButton", background=COLORS["purple"], foreground="white")
+        style.map("Purple.TButton", background=[("active", "#5649b9")])
 
         # Danger Button Style
         style.configure("Danger.TButton", background=COLORS["danger"], foreground="white")
@@ -192,6 +205,9 @@ class SuitApp(tk.Tk):
 
     def show_kiosk(self):
         self._switch(KioskView)
+
+    def show_dash(self):
+        self._switch(DashPanelView)
 
     def _switch(self, frame_class):
         if self.current_frame:
@@ -256,6 +272,8 @@ class MainMenu(tk.Frame):
         self._make_menu_btn(self.controller.show_kiosk, "btn_kiosk")
         tk.Label(self, bg=COLORS["bg_main"], height=1).pack() 
         self._make_menu_btn(self.controller.show_touch, "btn_touch")
+        tk.Label(self, bg=COLORS["bg_main"], height=1).pack() 
+        self._make_menu_btn(self.controller.show_dash, "btn_dash")
 
         self.update_texts()
 
@@ -271,6 +289,7 @@ class MainMenu(tk.Frame):
         self._btn_autoglow.config(text=TEXTS["btn_autoglow"][l])
         self._btn_kiosk.config(text=TEXTS["btn_kiosk"][l])
         self._btn_touch.config(text=TEXTS["btn_touch"][l])
+        self._btn_dash.config(text=TEXTS["btn_dash"][l])
 
 
 # --- ANSICHT 2: AUTODARTS ---
@@ -501,26 +520,22 @@ class KioskView(tk.Frame):
             self.status_lbl.config(text=TEXTS["kiosk_inactive"][l], foreground=COLORS["danger"])
 
     def _disable_crash_restore(self):
-        """Sucht alle Firefox Profile und deaktiviert die Absturz-Wiederherstellung"""
         profiles_path = os.path.expanduser("~/.mozilla/firefox/*.default*")
         profiles = glob.glob(profiles_path)
-        
         pref_line = 'user_pref("browser.sessionstore.resume_from_crash", false);'
         
         for p in profiles:
             user_js = os.path.join(p, "user.js")
             try:
-                # Prüfen ob Einstellung schon da ist
                 content = ""
                 if os.path.exists(user_js):
                     with open(user_js, "r") as f:
                         content = f.read()
-                
                 if "browser.sessionstore.resume_from_crash" not in content:
                     with open(user_js, "a") as f:
                         f.write("\n" + pref_line + "\n")
             except Exception as e:
-                print(f"Could not update profile {p}: {e}")
+                print(f"Err profile {p}: {e}")
 
     def enable_kiosk(self):
         if not os.path.exists(self.autostart_dir):
@@ -530,10 +545,8 @@ class KioskView(tk.Frame):
                 messagebox.showerror("Error", str(e))
                 return
         
-        # 1. Profile patchen um Black Screen zu verhindern
         self._disable_crash_restore()
 
-        # 2. Desktop File erstellen (Sleep 5s, Normal Mode)
         content = """[Desktop Entry]
 Type=Application
 Name=Autodarts Kiosk
@@ -656,6 +669,80 @@ class TouchRotationView(tk.Frame, ServiceViewMixin):
 
     def reboot(self):
         subprocess.run("pkexec reboot", shell=True)
+
+
+# --- ANSICHT 6: DASH TO PANEL (NEU) ---
+class DashPanelView(tk.Frame, ServiceViewMixin):
+    def __init__(self, parent, controller):
+        super().__init__(parent, bg=COLORS["bg_main"])
+        self.controller = controller
+
+        self.btn_back = ttk.Button(self, command=controller.show_menu, style="TButton")
+        self.btn_back.pack(anchor="w", pady=(0, 10))
+
+        self.header = ttk.Label(self, text="", style="SubHeader.TLabel")
+        self.header.pack(pady=(0, 15))
+
+        # Status
+        card_status = ttk.LabelFrame(self, text="Status", style="TLabelframe", padding=15)
+        card_status.pack(fill="x", pady=5)
+        self.status_lbl = ttk.Label(card_status, text="", style="Card.TLabel", font=("Segoe UI", 12, "bold"))
+        self.status_lbl.pack(anchor="center")
+
+        # Description
+        self.lbl_desc = ttk.Label(self, justify="center", style="Hint.TLabel")
+        self.lbl_desc.pack(pady=10)
+
+        # Action Buttons
+        card_act = ttk.Frame(self, style="Card.TFrame", padding=20)
+        card_act.pack(fill="x", padx=10)
+
+        self.btn_install = ttk.Button(card_act, command=self.do_install, style="Purple.TButton")
+        self.btn_install.pack(fill="x", pady=5)
+        
+        self.btn_uninstall = ttk.Button(card_act, command=self.do_uninstall, style="Danger.TButton")
+        self.btn_uninstall.pack(fill="x", pady=5)
+
+        self.update_texts()
+        self.check_status()
+
+    def update_texts(self):
+        l = self.controller.lang
+        self.btn_back.config(text=TEXTS["btn_back"][l])
+        self.header.config(text=TEXTS["dash_header"][l])
+        self.lbl_desc.config(text=TEXTS["dash_desc"][l])
+        self.btn_install.config(text=TEXTS["btn_install"][l])
+        self.btn_uninstall.config(text=TEXTS["btn_uninstall"][l])
+        self.check_status()
+
+    def check_status(self):
+        l = self.controller.lang
+        # Check if package installed
+        res = subprocess.run("dpkg -s gnome-shell-extension-dash-to-panel", shell=True, capture_output=True)
+        if res.returncode == 0:
+            self.status_lbl.config(text=TEXTS["dash_installed"][l], foreground=COLORS["purple"])
+        else:
+            self.status_lbl.config(text=TEXTS["dash_not_installed"][l], foreground="gray")
+
+    def do_install(self):
+        # 1. Install package (Root)
+        # 2. Try enable (User)
+        cmd_install = "sudo apt-get update && sudo apt-get install -y gnome-shell-extension-dash-to-panel"
+        # Nach Install versuchen wir es zu aktivieren, auch wenn Gnome Shell manchmal Restart braucht
+        cmd_enable = "gnome-extensions enable dash-to-panel@jderose9.github.io"
+        
+        full_cmd = f"{cmd_install} && {cmd_enable}"
+        self._term_run(full_cmd)
+        self.after(5000, self.check_status)
+
+    def do_uninstall(self):
+        if not messagebox.askyesno("SUIT", "Uninstall Dash to Panel?"): return
+        cmd_disable = "gnome-extensions disable dash-to-panel@jderose9.github.io"
+        cmd_remove = "sudo apt-get remove -y gnome-shell-extension-dash-to-panel"
+        
+        self._term_run(f"{cmd_disable}; {cmd_remove}")
+        self.after(2000, self.check_status)
+
 
 if __name__ == "__main__":
     app = SuitApp()
