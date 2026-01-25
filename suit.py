@@ -5,6 +5,7 @@ import webbrowser
 from shutil import which
 import os
 import glob
+import stat
 
 # --- FARBPALETTE (DARK MODE) ---
 COLORS = {
@@ -719,31 +720,53 @@ class DashPanelView(tk.Frame, ServiceViewMixin):
             self.status_lbl.config(text=TEXTS["dash_not_installed"][l], foreground="gray")
 
     def do_install(self):
-        url = "https://github.com/home-sweet-gnome/dash-to-panel/releases/download/v72/dash-to-panel@jderose9.github.com_v72.zip"
-        zip_file = "dtp.zip"
-        uuid = "dash-to-panel@jderose9.github.com"
-
-        # Befehlskette: Download -> Install -> Enable -> Clean -> Message
-        cmds = [
-            f"cd /tmp",
-            f"wget -O {zip_file} {url}",
-            f"gnome-extensions install --force {zip_file}",
-            f"gnome-extensions enable {uuid}",
-            f"rm {zip_file}",
-            "echo",
-            "echo '===================================='",
-            "echo 'WICHTIG / IMPORTANT:'",
-            "echo 'Bitte einmal Abmelden und Anmelden (Logout/Login), damit die Leiste erscheint!'",
-            "echo '===================================='"
-        ]
+        # Wir schreiben ein temporäres Skript, um "Quoting Hell" im Terminal zu vermeiden
+        script_path = "/tmp/suit_install_dtp.sh"
         
-        full_cmd = " && ".join(cmds)
-        self._term_run(full_cmd)
-        self.after(5000, self.check_status)
+        script_content = """#!/bin/bash
+cd /tmp
+wget -O dtp.zip https://github.com/home-sweet-gnome/dash-to-panel/releases/download/v72/dash-to-panel@jderose9.github.com_v72.zip
+gnome-extensions install --force dtp.zip
+gnome-extensions enable dash-to-panel@jderose9.github.com
+rm dtp.zip
+echo
+echo '===================================='
+echo 'WICHTIG / IMPORTANT:'
+echo 'Bitte einmal Abmelden und Anmelden (Logout/Login), damit die Leiste erscheint!'
+echo '===================================='
+echo
+read -p "Press Enter to close..."
+"""
+        try:
+            # 1. Skript erstellen
+            with open(script_path, "w") as f:
+                f.write(script_content)
+            
+            # 2. Ausführbar machen
+            os.chmod(script_path, 0o755) # rwxr-xr-x
+            
+            # 3. Terminal finden und Skript ausführen
+            term = which("xterm") or which("gnome-terminal")
+            if not term:
+                messagebox.showerror("Error", TEXTS["err_term"][self.controller.lang])
+                return
+
+            if "gnome-terminal" in term:
+                cmd = f"gnome-terminal -- {script_path}"
+            else:
+                cmd = f"{term} -e {script_path}"
+
+            subprocess.Popen(cmd, shell=True)
+            self.after(5000, self.check_status)
+            
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
 
     def do_uninstall(self):
         if not messagebox.askyesno("SUIT", "Uninstall Dash to Panel?"): return
         uuid = "dash-to-panel@jderose9.github.com"
+        
+        # Einfacher Uninstall Befehl (kein kompliziertes Echo nötig)
         self._term_run(f"gnome-extensions uninstall {uuid}")
         self.after(2000, self.check_status)
 
