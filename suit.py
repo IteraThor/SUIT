@@ -54,10 +54,11 @@ TEXTS = {
     "hint": {"de": "Hinweis: Root-Passwort erforderlich.", "en": "Note: Root password required."},
     
     # Dash to Panel
-    "dash_desc": {"de": "Installiert Version 72 von GitHub.\nNach Installation bitte Abmelden & Anmelden!", 
-                  "en": "Installs Version 72 from GitHub.\nPlease Logout & Login after installation!"},
+    "dash_desc": {"de": "Installiert v72. Um es zu sehen, musst du dich abmelden!\nDas Skript versucht die Aktivierung zu erzwingen.", 
+                  "en": "Installs v72. To see it, you must logout!\nThe script tries to force activation."},
     "dash_installed": {"de": "● Installiert (Lokal)", "en": "● Installed (Local)"},
     "dash_not_installed": {"de": "● Nicht installiert", "en": "● Not installed"},
+    "btn_logout": {"de": "⚠️ Jetzt Abmelden (Logout)", "en": "⚠️ Logout Now"},
 
     # Kiosk Texts
     "kiosk_active": {"de": "● Aktiv (Autostart an)", "en": "● Active (Autostart on)"},
@@ -695,6 +696,9 @@ class DashPanelView(tk.Frame, ServiceViewMixin):
         self.btn_install = ttk.Button(card_act, command=self.do_install, style="Purple.TButton")
         self.btn_install.pack(fill="x", pady=5)
         
+        self.btn_logout = ttk.Button(card_act, command=self.do_logout)
+        self.btn_logout.pack(fill="x", pady=5)
+        
         self.btn_uninstall = ttk.Button(card_act, command=self.do_uninstall, style="Danger.TButton")
         self.btn_uninstall.pack(fill="x", pady=5)
 
@@ -707,6 +711,7 @@ class DashPanelView(tk.Frame, ServiceViewMixin):
         self.header.config(text=TEXTS["dash_header"][l])
         self.lbl_desc.config(text=TEXTS["dash_desc"][l])
         self.btn_install.config(text=TEXTS["btn_install"][l])
+        self.btn_logout.config(text=TEXTS["btn_logout"][l])
         self.btn_uninstall.config(text=TEXTS["btn_uninstall"][l])
         self.check_status()
 
@@ -720,32 +725,49 @@ class DashPanelView(tk.Frame, ServiceViewMixin):
             self.status_lbl.config(text=TEXTS["dash_not_installed"][l], foreground="gray")
 
     def do_install(self):
-        # Wir schreiben ein temporäres Skript, um "Quoting Hell" im Terminal zu vermeiden
         script_path = "/tmp/suit_install_dtp.sh"
+        uuid = "dash-to-panel@jderose9.github.com"
         
-        script_content = """#!/bin/bash
+        # Verbesserter Installationsprozess mit Schema-Compile und DBus-Force
+        script_content = f"""#!/bin/bash
 cd /tmp
 wget -O dtp.zip https://github.com/home-sweet-gnome/dash-to-panel/releases/download/v72/dash-to-panel@jderose9.github.com_v72.zip
 gnome-extensions install --force dtp.zip
-gnome-extensions enable dash-to-panel@jderose9.github.com
+
+# Wait for unpack
+sleep 1
+
+# Versuch 1: Normal Enable
+gnome-extensions enable {uuid}
+
+# Versuch 2: Compile Schemas (oft der Grund warum es klemmt)
+glib-compile-schemas ~/.local/share/gnome-shell/extensions/{uuid}/schemas/
+
+# Versuch 3: Gsettings Force Append (Nur falls nicht schon aktiv)
+current=$(gsettings get org.gnome.shell enabled-extensions)
+if [[ $current != *"{uuid}"* ]]; then
+  echo "Forcing enable via gsettings..."
+  new="${{current::-1}}, '{uuid}']"
+  gsettings set org.gnome.shell enabled-extensions "$new"
+fi
+
 rm dtp.zip
 echo
 echo '===================================='
+echo 'FERTIG! / DONE!'
 echo 'WICHTIG / IMPORTANT:'
-echo 'Bitte einmal Abmelden und Anmelden (Logout/Login), damit die Leiste erscheint!'
+echo 'Damit die Leiste sichtbar wird, musst du dich JETZT ABMELDEN.'
+echo 'Please LOGOUT now to see the changes.'
 echo '===================================='
 echo
 read -p "Press Enter to close..."
 """
         try:
-            # 1. Skript erstellen
             with open(script_path, "w") as f:
                 f.write(script_content)
             
-            # 2. Ausführbar machen
-            os.chmod(script_path, 0o755) # rwxr-xr-x
+            os.chmod(script_path, 0o755)
             
-            # 3. Terminal finden und Skript ausführen
             term = which("xterm") or which("gnome-terminal")
             if not term:
                 messagebox.showerror("Error", TEXTS["err_term"][self.controller.lang])
@@ -762,11 +784,13 @@ read -p "Press Enter to close..."
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
+    def do_logout(self):
+        # Versucht den User abzumelden (Gnome Session)
+        subprocess.run("gnome-session-quit --no-prompt", shell=True)
+
     def do_uninstall(self):
         if not messagebox.askyesno("SUIT", "Uninstall Dash to Panel?"): return
         uuid = "dash-to-panel@jderose9.github.com"
-        
-        # Einfacher Uninstall Befehl (kein kompliziertes Echo nötig)
         self._term_run(f"gnome-extensions uninstall {uuid}")
         self.after(2000, self.check_status)
 
