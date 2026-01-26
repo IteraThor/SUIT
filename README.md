@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://github.com/user-attachments/assets/049543b8-47e9-4aae-9966-b733e1e1cdf6" alt="SUIT Logo" width="150">
+  <img src="https://github.com/user-attachments/assets/5071afba-adca-4fc4-87cb-10860e37698f" alt="SUIT Logo" width="150">
 </div>
 
 # SUIT - Setup Utilities by IteraThor
