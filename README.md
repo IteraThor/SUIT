@@ -1,4 +1,6 @@
-
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/049543b8-47e9-4aae-9966-b733e1e1cdf6" alt="SUIT Logo" width="150">
+</div>
 
 # SUIT - Setup Utilities by IteraThor
 
