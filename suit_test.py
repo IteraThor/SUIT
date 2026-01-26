@@ -510,7 +510,7 @@ echo "Done."
 
 
 # --- ANSICHT 4: KIOSK MODE ---
-class KioskView(tk.Frame):
+class KioskView(tk.Frame, ServiceViewMixin):
     def __init__(self, parent, controller):
         super().__init__(parent, bg=COLORS["bg_main"])
         self.controller = controller
@@ -581,6 +581,26 @@ class KioskView(tk.Frame):
                 print(f"Err profile {p}: {e}")
 
     def enable_kiosk(self):
+        # 1. System-Environment Fix (Wayland Black Screen)
+        # Check ob Variable schon in /etc/environment steht
+        try:
+            check = subprocess.run("grep -q 'MOZ_ENABLE_WAYLAND=1' /etc/environment", shell=True)
+            if check.returncode != 0:
+                # Wenn nicht, hinzufügen (Root Rechte nötig)
+                cmd_str = 'echo "MOZ_ENABLE_WAYLAND=1" | tee -a /etc/environment'
+                
+                # Command bauen (pkexec oder xterm)
+                full_cmd = f"pkexec bash -c '{cmd_str}'"
+                if not which("pkexec"):
+                     full_cmd = f"xterm -e 'sudo bash -c \"{cmd_str}\"'"
+                
+                # Ausführen
+                subprocess.run(full_cmd, shell=True, check=True)
+        except Exception as e:
+            # Nur warnen, nicht abbrechen, damit der Rest trotzdem läuft
+            print(f"Warning setting env: {e}")
+
+        # 2. Autostart Ordner checken
         if not os.path.exists(self.autostart_dir):
             try:
                 os.makedirs(self.autostart_dir)
@@ -588,9 +608,11 @@ class KioskView(tk.Frame):
                 messagebox.showerror("Error", str(e))
                 return
         
+        # 3. Crash Restore abschalten
         self._disable_crash_restore()
 
-        # FIX: MOZ_ENABLE_WAYLAND=1 für Wayland-Systeme
+        # 4. .desktop Datei schreiben
+        # FIX: MOZ_ENABLE_WAYLAND=1 für Wayland-Systeme auch im Exec Befehl
         content = """[Desktop Entry]
 Type=Application
 Name=Autodarts Kiosk
