@@ -4,7 +4,7 @@
 
 # SUIT - Setup Utilities by IteraThor
 
-SUIT is a graphical tool designed mainly to streamline the deployment of an **Autodarts system** on Linux (e.g., Raspberry Pi / Ubuntu).
+SUIT is a graphical tool designed mainly to streamline the deployment of an **Autodarts system** on Linux (mainly Ubuntu).
 
 I originally created this project to make setting up my own Linux PCs for Autodarts easier and faster. I am sharing it here for free for anyone in the community who might find it useful!
 
