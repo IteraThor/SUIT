@@ -35,6 +35,6 @@ cd SUIT
 
 2. Start app:
 ```bash
-python3 suit.py
+python3 suit_test.py
 
 ```
