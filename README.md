@@ -38,3 +38,4 @@ cd SUIT
 python3 suit_test.py
 
 ```
+<img width="562" height="416" alt="image" src="https://github.com/user-attachments/assets/3e558862-59ce-4e81-8c31-6d923ba6fbb8" />
