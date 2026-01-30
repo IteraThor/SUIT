@@ -4,8 +4,22 @@ import subprocess
 import webbrowser
 from shutil import which
 import os
-import glob
-import stat
+import sys
+import dbus
+from collections import defaultdict
+
+# --- KONFIGURATION SCREEN ROTATOR ---
+DISPLAY_NAME_DEFAULT = "DP-2"
+AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
+DESKTOP_FILE_PATH = os.path.join(AUTOSTART_DIR, "screen-rotation.desktop")
+UDEV_RULE_FINAL_PATH = "/etc/udev/rules.d/99-touchscreen-rotation.rules"
+TEMP_RULE_PATH = os.path.expanduser("/tmp/touch_rotation.rules")
+
+MATRICES = {
+    "normal": "1 0 0 0 1 0 0 0 1",
+    "right": "0 1 0 -1 0 1 0 0 1",
+    "left": "0 -1 1 1 0 0 0 0 1"
+}
 
 # --- FARBPALETTE (DARK MODE) ---
 COLORS = {
@@ -28,14 +42,14 @@ TEXTS = {
     "app_title": {"de": "SUIT - Setup Utilities by IteraThor", "en": "SUIT - Setup Utilities by IteraThor"},
     "menu_title": {"de": "Hauptmenü", "en": "Main Menu"},
     "btn_autodarts": {"de": "🎯 Autodarts Manager", "en": "🎯 Autodarts Manager"},
-    "btn_autoglow": {"de": "💡 AutoGlow Manager", "en": "💡 AutoGlow Manager"},
-    "btn_touch": {"de": "🔄 Touch Screen Input Rotation", "en": "🔄 Touch Screen Input Rotation"},
+    "btn_autoglow": {"de": "💡 AutoGlow Manager (Entfernt)", "en": "💡 AutoGlow Manager (Removed)"},
+    "btn_touch": {"de": "🔄 Screen & Touch Rotation", "en": "🔄 Screen & Touch Rotation"},
     "btn_kiosk": {"de": "🖥️ Setup Kiosk Mode", "en": "🖥️ Setup Kiosk Mode"},
+    "btn_update": {"de": "⬇️ Auf Updates prüfen", "en": "⬇️ Check for Updates"},
     "btn_back": {"de": "❮ Zurück", "en": "❮ Back"},
     "ad_header": {"de": "Autodarts Verwaltung", "en": "Autodarts Management"},
-    "ag_header": {"de": "AutoGlow Verwaltung", "en": "AutoGlow Management"},
     "kiosk_header": {"de": "Kiosk Modus (Firefox)", "en": "Kiosk Mode (Firefox)"},
-    "touch_header": {"de": "Touch Screen Input Rotation", "en": "Touch Screen Input Rotation"},
+    "touch_header": {"de": "Bildschirm & Touch Ausrichtung", "en": "Screen & Touch Orientation"},
     "status_lbl": {"de": "Status:", "en": "Status:"},
     "loading": {"de": "Lade...", "en": "Loading..."},
     "btn_start": {"de": "Starten", "en": "Start"},
@@ -52,6 +66,7 @@ TEXTS = {
                    "en": "Starts Firefox (Wayland Mode).\nPrevents 'Restore Session' popup & black screen."},
     "kiosk_url_lbl": {"de": "Kiosk URL:", "en": "Kiosk URL:"},
     "kiosk_emergency_exit": {"de": "Power-Button Not-Aus aktivieren", "en": "Enable Power-Button Emergency Exit"},
+    "lbl_osk": {"de": "Bildschirmtastatur (OSK) aktivieren", "en": "Enable On-Screen Keyboard"},
     "kiosk_emergency_desc": {
         "de": "Drücke den Power-Button 3x innerhalb von 3 Sekunden,\num Firefox sofort zu beenden.", 
         "en": "Press the power button 3 times within 3 seconds\nto immediately close Firefox."
@@ -64,14 +79,130 @@ TEXTS = {
     "lbl_direction": {"de": "Ausrichtung wählen:", "en": "Select Orientation:"},
     "rot_left": {"de": "Links (90° gegen Uhrzeigersinn)", "en": "Left (90° CCW)"},
     "rot_right": {"de": "Rechts (90° im Uhrzeigersinn)", "en": "Right (90° CW)"},
-    "rot_default": {"de": "Standard (Reset / Löschen)", "en": "Default (Reset / Delete)"},
-    "btn_apply": {"de": "Anwenden", "en": "Apply"},
-    "btn_reboot": {"de": "System Neustart", "en": "System Reboot"},
-    "msg_applied": {"de": "Einstellung angewendet.", "en": "Settings applied."},
+    "rot_normal": {"de": "Normal (Standard)", "en": "Normal (Default)"},
+    "btn_apply": {"de": "Speichern & Fixieren (Reboot nötig)", "en": "Save & Fix (Reboot required)"},
+    "msg_applied": {"de": "Einstellung gespeichert.\nBitte neu starten.", "en": "Settings saved.\nPlease reboot."},
     "msg_deleted": {"de": "Regel gelöscht. Zurück auf Standard.", "en": "Rule deleted. Back to default."},
     "err_term": {"de": "Fehler: 'xterm' nicht gefunden.", "en": "Error: 'xterm' not found."},
-    "done": {"de": "Fertig.", "en": "Done."}
+    "done": {"de": "Fertig.", "en": "Done."},
+    "ag_removed": {"de": "Das AutoGlow Modul wurde entfernt.", "en": "The AutoGlow module has been removed."},
+    "msg_uptodate": {"de": "SUIT ist bereits auf dem neuesten Stand.", "en": "SUIT is already up to date."},
+    "msg_updated": {"de": "Update erfolgreich! Anwendung wird neu gestartet.", "en": "Update successful! Restarting application."},
+    "err_update": {"de": "Fehler beim Update:\n", "en": "Update Error:\n"},
+    "err_no_git": {"de": "Kein Git-Repository gefunden.\nBitte 'git clone' nutzen.", "en": "No Git repository found.\nPlease use 'git clone'."}
 }
+
+# ==========================================
+# SCREEN ROTATOR LOGIK (DBUS & MONITOR)
+# ==========================================
+nested_dict = lambda: defaultdict(nested_dict)
+
+def rot_to_trans(r): return {'normal': 0, 'inverted': 6, 'left': 1, 'right': 3}.get(r, 0)
+def trans_needs_w_h_swap(old_trans, new_trans): return (old_trans in [0, 6] and new_trans in [1, 3]) or (old_trans in [1, 3] and new_trans in [0, 6])
+
+def mode_id_to_vals(mode_id):
+    w, h_rate = mode_id.split('x')
+    h, rate = h_rate.split('@')
+    return (int(w), int(h), float(rate))
+
+def get_current_mode(monitor):
+    for md in monitor[1]:
+        if 'is-current' in md[6]: return md
+    return None
+
+class ConfigInfo:
+    def __init__(self, serial, monitors, logical_monitors, properties):
+        self.serial = serial
+        self.monitors = monitors
+        self.logical_monitors = logical_monitors
+        self.output_config = nested_dict()
+        self.primary = None
+        self.__init_output_config(logical_monitors)
+
+    def __init_output_config(self, logical_monitors):
+        for lm in logical_monitors:
+            x, y, scale, trans, is_primary, phys_monitors = lm[:6]
+            if is_primary == True and len(phys_monitors) > 0: self.primary = phys_monitors[0][0]
+            for m in phys_monitors:
+                output_name = m[0]
+                conf = self.output_config[output_name]
+                monitor = self.get_monitor_by_output(output_name)
+                if not monitor: continue
+                md = get_current_mode(monitor)
+                if not md: continue
+                w, h, r = mode_id_to_vals(md[0])
+                conf['monitor'] = monitor
+                conf['mode-info'] = md
+                conf['old-mode-id'] = md[0]
+                conf['res'], conf['w'], conf['h'], conf['rate'] = f'{w}x{h}', w, h, r
+                conf['scale'], conf['trans'] = scale, trans
+
+    def get_monitor_by_output(self, output):
+        for m in self.monitors:
+            if m[0][0] == output: return m
+        return None
+
+    def update_output_config(self, output_name, rotation_mode):
+        if output_name not in self.output_config: return
+        conf = self.output_config[output_name]
+        new_trans = rot_to_trans(rotation_mode)
+        if trans_needs_w_h_swap(conf['trans'], new_trans): conf['w'], conf['h'] = conf['h'], conf['w']
+        conf['trans'] = new_trans
+
+    def apply(self):
+        new_lm = []
+        for lm in self.logical_monitors:
+            x, y, scale, trans, is_primary, phys_monitors_raw = lm[:6]
+            new_phys_monitors = []
+            for pm in phys_monitors_raw:
+                connector_name = pm[0]
+                if connector_name in self.output_config:
+                    saved_conf = self.output_config[connector_name]
+                    mode_id = saved_conf['old-mode-id']
+                    trans = saved_conf['trans']
+                    new_phys_monitors.append([connector_name, mode_id, {}])
+            if new_phys_monitors:
+                new_lm.append([x, y, scale, trans, is_primary, new_phys_monitors])
+        return new_lm
+
+def apply_gnome_rotation(output_name, rotation_mode):
+    try:
+        bus = dbus.SessionBus()
+        dc = bus.get_object('org.gnome.Mutter.DisplayConfig', '/org/gnome/Mutter/DisplayConfig')
+        dc_iface = dbus.Interface(dc, dbus_interface='org.gnome.Mutter.DisplayConfig')
+        serial, monitors, logical_monitors, properties = dc_iface.GetCurrentState()
+        
+        target_output = output_name
+        available_outputs = [m[0][0] for m in monitors]
+        if output_name not in available_outputs and len(available_outputs) > 0:
+            target_output = available_outputs[0]
+            print(f"Monitor {output_name} nicht gefunden. Nutze {target_output}")
+
+        config = ConfigInfo(serial, monitors, logical_monitors, properties)
+        config.update_output_config(target_output, rotation_mode)
+        new_lm = config.apply()
+        
+        if not new_lm: return False
+        dc_iface.ApplyMonitorsConfig(serial, 1, new_lm, {})
+        return True
+    except Exception as e:
+        sys.stderr.write(f"Screen Rotator Error: {e}\n")
+        return False
+
+def find_touchscreen_name():
+    try:
+        output = subprocess.check_output(["udevadm", "info", "--export-db"], text=True)
+        current_name = None
+        for line in output.splitlines():
+            if "N: input/event" in line: current_name = None
+            if "E: NAME=" in line: current_name = line.split("=")[1].strip('"')
+            if "E: ID_INPUT_TOUCHSCREEN=1" in line and current_name: return current_name
+    except: pass
+    return None
+
+# ==========================================
+# GUI APP
+# ==========================================
 
 class SuitApp(tk.Tk):
     def __init__(self):
@@ -101,6 +232,7 @@ class SuitApp(tk.Tk):
         style.configure("TButton", background=COLORS["btn_bg"], foreground=COLORS["btn_fg"], borderwidth=0, font=("Segoe UI", 10, "bold"), padding=8)
         style.map("TButton", background=[("active", COLORS["accent"]), ("pressed", COLORS["accent_hover"])])
         style.configure("Accent.TButton", background=COLORS["accent"], foreground="white")
+        style.configure("Danger.TButton", background=COLORS["danger"], foreground="white")
         style.configure("Lang.TButton", font=("Segoe UI", 9), padding=2, width=4)
         style.configure("LangActive.TButton", background=COLORS["accent"], foreground="white", font=("Segoe UI", 9, "bold"), width=4)
         style.configure("TLabelframe", background=COLORS["bg_panel"], foreground=COLORS["fg_sub"], relief="flat")
@@ -132,9 +264,13 @@ class SuitApp(tk.Tk):
 
     def show_menu(self): self._switch(MainMenu)
     def show_autodarts(self): self._switch(AutodartsView)
-    def show_autoglow(self): self._switch(AutoGlowView)
     def show_touch(self): self._switch(TouchRotationView)
     def show_kiosk(self): self._switch(KioskView)
+    
+    # AutoGlow deaktiviert
+    def show_autoglow(self): 
+        messagebox.showinfo("SUIT", TEXTS["ag_removed"][self.lang])
+
     def _switch(self, frame_class):
         if self.current_frame: self.current_frame.destroy()
         self.current_frame = frame_class(self.container, self)
@@ -185,12 +321,44 @@ class MainMenu(tk.Frame):
         self._make_menu_btn(self.controller.show_kiosk, "btn_kiosk")
         tk.Label(self, bg=COLORS["bg_main"], height=1).pack() 
         self._make_menu_btn(self.controller.show_touch, "btn_touch")
+        
+        # NEU: Update Button
+        tk.Label(self, bg=COLORS["bg_main"], height=2).pack() 
+        self._make_menu_btn(self.update_suit, "btn_update")
+        
         self.update_texts()
 
     def _make_menu_btn(self, cmd, text_key):
         btn = ttk.Button(self, command=cmd, style="TButton")
         btn.pack(fill="x", ipady=8, padx=40)
         setattr(self, f"_{text_key}", btn) 
+
+    def update_suit(self):
+        l = self.controller.lang
+        # Das Verzeichnis des aktuellen Skripts (normalerweise Git Repo Root)
+        script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+        
+        # Prüfen ob Git Repo
+        if not os.path.isdir(os.path.join(script_dir, ".git")):
+             messagebox.showerror("Update", TEXTS["err_no_git"][l])
+             return
+
+        try:
+            # git pull ausführen
+            proc = subprocess.run(["git", "pull"], cwd=script_dir, capture_output=True, text=True)
+            if proc.returncode == 0:
+                output = proc.stdout.strip()
+                if "Already up to date" in output or "Bereits aktuell" in output:
+                     messagebox.showinfo("Update", TEXTS["msg_uptodate"][l])
+                else:
+                     messagebox.showinfo("Update", TEXTS["msg_updated"][l])
+                     # App Neustarten
+                     python = sys.executable
+                     os.execl(python, python, *sys.argv)
+            else:
+                 messagebox.showerror("Update", TEXTS["err_update"][l] + "\n" + proc.stderr)
+        except Exception as e:
+            messagebox.showerror("Update", f"Error: {e}")
 
     def update_texts(self):
         l = self.controller.lang
@@ -199,6 +367,7 @@ class MainMenu(tk.Frame):
         self._btn_autoglow.config(text=TEXTS["btn_autoglow"][l])
         self._btn_kiosk.config(text=TEXTS["btn_kiosk"][l])
         self._btn_touch.config(text=TEXTS["btn_touch"][l])
+        self._btn_update.config(text=TEXTS["btn_update"][l])
 
 class AutodartsView(tk.Frame, ServiceViewMixin):
     def __init__(self, parent, controller):
@@ -256,56 +425,6 @@ class AutodartsView(tk.Frame, ServiceViewMixin):
         if not messagebox.askyesno("SUIT", "Delete Autodarts?"): return
         self._run_bash_script("sudo systemctl stop autodarts\nsudo systemctl disable autodarts\nsudo rm /etc/systemd/system/autodarts.service\nsudo systemctl daemon-reload\nsudo rm -rf /usr/bin/autodarts /opt/autodarts")
         self.after(2000, lambda: self._check_status_generic("autodarts", self.status_lbl))
-
-class AutoGlowView(tk.Frame, ServiceViewMixin):
-    def __init__(self, parent, controller):
-        super().__init__(parent, bg=COLORS["bg_main"])
-        self.controller = controller
-        self.btn_back = ttk.Button(self, command=controller.show_menu, style="TButton")
-        self.btn_back.pack(anchor="w", pady=(0, 10))
-        self.header = ttk.Label(self, text="", style="SubHeader.TLabel")
-        self.header.pack(pady=(0, 15))
-        card_status = ttk.LabelFrame(self, text="Status", style="TLabelframe", padding=15)
-        card_status.pack(fill="x", pady=5)
-        self.status_lbl = ttk.Label(card_status, text="", style="Card.TLabel", font=("Segoe UI", 12, "bold"))
-        self.status_lbl.pack(anchor="center")
-        card_ctrl = ttk.LabelFrame(self, text="Control", style="TLabelframe", padding=15)
-        card_ctrl.pack(fill="x", pady=5)
-        f_btns = tk.Frame(card_ctrl, bg=COLORS["bg_panel"])
-        f_btns.pack(fill="x")
-        f_btns.columnconfigure((0,1,2), weight=1)
-        self.btn_start = ttk.Button(f_btns, command=lambda: self._run_service_cmd("autoglow", "start", self.status_lbl), style="warning")
-        self.btn_start.grid(row=0, column=0, padx=5, sticky="ew")
-        self.btn_stop = ttk.Button(f_btns, command=lambda: self._run_service_cmd("autoglow", "stop", self.status_lbl))
-        self.btn_stop.grid(row=0, column=1, padx=5, sticky="ew")
-        self.btn_restart = ttk.Button(f_btns, command=lambda: self._run_service_cmd("autoglow", "restart", self.status_lbl))
-        self.btn_restart.grid(row=0, column=2, padx=5, sticky="ew")
-        card_inst = ttk.LabelFrame(self, text="System", style="TLabelframe", padding=15)
-        card_inst.pack(fill="x", pady=5)
-        self.btn_install = ttk.Button(card_inst, command=self.do_install)
-        self.btn_install.pack(fill="x", pady=2)
-        self.btn_uninstall = ttk.Button(card_inst, command=self.do_uninstall, style="Danger.TButton")
-        self.btn_uninstall.pack(fill="x", pady=2)
-        self.update_texts()
-        self._check_status_generic("autoglow", self.status_lbl)
-
-    def update_texts(self):
-        l = self.controller.lang
-        self.btn_back.config(text=TEXTS["btn_back"][l]); self.header.config(text=TEXTS["ag_header"][l])
-        self.btn_start.config(text=TEXTS["btn_start"][l]); self.btn_stop.config(text=TEXTS["btn_stop"][l])
-        self.btn_restart.config(text=TEXTS["btn_restart"][l]); self.btn_install.config(text=TEXTS["btn_install"][l])
-        self.btn_uninstall.config(text=TEXTS["btn_uninstall"][l])
-        self._check_status_generic("autoglow", self.status_lbl)
-
-    def do_install(self):
-        script = "sudo apt-get update\nsudo apt-get install -y git python3-venv\nTARGET='/opt/AutoGlow'\nif [ ! -d '$TARGET' ]; then sudo git clone https://github.com/IteraThor/AutoGlow.git '$TARGET'; else cd '$TARGET' && sudo git pull; fi\ncd '$TARGET'\nsudo chown -R $USER:$USER '$TARGET'\nsudo chmod +x ./setup.sh\nsudo ./setup.sh"
-        self._run_bash_script(script)
-        self.after(5000, lambda: self._check_status_generic("autoglow", self.status_lbl))
-
-    def do_uninstall(self):
-        if not messagebox.askyesno("SUIT", "Delete AutoGlow?"): return
-        self._run_bash_script("sudo systemctl stop autoglow\nsudo systemctl disable autoglow\nsudo rm /etc/systemd/system/autoglow.service\nsudo systemctl daemon-reload\nsudo rm -rf /opt/AutoGlow")
-        self.after(2000, lambda: self._check_status_generic("autoglow", self.status_lbl))
 
 class KioskView(tk.Frame, ServiceViewMixin):
     def __init__(self, parent, controller):
@@ -422,36 +541,103 @@ class TouchRotationView(tk.Frame, ServiceViewMixin):
         card.pack(fill="x", padx=10)
         self.lbl_dir = ttk.Label(card, text="", style="Card.TLabel")
         self.lbl_dir.pack(anchor="w", pady=(0, 10))
-        self.var_choice = tk.StringVar(value="left")
+        self.var_choice = tk.StringVar(value="normal")
         def create_rb(val): return tk.Radiobutton(card, variable=self.var_choice, value=val, bg=COLORS["bg_panel"], fg=COLORS["fg_text"], selectcolor="black", font=("Segoe UI", 11), highlightthickness=0)
+        
+        self.rb_norm = create_rb("normal"); self.rb_norm.pack(anchor="w", pady=5)
         self.rb_left = create_rb("left"); self.rb_left.pack(anchor="w", pady=5)
         self.rb_right = create_rb("right"); self.rb_right.pack(anchor="w", pady=5)
-        self.rb_def = create_rb("default"); self.rb_def.pack(anchor="w", pady=5)
+        
+        # Abstands-Label
+        tk.Label(card, bg=COLORS["bg_panel"], height=1).pack()
+
+        # OSK Schalter (Im Rotation Menü)
+        self.var_osk = tk.BooleanVar()
+        self.check_osk = tk.Checkbutton(card, variable=self.var_osk, command=self.toggle_osk,
+                                        bg=COLORS["bg_panel"], fg=COLORS["fg_text"], selectcolor="black",
+                                        activebackground=COLORS["bg_panel"], activeforeground=COLORS["fg_text"],
+                                        font=("Segoe UI", 11), highlightthickness=0)
+        self.check_osk.pack(anchor="w", pady=5)
+
         self.btn_apply = ttk.Button(self, command=self.apply, style="Accent.TButton")
         self.btn_apply.pack(fill="x", pady=(20, 5), padx=10)
-        self.btn_reboot = ttk.Button(self, command=lambda: subprocess.run("pkexec reboot", shell=True))
-        self.btn_reboot.pack(fill="x", pady=5, padx=10)
         self.update_texts()
+        self.check_osk_status()
 
     def update_texts(self):
         l = self.controller.lang
         self.btn_back.config(text=TEXTS["btn_back"][l]); self.header.config(text=TEXTS["touch_header"][l])
-        self.lbl_dir.config(text=TEXTS["lbl_direction"][l]); self.rb_left.config(text=TEXTS["rot_left"][l])
-        self.rb_right.config(text=TEXTS["rot_right"][l]); self.rb_def.config(text=TEXTS["rot_default"][l])
-        self.btn_apply.config(text=TEXTS["btn_apply"][l]); self.btn_reboot.config(text=TEXTS["btn_reboot"][l])
+        self.lbl_dir.config(text=TEXTS["lbl_direction"][l])
+        self.rb_norm.config(text=TEXTS["rot_normal"][l])
+        self.rb_left.config(text=TEXTS["rot_left"][l])
+        self.rb_right.config(text=TEXTS["rot_right"][l])
+        self.check_osk.config(text=TEXTS["lbl_osk"][l])
+        self.btn_apply.config(text=TEXTS["btn_apply"][l])
+
+    def check_osk_status(self):
+        try:
+            res = subprocess.check_output(["gsettings", "get", "org.gnome.desktop.a11y.applications", "screen-keyboard-enabled"], text=True).strip()
+            self.var_osk.set(res == 'true')
+        except:
+            self.var_osk.set(False)
+
+    def toggle_osk(self):
+        state = "true" if self.var_osk.get() else "false"
+        subprocess.run(["gsettings", "set", "org.gnome.desktop.a11y.applications", "screen-keyboard-enabled", state])
 
     def apply(self):
-        choice, l = self.var_choice.get(), self.controller.lang
-        target_path = "/etc/udev/rules.d/99-touch-rotation.rules"
-        if choice == "default": cmd = f"rm -f {target_path}"
-        else:
-            m = "0 1 0 -1 0 1 0 0 1" if choice == "left" else "0 -1 1 1 0 0 0 0 1"
-            rule = f'ACTION=="add|change", KERNEL=="event[0-9]*", ATTRS{{idVendor}}=="27c0", ATTRS{{idProduct}}=="0859", ENV{{LIBINPUT_CALIBRATION_MATRIX}}="{m}"\n'
-            cmd = f"echo '{rule}' > {target_path}"
-        full_cmd = self._sudo_cmd(f"{cmd} && udevadm control --reload-rules && udevadm trigger")
-        subprocess.run(full_cmd, shell=True)
-        messagebox.showinfo("SUIT", TEXTS["msg_applied"][l])
+        rot_mode = self.var_choice.get()
+        l = self.controller.lang
+        
+        # 1. Autostart Datei schreiben (SUIT selbst wird beim Start aufgerufen)
+        try:
+            os.makedirs(AUTOSTART_DIR, exist_ok=True)
+            this_script = os.path.abspath(sys.argv[0])
+            command = f"python3 '{this_script}' --output {DISPLAY_NAME_DEFAULT} --rotate {rot_mode}"
+            desktop_content = f"[Desktop Entry]\nType=Application\nExec={command}\nName=Screen Rotation\nX-GNOME-Autostart-enabled=true\n"
+            with open(DESKTOP_FILE_PATH, "w") as f: f.write(desktop_content)
+        except Exception as e:
+            messagebox.showerror("Error", f"Autostart Error: {e}")
+            return
+
+        # 2. Touch-Matrix schreiben (Udev Regel)
+        try:
+            touch_name = find_touchscreen_name()
+            if touch_name:
+                matrix = MATRICES.get(rot_mode, MATRICES["normal"])
+                # FIX: Udev Content sicher per Python schreiben, nicht via Shell echo
+                udev_content = f'ACTION=="add|change", ENV{{ID_INPUT_TOUCHSCREEN}}=="1", ATTRS{{name}}=="{touch_name}", ENV{{LIBINPUT_CALIBRATION_MATRIX}}="{matrix}"\n'
+                
+                # Datei lokal erstellen (Nutzer hat Schreibrechte in /tmp)
+                with open(TEMP_RULE_PATH, "w") as f:
+                    f.write(udev_content)
+                
+                # Datei mit root Rechten verschieben und udev neu laden
+                cmd = f"cp {TEMP_RULE_PATH} {UDEV_RULE_FINAL_PATH} && udevadm control --reload-rules && udevadm trigger --subsystem-match=input"
+                full_cmd = self._sudo_cmd(cmd)
+                
+                # Wir führen es aus
+                subprocess.run(full_cmd, shell=True)
+                messagebox.showinfo("SUIT", TEXTS["msg_applied"][l])
+            else:
+                messagebox.showwarning("SUIT", "Touchscreen not found (only screen rotation saved).")
+        except Exception as e:
+            messagebox.showerror("Error", f"Touch Error: {e}")
 
 if __name__ == "__main__":
-    app = SuitApp()
-    app.mainloop()
+    args = sys.argv[1:]
+    
+    # CLI Modus (für Autostart Rotation)
+    if "--rotate" in args:
+        try:
+            out_idx = args.index("--output") + 1
+            rot_idx = args.index("--rotate") + 1
+            arg_output = args[out_idx]
+            arg_rotate = args[rot_idx]
+            apply_gnome_rotation(arg_output, arg_rotate)
+        except Exception:
+            pass
+    else:
+        # GUI Modus
+        app = SuitApp()
+        app.mainloop()
