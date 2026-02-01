@@ -1,11 +1,32 @@
 import os
 import stat
 import subprocess
+import sys
 
-# Get the directory of the current script
+# Verzeichnis des aktuellen Skripts ermitteln
 project_dir = os.path.dirname(os.path.abspath(__file__))
+venv_dir = os.path.join(project_dir, "venv")
+requirements_file = os.path.join(project_dir, "requirements.txt")
 
-# Define the content of the .desktop file
+def setup_environment():
+    """Stellt sicher, dass venv existiert und alle Pakete installiert sind."""
+    if not os.path.exists(venv_dir):
+        print("Erstelle Python-Umgebung (venv)...")
+        subprocess.run([sys.executable, "-m", "venv", venv_dir], check=True)
+    
+    pip_path = os.path.join(venv_dir, "bin", "pip")
+    if os.path.exists(requirements_file):
+        print("Installiere benötigte Pakete aus requirements.txt...")
+        subprocess.run([pip_path, "install", "-r", requirements_file], check=True)
+
+# Vor dem Erstellen des Launchers die Umgebung prüfen/erstellen
+try:
+    setup_environment()
+except Exception as e:
+    print(f"Fehler beim Einrichten der Umgebung: {e}")
+    # Wir machen trotzdem weiter, falls der Nutzer es später beheben will
+
+# Inhalt der .desktop Datei
 desktop_entry = f"""[Desktop Entry]
 Version=1.0
 Name=SUIT
@@ -18,38 +39,24 @@ Type=Application
 Categories=Utility;
 """
 
-# Define the path for the .desktop file on the Desktop
+# Pfad für den Desktop
 desktop_dir = os.path.expanduser("~/Desktop")
 os.makedirs(desktop_dir, exist_ok=True)
 desktop_file_path = os.path.join(desktop_dir, "SUIT.desktop")
 
-# Write the content to the .desktop file
+# Datei schreiben
 with open(desktop_file_path, "w") as f:
     f.write(desktop_entry)
 
-# Make the .desktop file executable
+# Ausführbar machen
 st = os.stat(desktop_file_path)
 os.chmod(desktop_file_path, st.st_mode | stat.S_IEXEC)
 
-# Mark the desktop file as trusted
+# Als vertrauenswürdig markieren (versuchen)
 try:
     subprocess.run(["gio", "set", desktop_file_path, "metadata::trusted", "true"], check=True)
-    print("Desktop file marked as trusted.")
-except FileNotFoundError:
-    print("`gio` command not found. Could not mark desktop file as trusted.")
-except subprocess.CalledProcessError as e:
-    print(f"Error marking desktop file as trusted: {e}")
+    print("Desktop-Datei als vertrauenswürdig markiert.")
+except Exception:
+    print("Hinweis: Markierung als 'trusted' via gio fehlgeschlagen. Bitte ggf. manuell 'Starten erlauben' klicken.")
 
-# Refresh Nautilus
-try:
-    subprocess.run(["nautilus", "-q"], check=True)
-    print("Nautilus refreshed.")
-except FileNotFoundError:
-    # This is not a critical error, so we just inform the user.
-    print("'nautilus -q' command failed. You may need to manually refresh your desktop for the icon to update.")
-except subprocess.CalledProcessError as e:
-    print(f"Error refreshing Nautilus: {e}")
-
-
-print(f"Desktop launcher created at: {desktop_file_path}")
-print("You should now be able to launch SUIT from your desktop.")
+print(f"Launcher wurde erstellt unter: {desktop_file_path}")
