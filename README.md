@@ -4,38 +4,33 @@
 
 # SUIT - Setup Utilities by IteraThor
 
-SUIT is a graphical tool designed mainly to streamline the deployment of an **Autodarts system** on Linux (mainly Ubuntu).
-
-I originally created this project to make setting up my own Linux PCs for Autodarts easier and faster. I am sharing it here for free for anyone in the community who might find it useful!
+SUIT is a graphical toolkit designed to simplify the deployment and management of an **Autodarts system** on Linux, specifically optimized for Ubuntu and Wayland environments.
 
 ## Features
 
-* 🎯 **Autodarts Management:** Menu to install, control (start/stop/restart), and uninstall the Autodarts service.
-* 💡 **AutoGlow Manager:** Easy setup and management for my AutoGlow script (LED control).
-* 🖥️ **Kiosk Mode:** Enable or disable Kiosk Mode to boot Firefox directly into fullscreen (includes a fix for the "black screen" issue on Wayland).
-* 🔄 **Touch Input Hotfix:** A specific fix to rotate touch input coordinates (for Wayland/Ubuntu) if your touchscreen responds incorrectly.
+* 🎯 **Autodarts Management:** Dedicated menu to install, monitor, and control the Autodarts service (start, stop, or restart).
+* 💡 **AutoGlow Manager:** Complete setup for the AutoGlow LED control script. Includes a live WebSocket log, ESP32 hardware detection, and an effect tester.
+* 🖥️ **Kiosk Mode:** Configures Firefox to boot directly into fullscreen. Includes a Wayland "black screen" fix and an emergency exit via the power button.
+* 🔄 **Screen & Touch Rotation:** Rotate your display and fix touch input coordinates using DBus and Udev rules.
+* ⌨️ **On-Screen Keyboard:** Quick toggle to enable or disable the GNOME on-screen keyboard.
 
-## Requirements
-
-The tool requires `Python` and `tkinter` for the graphical interface.
-
+### 1. Install System Dependencies
+Run the following command to install the necessary system packages:
 ```bash
 sudo apt update
-sudo apt install python3 python3-tk python3-venv git
+sudo apt install python3 python3-tk python3-venv python3-dbus git xterm -y
 
 ```
 
 ## Installation & Usage
 
-1. Clone repository:
+1. **Clone the repository:**
 ```bash
 git clone https://github.com/IteraThor/SUIT.git
 cd SUIT
 
 ```
-
-
-2. Start app:
+2. **Start the application:**
 ```bash
 python3 suit_test.py
 
