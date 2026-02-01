@@ -330,13 +330,27 @@ class ServiceViewMixin:
 
     def _run_bash_script(self, bash_content):
         filename = "/tmp/suit_exec.sh"
-        full_content = "#!/bin/bash\n" + bash_content + "\n\necho\nread -p 'Press Enter to close...' "
+        # The 'read' part is for interactive terminals, not needed for pkexec
+        full_content = "#!/bin/bash\n" + bash_content
         try:
             with open(filename, "w") as f: f.write(full_content)
             os.chmod(filename, 0o755)
-            term = which("xterm") or which("gnome-terminal")
-            cmd = f"gnome-terminal -- {filename}" if "gnome-terminal" in term else f"{term} -e {filename}"
-            subprocess.Popen(cmd, shell=True)
+
+            if which("pkexec"):
+                cmd = f"pkexec bash {filename}"
+                subprocess.Popen(cmd, shell=True)
+                messagebox.showinfo("In Progress", "The script is running in the background. You may be prompted for your password.")
+            elif which("xterm") or which("gnome-terminal"):
+                # Fallback to the old method if pkexec is not available.
+                full_content += "\n\necho\nread -p 'Press Enter to close...' "
+                with open(filename, "w") as f: f.write(full_content)
+                
+                term = which("xterm") or which("gnome-terminal")
+                cmd = f"gnome-terminal -- {filename}" if "gnome-terminal" in term else f"{term} -e {filename}"
+                subprocess.Popen(cmd, shell=True)
+            else:
+                messagebox.showerror("Error", "Cannot run script. Neither pkexec nor a supported terminal (xterm, gnome-terminal) was found.")
+
         except Exception as e: messagebox.showerror("Error", f"Failed to run script: {e}")
 
 class MainMenu(tk.Frame):
@@ -654,31 +668,50 @@ WantedBy=multi-user.target"""
 run_installation() {{
     set -e
     echo "--- Starting Full Installation & Service Setup ---"
-    echo "You will be prompted for your password for 'sudo' commands."
+    
+    # Check if we are root. If not, use sudo. If we are root, SUDO is empty.
+    if [ "$(id -u)" -ne 0 ]; then
+        SUDO="sudo"
+        echo "Not running as root. Using 'sudo' for privileged commands."
+    else
+        SUDO=""
+        echo "Running as root. 'sudo' not required for privileged commands."
+    fi
 
     echo "\\n[STEP 1/5] Updating package list..."
-    sudo apt update
+    $SUDO apt update -y
     
     echo "\\n[STEP 2/5] Installing system packages (python-venv, git)..."
-    sudo apt install -y python{py_version}-venv git
+    $SUDO apt install -y python{py_version}-venv git
     
-    echo "\\n[STEP 3/5] Creating Python virtual environment..."
-    rm -rf "{self.project_dir}/venv"
-    python3 -m venv "{self.project_dir}/venv"
+    echo "\\n[STEP 3/5] Creating Python virtual environment as user '{user}'..."
+    if [ "$SUDO" == "sudo" ]; then
+        # If we are not root, we are the user, so no need for sudo/runuser
+        rm -rf "{self.project_dir}/venv"
+        python3 -m venv "{self.project_dir}/venv"
+    else
+        # If we are root, de-escalate to the user
+        $SUDO runuser -u {user} -- rm -rf "{self.project_dir}/venv"
+        $SUDO runuser -u {user} -- python3 -m venv "{self.project_dir}/venv"
+    fi
     
     echo "\\n[STEP 4/5] Installing Python dependencies (pyserial, websockets)..."
-    "{self.project_dir}/venv/bin/pip" install pyserial websockets
+    if [ "$SUDO" == "sudo" ]; then
+        "{self.project_dir}/venv/bin/pip" install pyserial websockets
+    else
+        $SUDO runuser -u {user} -- "{self.project_dir}/venv/bin/pip" install pyserial websockets
+    fi
     
     echo "\\n[STEP 5/5] Setting up systemd service..."
     # Using a heredoc with sudo to write the service file securely
-    sudo bash -c 'cat > /etc/systemd/system/autoglow.service' << EOF
+    $SUDO bash -c 'cat > /etc/systemd/system/autoglow.service' << EOF
 {service_content}
 EOF
     
     echo "Reloading systemd, enabling and restarting the service..."
-    sudo systemctl daemon-reload
-    sudo systemctl enable autoglow
-    sudo systemctl restart autoglow
+    $SUDO systemctl daemon-reload
+    $SUDO systemctl enable autoglow
+    $SUDO systemctl restart autoglow
     
     echo "\\n--- Installation successful! ---"
 }}
@@ -758,7 +791,16 @@ class AutodartsView(tk.Frame, ServiceViewMixin):
         self._check_status_generic("autodarts", self.status_lbl)
 
     def do_install(self):
-        self._run_bash_script("echo 'Installing Autodarts...'\nbash <(curl -sL http://autodarts.io/install)")
+        cmd = "bash -c 'bash <(curl -sL get.autodarts.io); read -p \"Press Enter to continue...\"'"
+        try:
+            if which("pkexec"):
+                subprocess.Popen(f"pkexec {cmd}", shell=True)
+            elif which("xterm"):
+                subprocess.Popen(f"xterm -e \"{cmd}\"", shell=True)
+            else:
+                messagebox.showerror("Error", "Neither pkexec nor xterm found.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to run install script: {e}")
         self.after(5000, lambda: self._check_status_generic("autodarts", self.status_lbl))
 
     def do_uninstall(self):
