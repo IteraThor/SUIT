@@ -35,7 +35,7 @@ cd SUIT
 python3 suit_test.py
 
 ```
-Optional: Create a desktop Icon
+3. **Optional: Create a desktop Icon**
 ```bash
 create_launcher.py
 
