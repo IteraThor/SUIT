@@ -32,7 +32,9 @@ cd SUIT
 ```
 2. **Create a desktop Icon**
 ```bash
-create_launcher.py
+sudo apt update
+sudo apt install libdbus-1-dev pkg-config -y
+python3 create_launcher.py
 
 ```
 3. **Launch from the Desktiop Icon or run the suit_test.py**
