@@ -32,7 +32,6 @@ cd SUIT
 ```
 2. **Create a desktop Icon**
 ```bash
-sudo apt update
 sudo apt install libdbus-1-dev pkg-config -y
 python3 create_launcher.py
 
