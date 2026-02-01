@@ -11,6 +11,7 @@ Version=1.0
 Name=SUIT
 Comment=Setup Utilities by IteraThor
 Exec={project_dir}/venv/bin/python {project_dir}/suit_test.py
+Icon={project_dir}/suit-icon.png
 Path={project_dir}
 Terminal=false
 Type=Application
@@ -52,4 +53,3 @@ except subprocess.CalledProcessError as e:
 
 print(f"Desktop launcher created at: {desktop_file_path}")
 print("You should now be able to launch SUIT from your desktop.")
-
