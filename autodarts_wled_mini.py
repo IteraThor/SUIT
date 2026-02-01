@@ -109,4 +109,3 @@ if __name__ == "__main__":
         if ser and ser.is_open:
             ser.close()
         print("\nScript terminated.")
-
