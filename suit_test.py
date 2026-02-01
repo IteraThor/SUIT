@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, colorchooser
 import subprocess
 import webbrowser
 from shutil import which
@@ -7,6 +7,28 @@ import os
 import sys
 import dbus
 from collections import defaultdict
+import json
+import time
+import threading
+import socket
+
+# --- Optional import for WebSocket feature ---
+try:
+    import queue
+    import asyncio
+    import websockets
+    WEBSOCKETS_AVAILABLE = True
+except ImportError:
+    WEBSOCKETS_AVAILABLE = False
+
+# --- Optional import for Serial feature ---
+try:
+    import serial
+    import serial.tools.list_ports
+    SERIAL_AVAILABLE = True
+except ImportError:
+    SERIAL_AVAILABLE = False
+
 
 # --- KONFIGURATION SCREEN ROTATOR ---
 DISPLAY_NAME_DEFAULT = "DP-2"
@@ -37,17 +59,28 @@ COLORS = {
     "select_indicator": "#000000"
 }
 
+WLED_EFFECTS = {
+    "Solid": 0, "Blink": 1, "Breathe": 2, "Wipe": 3, "Scan": 45,
+    "Rainbow": 9, "Chase": 28, "Fire": 66, "Strobe": 8,
+    "Color Loop": 11, "Heartbeat": 101, "Pacifica": 104
+}
+EFFECT_ID_TO_NAME = {v: k for k, v in WLED_EFFECTS.items()}
+
+
 # --- TEXTE ---
 TEXTS = {
     "app_title": {"de": "SUIT - Setup Utilities by IteraThor", "en": "SUIT - Setup Utilities by IteraThor"},
     "menu_title": {"de": "Hauptmenü", "en": "Main Menu"},
     "btn_autodarts": {"de": "🎯 Autodarts Manager", "en": "🎯 Autodarts Manager"},
-    "btn_autoglow": {"de": "💡 AutoGlow Manager (Entfernt)", "en": "💡 AutoGlow Manager (Removed)"},
+    "btn_autoglow": {"de": "💡 AutoGlow Manager", "en": "💡 AutoGlow Manager"},
     "btn_touch": {"de": "🔄 Screen & Touch Rotation", "en": "🔄 Screen & Touch Rotation"},
     "btn_kiosk": {"de": "🖥️ Setup Kiosk Mode", "en": "🖥️ Setup Kiosk Mode"},
     "btn_update": {"de": "⬇️ Auf Updates prüfen", "en": "⬇️ Check for Updates"},
     "btn_back": {"de": "❮ Zurück", "en": "❮ Back"},
     "ad_header": {"de": "Autodarts Verwaltung", "en": "Autodarts Management"},
+    "ag_header": {"de": "AutoGlow Einstellungen", "en": "AutoGlow Settings"},
+    "ag_install": {"de": "Installation (Venv & Service)", "en": "Installation (Venv & Service)"},
+    "ag_save": {"de": "Speichern & Dienst Neustart", "en": "Save & Restart Service"},
     "kiosk_header": {"de": "Kiosk Modus (Firefox)", "en": "Kiosk Mode (Firefox)"},
     "touch_header": {"de": "Bildschirm & Touch Ausrichtung", "en": "Screen & Touch Orientation"},
     "status_lbl": {"de": "Status:", "en": "Status:"},
@@ -267,9 +300,7 @@ class SuitApp(tk.Tk):
     def show_touch(self): self._switch(TouchRotationView)
     def show_kiosk(self): self._switch(KioskView)
     
-    # AutoGlow deaktiviert
-    def show_autoglow(self): 
-        messagebox.showinfo("SUIT", TEXTS["ag_removed"][self.lang])
+    def show_autoglow(self): self._switch(AutoGlowView)
 
     def _switch(self, frame_class):
         if self.current_frame: self.current_frame.destroy()
@@ -368,6 +399,315 @@ class MainMenu(tk.Frame):
         self._btn_kiosk.config(text=TEXTS["btn_kiosk"][l])
         self._btn_touch.config(text=TEXTS["btn_touch"][l])
         self._btn_update.config(text=TEXTS["btn_update"][l])
+
+class AutoGlowView(tk.Frame, ServiceViewMixin):
+    def __init__(self, parent, controller):
+        super().__init__(parent, bg=COLORS["bg_main"])
+        self.controller = controller
+        self.project_dir = os.path.dirname(os.path.abspath(__file__))
+        self.config_file = os.path.join(self.project_dir, "autoglow_config.json")
+        self.stop_thread = False
+        self.check_vars = {}
+        self.fx_dropdowns = {}
+        self.color_btns = {}
+        
+        self.status_keys = ["Throw", "Takeout in progress", "Takeout", "Starting", "Stopping", "Calibrating", "Error", "Stopped"]
+        self.config = self._load_config()
+
+        ttk.Button(self, text=TEXTS["btn_back"][controller.lang], command=controller.show_menu).pack(anchor="w")
+        ttk.Label(self, text=TEXTS["ag_header"][controller.lang], style="SubHeader.TLabel").pack(pady=10)
+
+        # Status Panel (WebSocket & ESP32)
+        status_panel = tk.Frame(self, bg=COLORS["bg_panel"], pady=10)
+        status_panel.pack(fill="x", pady=5)
+        self.lbl_ws = ttk.Label(status_panel, text="WebSocket: ⏳", background=COLORS["bg_panel"])
+        self.lbl_ws.pack(side="left", padx=20)
+        self.lbl_esp = ttk.Label(status_panel, text="ESP32: ⏳", background=COLORS["bg_panel"])
+        self.lbl_esp.pack(side="left", padx=20)
+
+        if WEBSOCKETS_AVAILABLE:
+            self._init_websocket_logger()
+        else:
+            self._init_websocket_placeholder()
+            
+        bright_frame = tk.Frame(self, bg=COLORS["bg_panel"], pady=10)
+        bright_frame.pack(fill="x", padx=20, pady=5)
+        tk.Label(bright_frame, text="Global Brightness:", fg="white", bg=COLORS["bg_panel"]).pack(side="left", padx=10)
+        
+        current_bright = self.config.get("global_brightness", 255)
+        self.bright_slider = tk.Scale(bright_frame, from_=0, to=255, orient="horizontal", bg=COLORS["bg_panel"], fg="white", highlightthickness=0)
+        self.bright_slider.set(current_bright)
+        self.bright_slider.pack(side="right", fill="x", expand=True, padx=10)
+
+        # Scrollbarer Bereich für die Liste
+        container = tk.Frame(self, bg=COLORS["bg_main"])
+        container.pack(fill="both", expand=True, pady=10)
+        canvas = tk.Canvas(container, bg=COLORS["bg_main"], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        self.scroll_frame = tk.Frame(canvas, bg=COLORS["bg_main"])
+
+        self.scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw", width=540)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self._build_list()
+
+        # Aktions-Buttons
+        btn_f = tk.Frame(self, bg=COLORS["bg_main"])
+        btn_f.pack(fill="x", pady=10)
+        ttk.Button(btn_f, text=TEXTS["ag_install"][controller.lang], command=self.run_install).pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(btn_f, text=TEXTS["ag_save"][controller.lang], command=self.save_and_restart).pack(side="left", expand=True, fill="x", padx=2)
+
+        threading.Thread(target=self._status_loop, daemon=True).start()
+
+    def _init_websocket_logger(self):
+        self.ws_queue = queue.Queue()
+        log_frame = tk.Frame(self, bg=COLORS["bg_main"])
+        log_frame.pack(fill="x", pady=(5,10))
+        ttk.Label(log_frame, text="WebSocket Log:", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        self.log_widget = tk.Text(log_frame, height=4, bg=COLORS["bg_panel"], fg=COLORS["fg_sub"], relief="sunken", borderwidth=1, font=("Monospace", 9))
+        self.log_widget.pack(fill="x", expand=True)
+        self.log_widget.insert(tk.END, "Waiting for WebSocket messages...\n")
+        self.log_widget.config(state="disabled")
+
+        threading.Thread(target=self._websocket_listener_thread, daemon=True).start()
+        self.after(100, self._process_ws_queue)
+
+    def _init_websocket_placeholder(self):
+        log_frame = tk.Frame(self, bg=COLORS["bg_main"])
+        log_frame.pack(fill="x", pady=(5,10))
+        placeholder = ttk.Label(log_frame, text="Install 'websockets' to enable the live log. Use the Install button below.", font=("Segoe UI", 10, "italic"), foreground=COLORS["warning"])
+        placeholder.pack(fill="x", expand=True)
+        self.lbl_ws.config(text="WebSocket: ⚠️", foreground=COLORS["warning"])
+
+    def _log_message(self, message):
+        self.log_widget.config(state="normal")
+        self.log_widget.insert(tk.END, message + "\n")
+        self.log_widget.see(tk.END)
+        self.log_widget.config(state="disabled")
+
+    def _process_ws_queue(self):
+        if not WEBSOCKETS_AVAILABLE: return
+        try:
+            while True:
+                message = self.ws_queue.get_nowait()
+                if message.startswith("STATUS:"):
+                    status = message.split(":")[1]
+                    if status == "CONNECTED":
+                        self.lbl_ws.config(text="WebSocket: ✅", foreground=COLORS["success"])
+                    else: # DISCONNECTED
+                        self.lbl_ws.config(text="WebSocket: ❌", foreground=COLORS["danger"])
+                else:
+                    self._log_message(message)
+        except queue.Empty:
+            pass
+        finally:
+            self.after(100, self._process_ws_queue)
+
+    def _websocket_listener_thread(self):
+        if not WEBSOCKETS_AVAILABLE: return
+        try:
+            asyncio.run(self._websocket_listener())
+        except Exception as e:
+            self.ws_queue.put(f"WebSocket thread error: {e}")
+
+    async def _websocket_listener(self):
+        uri = "ws://localhost:3180"
+        while not self.stop_thread:
+            try:
+                async with websockets.connect(uri) as websocket:
+                    self.ws_queue.put("STATUS:CONNECTED")
+                    self.ws_queue.put("--- WebSocket connected ---")
+                    async for message in websocket:
+                        self.ws_queue.put(message)
+            except (OSError, websockets.exceptions.ConnectionClosed) as e:
+                self.ws_queue.put("STATUS:DISCONNECTED")
+                self.ws_queue.put(f"--- WebSocket connection error: {e}. Retrying in 5s... ---")
+                await asyncio.sleep(5)
+            except Exception as e:
+                self.ws_queue.put("STATUS:DISCONNECTED")
+                self.ws_queue.put(f"--- WebSocket error: {e}. Retrying in 5s... ---")
+                await asyncio.sleep(5)
+
+    def _load_config(self):
+        if not os.path.exists(self.config_file) or os.path.getsize(self.config_file) == 0:
+            return {}
+        with open(self.config_file, "r") as f:
+            return json.load(f)
+
+    def _build_list(self):
+        for status in self.status_keys:
+            settings = self.config.get(status, {})
+            row = tk.Frame(self.scroll_frame, bg=COLORS["bg_panel"], pady=5)
+            row.pack(fill="x", pady=3)
+
+            tk.Label(row, text=status, fg="white", bg=COLORS["bg_panel"], width=15, anchor="w").pack(side="left", padx=10)
+
+            var = tk.BooleanVar(value=settings.get("enabled", True))
+            self.check_vars[status] = var
+            tk.Checkbutton(row, variable=var, bg=COLORS["bg_panel"], activebackground=COLORS["bg_panel"], selectcolor="#333333").pack(side="right", padx=5)
+
+            tk.Button(row, text="⚡", bg="#444444", fg="white", width=3, command=lambda s=status: self.test_effect(s)).pack(side="right", padx=5)
+
+            col = settings.get("seg", {}).get("col", [[255, 255, 255]])[0]
+            hex_color = f'#{col[0]:02x}{col[1]:02x}{col[2]:02x}'
+            btn = tk.Button(row, bg=hex_color, width=3)
+            btn.config(command=lambda s=status, b=btn: self.pick_color(s, b))
+            btn.pack(side="right", padx=5)
+            self.color_btns[status] = btn
+
+            fx_id = settings.get("seg", {}).get("fx", 0)
+            fx_var = tk.StringVar(value=EFFECT_ID_TO_NAME.get(fx_id, "Solid"))
+            self.fx_dropdowns[status] = fx_var
+            ttk.Combobox(row, textvariable=fx_var, values=list(WLED_EFFECTS.keys()), width=10, state="readonly").pack(side="right", padx=5)
+
+    def pick_color(self, status, btn):
+        color = colorchooser.askcolor(initialcolor=btn.cget("bg"))[1]
+        if color: btn.config(bg=color)
+
+    def test_effect(self, status):
+        if not SERIAL_AVAILABLE:
+            messagebox.showwarning("Serial Port", "pyserial is not installed. Please use the installation button.")
+            return
+
+        port = self.find_esp32_port()
+        if not port: 
+            messagebox.showwarning("Serial Port", "No ESP32 found.")
+            return
+
+        fx_name = self.fx_dropdowns[status].get()
+        fx_id = WLED_EFFECTS.get(fx_name, 0)
+        hex_col = self.color_btns[status].cget("bg").lstrip('#')
+        rgb = [int(hex_col[i:i+2], 16) for i in (0, 2, 4)]
+        
+        brightness = self.bright_slider.get()
+        command = {"on": True, "bri": brightness, "seg": {"fx": fx_id, "col": [rgb]}}
+        
+        try:
+            with serial.Serial(port, 115200, timeout=1) as ser:
+                time.sleep(1.5)
+                ser.write((json.dumps(command) + '\n').encode())
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to send command to ESP32: {e}")
+
+    def _status_loop(self):
+        while not self.stop_thread:
+            # ESP32 Check
+            if SERIAL_AVAILABLE:
+                esp_label_text = f"ESP32: ❌"
+                esp_label_color = COLORS["danger"]
+                try:
+                    
+                    ports = serial.tools.list_ports.comports()
+                    esp32_vids = {0x10C4, 0x1A86, 0x303A}
+                    
+                    found_esp = False
+                    for p in ports:
+                        if p.vid in esp32_vids:
+                            esp_label_text = f"ESP32: ✅ ({p.product or 'ESP32'})"
+                            esp_label_color = COLORS["success"]
+                            found_esp = True
+                            break
+                except ImportError:
+                    esp_label_text = "ESP32: ⚠️ (pyserial missing)"
+                    esp_label_color = COLORS["warning"]
+                except Exception:
+                    pass
+
+                try:
+                    self.lbl_esp.config(text=esp_label_text, foreground=esp_label_color)
+                except: break 
+            else:
+                self.lbl_esp.config(text="ESP32: ⚠️ (pyserial missing)", foreground=COLORS["warning"])
+            time.sleep(3)
+
+    def find_esp32_port(self):
+        if not SERIAL_AVAILABLE: return None
+        KNOWN_VID_PIDS = [(0x10C4, 0xEA60), (0x1A86, 0x7523), (0x0403, 0x6001), (0x303A, 0x1001)]
+        ports = serial.tools.list_ports.comports()
+        for port in ports:
+            if (port.vid, port.pid) in KNOWN_VID_PIDS:
+                return port.device
+        return None
+
+    def run_install(self):
+        py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        user = os.getlogin()
+        
+        service_content = f"""[Unit]
+Description=AutoGlow
+After=network.target
+
+[Service]
+User={user}
+WorkingDirectory={self.project_dir}
+ExecStart={self.project_dir}/venv/bin/python3 {self.project_dir}/autodarts_wled_mini.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target"""
+
+        script = f"""
+#!/bin/bash
+run_installation() {{
+    set -e
+    echo "--- Starting Full Installation & Service Setup ---"
+    echo "You will be prompted for your password for 'sudo' commands."
+
+    echo "\\n[STEP 1/5] Updating package list..."
+    sudo apt update
+    
+    echo "\\n[STEP 2/5] Installing system packages (python-venv, git)..."
+    sudo apt install -y python{py_version}-venv git
+    
+    echo "\\n[STEP 3/5] Creating Python virtual environment..."
+    rm -rf "{self.project_dir}/venv"
+    python3 -m venv "{self.project_dir}/venv"
+    
+    echo "\\n[STEP 4/5] Installing Python dependencies (pyserial, websockets)..."
+    "{self.project_dir}/venv/bin/pip" install pyserial websockets
+    
+    echo "\\n[STEP 5/5] Setting up systemd service..."
+    # Using a heredoc with sudo to write the service file securely
+    sudo bash -c 'cat > /etc/systemd/system/autoglow.service' << EOF
+{service_content}
+EOF
+    
+    echo "Reloading systemd, enabling and restarting the service..."
+    sudo systemctl daemon-reload
+    sudo systemctl enable autoglow
+    sudo systemctl restart autoglow
+    
+    echo "\\n--- Installation successful! ---"
+}}
+
+# Execute the installation function and report outcome
+if run_installation; then
+    echo -e "\\n---> SUCCESS: The installation completed without errors."
+else
+    echo -e "\\n---> ERROR: An error occurred during the installation. Please check the messages above."
+fi
+        """
+        self._run_bash_script(script)
+
+    def save_and_restart(self):
+        new_config = {"global_brightness": self.bright_slider.get()}
+        for status, var in self.check_vars.items():
+            fx_name = self.fx_dropdowns[status].get()
+            hex_col = self.color_btns[status].cget("bg").lstrip('#')
+            rgb = [int(hex_col[i:i+2], 16) for i in (0, 2, 4)]
+            new_config[status] = {
+                "on": True, "bri": 255, "tt": 0, "enabled": var.get(),
+                "seg": {"fx": WLED_EFFECTS.get(fx_name, 0), "col": [rgb]}
+            }
+        with open(self.config_file, "w") as f:
+            json.dump(new_config, f, indent=4)
+
+        cmd = self._sudo_cmd("systemctl restart autoglow")
+        subprocess.run(cmd, shell=True)
+        messagebox.showinfo("SUIT", "Configuration saved and AutoGlow service restarted.")
 
 class AutodartsView(tk.Frame, ServiceViewMixin):
     def __init__(self, parent, controller):
