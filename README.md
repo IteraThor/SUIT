@@ -30,14 +30,9 @@ git clone https://github.com/IteraThor/SUIT.git
 cd SUIT
 
 ```
-2. **Start the application:**
-```bash
-python3 suit_test.py
-
-```
-3. **Optional: Create a desktop Icon**
+2. **Create a desktop Icon**
 ```bash
 create_launcher.py
 
 ```
-
+3. **Launch from the Desktiop Icon or run the suit_test.py**
