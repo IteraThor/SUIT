@@ -18,7 +18,7 @@ SUIT is a graphical toolkit designed to simplify the deployment and management o
 Run the following command to install the necessary system packages:
 ```bash
 sudo apt update
-sudo apt install python3 python3-tk python3-venv python3-dbus git xterm -y
+sudo apt update && sudo apt install libdbus-1-dev libglib2.0-dev pkg-config python3 python3-tk python3-venv python3-dbus git xterm -y
 
 ```
 
@@ -32,7 +32,6 @@ cd SUIT
 ```
 2. **Create a desktop Icon**
 ```bash
-sudo apt install libdbus-1-dev pkg-config -y
 python3 create_launcher.py
 
 ```
