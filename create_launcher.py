@@ -3,26 +3,28 @@ import stat
 import subprocess
 import sys
 
-# Erkennt den aktuellen Pfad dynamisch
+# Erkennt den aktuellen Pfad dynamisch (Desktop oder /opt/SUIT)
 project_dir = os.path.dirname(os.path.abspath(__file__))
 venv_dir = os.path.join(project_dir, "venv")
 requirements_file = os.path.join(project_dir, "requirements.txt")
 
 def setup_environment():
+    """Stellt sicher, dass venv existiert und alle Pakete installiert sind."""
     if not os.path.exists(venv_dir):
-        print(f"Erstelle venv in {venv_dir}...")
+        print(f"Erstelle Python-Umgebung in {venv_dir}...")
         subprocess.run([sys.executable, "-m", "venv", venv_dir], check=True)
     
     pip_path = os.path.join(venv_dir, "bin", "pip")
     if os.path.exists(requirements_file):
+        print("Installiere benötigte Pakete...")
         subprocess.run([pip_path, "install", "-r", requirements_file], check=True)
 
 try:
     setup_environment()
 except Exception as e:
-    print(f"Fehler: {e}")
+    print(f"Fehler beim Einrichten der Umgebung: {e}")
 
-# Erstellt den Desktop-Eintrag mit dem dynamisch erkannten Pfad
+# Inhalt der .desktop Datei mit dynamischen Pfaden
 desktop_entry = f"""[Desktop Entry]
 Version=1.0
 Name=SUIT
@@ -35,17 +37,21 @@ Type=Application
 Categories=Utility;
 """
 
+# Pfad für den Desktop
 desktop_file_path = os.path.expanduser("~/Desktop/SUIT.desktop")
+
+# Datei schreiben
 with open(desktop_file_path, "w") as f:
     f.write(desktop_entry)
 
 # Ausführbar machen
-os.chmod(desktop_file_path, os.stat(desktop_file_path).st_mode | stat.S_IEXEC)
+st = os.stat(desktop_file_path)
+os.chmod(desktop_file_path, st.st_mode | stat.S_IEXEC)
 
-# Nur auf einem installierten System versuchen wir das "Trusted" Attribut
+# Versuchen, als vertrauenswürdig zu markieren (für Ubuntu Desktop)
 try:
     subprocess.run(["gio", "set", desktop_file_path, "metadata::trusted", "true"], check=False)
 except:
     pass
 
-print(f"Launcher erfolgreich erstellt in: {desktop_file_path}")
+print(f"Launcher wurde erstellt unter: {desktop_file_path}")
