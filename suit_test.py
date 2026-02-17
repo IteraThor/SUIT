@@ -56,7 +56,8 @@ TEXTS = {
     "ag_install": {"de": "AutoGlow Installieren / Updaten", "en": "Install / Update AutoGlow"},
     "ag_config": {"de": "Konfiguration öffnen (GUI)", "en": "Open Configuration (GUI)"},
     "ag_config_hint": {"de": "Hinweis: Dienst muss gestoppt sein!", "en": "Note: Service must be stopped!"},
-    "kiosk_header": {"de": "Kiosk Modus (Firefox)", "en": "Kiosk Mode (Firefox)"},
+    "kiosk_header": {"de": "Kiosk Modus", "en": "Kiosk Mode"},
+    "kiosk_browser_lbl": {"de": "Browser wählen:", "en": "Select Browser:"},
     "touch_header": {"de": "Bildschirm & Touch Ausrichtung", "en": "Screen & Touch Orientation"},
     "status_lbl": {"de": "Status:", "en": "Status:"},
     "loading": {"de": "Lade...", "en": "Loading..."},
@@ -70,15 +71,15 @@ TEXTS = {
     "kiosk_inactive": {"de": "● Inaktiv (Autostart aus)", "en": "● Inactive (Autostart off)"},
     "btn_enable_kiosk": {"de": "Einschalten (Autostart)", "en": "Enable (Autostart)"},
     "btn_disable_kiosk": {"de": "Ausschalten", "en": "Disable"},
-    "kiosk_hint": {"de": "Startet Firefox (Wayland Mode).\nVerhindert 'Restore Session' Popup & Black Screen.", 
-                   "en": "Starts Firefox (Wayland Mode).\nPrevents 'Restore Session' popup & black screen."},
+    "kiosk_hint": {"de": "Startet den Browser im Wayland Kiosk Modus.\nVerhindert Session Popups & Black Screen.", 
+                   "en": "Starts the browser in Wayland Kiosk Mode.\nPrevents session popups & black screen."},
     "kiosk_url_lbl": {"de": "Kiosk URL:", "en": "Kiosk URL:"},
     "kiosk_emergency_exit": {"de": "Power-Button Not-Aus aktivieren", "en": "Enable Power-Button Emergency Exit"},
     "kiosk_wait_internet": {"de": "Auf Internetverbindung warten (blackscreen fix)", "en": "Wait for internet connection (blackscreen fix)"},
     "lbl_osk": {"de": "Bildschirmtastatur (OSK) aktivieren", "en": "Enable On-Screen Keyboard"},
     "kiosk_emergency_desc": {
-        "de": "Drücke den Power-Button 3x innerhalb von 3 Sekunden,\num Firefox sofort zu beenden.", 
-        "en": "Press the power button 3 times within 3 seconds\nto immediately close Firefox."
+        "de": "Drücke den Power-Button 3x innerhalb von 3 Sekunden,\num den Kiosk sofort zu beenden.", 
+        "en": "Press the power button 3 times within 3 seconds\nto immediately close the kiosk."
     },
     "st_active": {"de": "● Aktiv (Läuft)", "en": "● Active (Running)"},
     "st_inactive": {"de": "● Inaktiv (Gestoppt)", "en": "● Inactive (Stopped)"},
@@ -350,7 +351,6 @@ class MainMenu(tk.Frame):
 
     def update_suit(self):
         l = self.controller.lang
-        # Findet main.py dynamisch im selben Verzeichnis
         script_dir = os.path.dirname(os.path.abspath(__file__))
         main_script = os.path.join(script_dir, "main.py")
 
@@ -360,7 +360,6 @@ class MainMenu(tk.Frame):
 
         messagebox.showinfo("Update", TEXTS["msg_updated"][l])
         
-        # Beendet die App und startet den Bootstrap-Prozess (main.py) neu
         python = sys.executable
         os.execl(python, python, main_script)
 
@@ -517,43 +516,66 @@ class KioskView(tk.Frame, ServiceViewMixin):
         self.autostart_dir = os.path.expanduser("~/.config/autostart")
         self.file_path = os.path.join(self.autostart_dir, "autodarts-kiosk.desktop")
         self.script_path = os.path.expanduser("~/.config/autostart/shutdown_kiosk.py")
+        
         self.btn_back = ttk.Button(self, command=controller.show_menu, style="TButton")
         self.btn_back.pack(anchor="w", pady=(0, 10))
         self.header = ttk.Label(self, text="", style="SubHeader.TLabel")
         self.header.pack(pady=(0, 15))
+        
         card_status = ttk.LabelFrame(self, text="Status", style="TLabelframe", padding=15)
         card_status.pack(fill="x", pady=5)
         self.status_lbl = ttk.Label(card_status, text="", style="Card.TLabel", font=("Segoe UI", 12, "bold"))
         self.status_lbl.pack(anchor="center")
+        
         card_conf = ttk.LabelFrame(self, text="Konfiguration", style="TLabelframe", padding=15)
         card_conf.pack(fill="x", pady=5)
+        
+        # --- BROWSER AUSWAHL ---
+        self.lbl_browser = ttk.Label(card_conf, text="", style="Card.TLabel")
+        self.lbl_browser.pack(anchor="w", pady=(0, 2))
+        self.var_browser = tk.StringVar(value="Firefox")
+        self.combo_browser = ttk.Combobox(card_conf, textvariable=self.var_browser, values=["Firefox", "Chromium"], state="readonly", font=("Segoe UI", 10))
+        self.combo_browser.pack(fill="x", pady=(0, 10))
+        
+        # --- URL ---
         self.lbl_url = ttk.Label(card_conf, text="", style="Card.TLabel")
         self.lbl_url.pack(anchor="w", pady=(0, 2))
         self.ent_url = tk.Entry(card_conf, bg="#3e3e42", fg="white", insertbackground="white", borderwidth=0)
         self.ent_url.pack(fill="x", pady=(0, 10), ipady=5)
         self.ent_url.insert(0, "https://play.autodarts.io/")
+        
+        # --- CHECKBOXES ---
         self.var_emergency = tk.BooleanVar(value=True)
         self.check_emergency = tk.Checkbutton(card_conf, variable=self.var_emergency, bg=COLORS["bg_panel"], fg=COLORS["fg_text"], selectcolor="black", activebackground=COLORS["bg_panel"], activeforeground=COLORS["fg_text"])
         self.check_emergency.pack(anchor="w", pady=2)
+        
         self.lbl_emergency_desc = ttk.Label(card_conf, text="", style="Hint.TLabel", justify="left")
         self.lbl_emergency_desc.pack(anchor="w", padx=25, pady=(0, 10))
+        
         self.var_wait_internet = tk.BooleanVar(value=True)
         self.check_wait = tk.Checkbutton(card_conf, variable=self.var_wait_internet, bg=COLORS["bg_panel"], fg=COLORS["fg_text"], selectcolor="black", activebackground=COLORS["bg_panel"], activeforeground=COLORS["fg_text"])
         self.check_wait.pack(anchor="w", pady=(0, 10))
+        
+        # --- BUTTONS ---
         self.btn_enable = ttk.Button(card_conf, command=self.enable_kiosk, style="Accent.TButton")
         self.btn_enable.pack(fill="x", pady=5)
         self.btn_disable = ttk.Button(card_conf, command=self.disable_kiosk)
         self.btn_disable.pack(fill="x", pady=5)
+        
         self.lbl_hint = ttk.Label(self, style="Hint.TLabel", justify="center")
         self.lbl_hint.pack(pady=20)
+        
         self.update_texts()
         self.check_status()
 
     def update_texts(self):
         l = self.controller.lang
-        self.btn_back.config(text=TEXTS["btn_back"][l]); self.header.config(text=TEXTS["kiosk_header"][l])
+        self.btn_back.config(text=TEXTS["btn_back"][l])
+        self.header.config(text=TEXTS["kiosk_header"][l])
+        self.lbl_browser.config(text=TEXTS["kiosk_browser_lbl"][l])
         self.lbl_url.config(text=TEXTS["kiosk_url_lbl"][l])
-        self.btn_enable.config(text=TEXTS["btn_enable_kiosk"][l]); self.btn_disable.config(text=TEXTS["btn_disable_kiosk"][l])
+        self.btn_enable.config(text=TEXTS["btn_enable_kiosk"][l])
+        self.btn_disable.config(text=TEXTS["btn_disable_kiosk"][l])
         self.lbl_hint.config(text=TEXTS["kiosk_hint"][l])
         self.check_emergency.config(text=TEXTS["kiosk_emergency_exit"][l])
         self.lbl_emergency_desc.config(text=TEXTS["kiosk_emergency_desc"][l])
@@ -565,19 +587,52 @@ class KioskView(tk.Frame, ServiceViewMixin):
         active = os.path.exists(self.file_path)
         self.status_lbl.config(text=TEXTS["kiosk_active"][l] if active else TEXTS["kiosk_inactive"][l], foreground=COLORS["success"] if active else COLORS["danger"])
 
-    def _save_shutdown_script(self):
-        code = "import subprocess\nimport time\nimport os\nKLICK_LIMIT = 3\nZEITFENSTER = 3\nklick_zeiten = []\ndef beende_kiosk():\n    subprocess.run([\"pkill\", \"firefox\"])\nprocess = subprocess.Popen(['journalctl', '-u', 'systemd-logind', '-f', '-n', '0'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)\nfor line in process.stdout:\n    if \"Power key pressed\" in line:\n        jetzt = time.time()\n        klick_zeiten.append(jetzt)\n        klick_zeiten = [t for t in klick_zeiten if jetzt - t < ZEITFENSTER]\n        if len(klick_zeiten) >= KLICK_LIMIT:\n            beende_kiosk()\n            klick_zeiten = []"
+    def _save_shutdown_script(self, browser_process_name):
+        code = f"""import subprocess
+import time
+import os
+KLICK_LIMIT = 3
+ZEITFENSTER = 3
+klick_zeiten = []
+def beende_kiosk():
+    subprocess.run(["pkill", "{browser_process_name}"])
+process = subprocess.Popen(['journalctl', '-u', 'systemd-logind', '-f', '-n', '0'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+for line in process.stdout:
+    if "Power key pressed" in line:
+        jetzt = time.time()
+        klick_zeiten.append(jetzt)
+        klick_zeiten = [t for t in klick_zeiten if jetzt - t < ZEITFENSTER]
+        if len(klick_zeiten) >= KLICK_LIMIT:
+            beende_kiosk()
+            klick_zeiten = []"""
         with open(self.script_path, "w") as f: f.write(code)
         os.chmod(self.script_path, 0o755)
 
     def enable_kiosk(self):
         if not os.path.exists(self.autostart_dir): os.makedirs(self.autostart_dir)
+        
+        browser_choice = self.var_browser.get()
         target_url = self.ent_url.get().strip()
         wait_cmd = 'until curl -s --head --request GET http://www.google.com | grep "200 OK" > /dev/null; do sleep 2; done; ' if self.var_wait_internet.get() else ""
-        ff_cmd = f"MOZ_ENABLE_WAYLAND=1 firefox --kiosk {target_url}"
-        exec_cmd = f'bash -c "python3 {self.script_path} & sleep 5; {wait_cmd}{ff_cmd}"' if self.var_emergency.get() else f'bash -c "sleep 5; {wait_cmd}{ff_cmd}"'
+        
+        if browser_choice == "Firefox":
+            browser_cmd = f"MOZ_ENABLE_WAYLAND=1 firefox --kiosk {target_url}"
+            process_name = "firefox"
+        else:
+            # Chromium mit Wayland Flags und Unterdrückung von Info-Bars
+            browser_cmd = f"chromium-browser --kiosk --no-errdialogs --disable-infobars --no-first-run --enable-features=UseOzonePlatform --ozone-platform=wayland {target_url}"
+            process_name = "chromium"
+
+        # Not-Aus-Skript mit dem richtigen Browser-Namen generieren, falls aktiviert
+        if self.var_emergency.get():
+            self._save_shutdown_script(process_name)
+            exec_cmd = f'bash -c "python3 {self.script_path} & sleep 5; {wait_cmd}{browser_cmd}"'
+        else:
+            exec_cmd = f'bash -c "sleep 5; {wait_cmd}{browser_cmd}"'
+            
         content = f"[Desktop Entry]\nType=Application\nName=Autodarts Kiosk\nExec={exec_cmd}\nX-GNOME-Autostart-enabled=true\n"
         with open(self.file_path, "w") as f: f.write(content)
+        
         self.check_status()
         messagebox.showinfo("SUIT", TEXTS["msg_applied"][self.controller.lang])
 
