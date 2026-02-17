@@ -96,7 +96,7 @@ TEXTS = {
     "done": {"de": "Fertig.", "en": "Done."},
     "ag_removed": {"de": "Das AutoGlow Modul wurde entfernt.", "en": "The AutoGlow module has been removed."},
     "msg_uptodate": {"de": "SUIT ist bereits auf dem neuesten Stand.", "en": "SUIT is already up to date."},
-    "msg_updated": {"de": "Update erfolgreich! Anwendung wird neu gestartet.", "en": "Update successful! Restarting application."},
+    "msg_updated": {"de": "Update wird gestartet! Die Anwendung wird kurz geschlossen.", "en": "Starting update! The application will close briefly."},
     "err_update": {"de": "Fehler beim Update:\n", "en": "Update Error:\n"},
     "err_no_git": {"de": "Kein Git-Repository gefunden.\nBitte 'git clone' nutzen.", "en": "No Git repository found.\nPlease use 'git clone'."},
     "ag_stop_first": {"de": "Bitte stoppe zuerst den AutoGlow Dienst!", "en": "Please stop the AutoGlow service first!"},
@@ -351,23 +351,18 @@ class MainMenu(tk.Frame):
     def update_suit(self):
         l = self.controller.lang
         script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-        if not os.path.isdir(os.path.join(script_dir, ".git")):
-             messagebox.showerror("Update", TEXTS["err_no_git"][l])
-             return
-        try:
-            proc = subprocess.run(["git", "pull"], cwd=script_dir, capture_output=True, text=True)
-            if proc.returncode == 0:
-                output = proc.stdout.strip()
-                if "Already up to date" in output or "Bereits aktuell" in output:
-                     messagebox.showinfo("Update", TEXTS["msg_uptodate"][l])
-                else:
-                     messagebox.showinfo("Update", TEXTS["msg_updated"][l])
-                     python = sys.executable
-                     os.execl(python, python, *sys.argv)
-            else:
-                 messagebox.showerror("Update", TEXTS["err_update"][l] + "\n" + proc.stderr)
-        except Exception as e:
-            messagebox.showerror("Update", f"Error: {e}")
+        main_script = os.path.join(script_dir, "main.py")
+
+        if not os.path.exists(main_script):
+            messagebox.showerror("Update", "main.py nicht gefunden!")
+            return
+
+        # Nachricht an den Nutzer
+        messagebox.showinfo("Update", TEXTS["msg_updated"][l])
+        
+        # Die App beenden und main.py neu starten
+        python = sys.executable
+        os.execl(python, python, main_script)
 
     def update_texts(self):
         l = self.controller.lang
@@ -598,8 +593,8 @@ class TouchRotationView(tk.Frame, ServiceViewMixin):
         self.controller = controller
         self.btn_back = ttk.Button(self, command=controller.show_menu)
         self.btn_back.pack(anchor="w", pady=(0, 10))
-        self.header = ttk.Label(self, text="", style="SubHeader.TLabel")
-        self.header.pack(pady=(0, 20))
+        self.button_header = ttk.Label(self, text="", style="SubHeader.TLabel")
+        self.button_header.pack(pady=(0, 20))
         card = ttk.Frame(self, style="Card.TFrame", padding=20)
         card.pack(fill="x", padx=10)
         self.lbl_dir = ttk.Label(card, text="", style="Card.TLabel")
@@ -620,7 +615,7 @@ class TouchRotationView(tk.Frame, ServiceViewMixin):
 
     def update_texts(self):
         l = self.controller.lang
-        self.btn_back.config(text=TEXTS["btn_back"][l]); self.header.config(text=TEXTS["touch_header"][l])
+        self.btn_back.config(text=TEXTS["btn_back"][l]); self.button_header.config(text=TEXTS["touch_header"][l])
         self.lbl_dir.config(text=TEXTS["lbl_direction"][l])
         self.rb_norm.config(text=TEXTS["rot_normal"][l]); self.rb_left.config(text=TEXTS["rot_left"][l]); self.rb_right.config(text=TEXTS["rot_right"][l])
         self.check_osk.config(text=TEXTS["lbl_osk"][l]); self.btn_apply.config(text=TEXTS["btn_apply"][l])
