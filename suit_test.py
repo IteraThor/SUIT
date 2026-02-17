@@ -350,17 +350,17 @@ class MainMenu(tk.Frame):
 
     def update_suit(self):
         l = self.controller.lang
-        script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+        # Findet main.py dynamisch im selben Verzeichnis
+        script_dir = os.path.dirname(os.path.abspath(__file__))
         main_script = os.path.join(script_dir, "main.py")
 
         if not os.path.exists(main_script):
             messagebox.showerror("Update", "main.py nicht gefunden!")
             return
 
-        # Nachricht an den Nutzer
         messagebox.showinfo("Update", TEXTS["msg_updated"][l])
         
-        # Die App beenden und main.py neu starten
+        # Beendet die App und startet den Bootstrap-Prozess (main.py) neu
         python = sys.executable
         os.execl(python, python, main_script)
 
