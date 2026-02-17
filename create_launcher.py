@@ -24,14 +24,13 @@ try:
     setup_environment()
 except Exception as e:
     print(f"Fehler beim Einrichten der Umgebung: {e}")
-    # Wir machen trotzdem weiter, falls der Nutzer es später beheben will
 
-# Inhalt der .desktop Datei
+# Inhalt der .desktop Datei - angepasst auf main.py für den Bootstrap-Start
 desktop_entry = f"""[Desktop Entry]
 Version=1.0
 Name=SUIT
 Comment=Setup Utilities by IteraThor
-Exec={project_dir}/venv/bin/python {project_dir}/suit_test.py
+Exec={project_dir}/venv/bin/python {project_dir}/main.py
 Icon={project_dir}/suit-icon.png
 Path={project_dir}
 Terminal=false
