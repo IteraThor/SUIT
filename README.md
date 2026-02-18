@@ -17,7 +17,7 @@ SUIT is a graphical toolkit designed to simplify the deployment and management o
 Run the following command to install the necessary system packages:
 ```bash
 sudo apt update
-sudo apt install python3-tk python3-dbus python3-dev libdbus-1-dev git
+sudo apt install python3-tk python3-dbus python3-dev libdbus-1-dev git -y
 ```
 
 ## Installation & Usage
