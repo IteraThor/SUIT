@@ -4,7 +4,7 @@
 
 # SUIT - Setup Utilities by IteraThor
 
-SUIT is a graphical toolkit designed to simplify the deployment and management of an **Autodarts system** on Linux, specifically optimized for Ubuntu and Wayland environments.
+SUIT is a graphical toolkit designed to simplify the deployment and management of an **Autodarts system** on Touchscreen running Linux systems, specifically optimized for Ubuntu and Wayland environments.
 
 <div align="center">
 </div>
@@ -13,7 +13,7 @@ SUIT is a graphical toolkit designed to simplify the deployment and management o
 
 * 🎯 **Autodarts Management:** Dedicated menu to install, monitor, and control the Autodarts service (start, stop, or restart).
 * 💡 **AutoGlow Manager:** Complete setup for the [AutoGlow](https://github.com/IteraThor/AutoGlow) WLED control script. 
-* 🖥️ **Kiosk Mode:** Configures Firefox or Chromium to boot directly into fullscreen. Includes a Wayland "black screen" fix and an emergency exit via the power button.
+* 🖥️ **Kiosk Mode:** Configures Firefox or Chromium to boot directly into full screen. Includes a Wayland "black screen" fix and an emergency exit via the power button.
 * 🔄 **Screen & Touch Rotation:** Rotate your display and fix touch input coordinates.
 
 ## Installation
