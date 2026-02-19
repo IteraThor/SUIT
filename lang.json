@@ -1,0 +1,80 @@
+{
+  "app_title": {"de": "SUIT - Setup Utility", "en": "SUIT - Setup Utility"},
+  "menu_title": {"de": "SUIT HAUPTMENÜ", "en": "SUIT MAIN MENU"},
+  "btn_autodarts": {"de": "🎯 AUTODARTS MANAGER", "en": "🎯 AUTODARTS MANAGER"},
+  "btn_autoglow": {"de": "💡 AUTOGLOW MANAGER", "en": "💡 AUTOGLOW MANAGER"},
+  "btn_kiosk": {"de": "🖥️ KIOSK & KILLSWITCH", "en": "🖥️ KIOSK & KILLSWITCH"},
+  "btn_touch": {"de": "🔄 MONITOR & TOUCH", "en": "🔄 MONITOR & TOUCH"},
+  "btn_update": {"de": "⬇️ SUIT Update suchen", "en": "⬇️ Check for Updates"},
+  "btn_back": {"de": "❮ Zurück", "en": "❮ Back"},
+  "loading": {"de": "Lade Status...", "en": "Loading status..."},
+  "ad_header": {"de": "Autodarts Verwaltung", "en": "Autodarts Management"},
+  "ag_header": {"de": "AutoGlow Verwaltung", "en": "AutoGlow Management"},
+  "ag_install": {"de": "AutoGlow Installieren", "en": "Install AutoGlow"},
+  "ag_config": {"de": "Konfiguration öffnen", "en": "Open Config"},
+  "ag_config_hint": {"de": "Hinweis: Öffnet GUI auf dem Desktop", "en": "Note: Opens GUI on desktop"},
+  "kiosk_header": {"de": "Kiosk & Killswitch", "en": "Kiosk & Killswitch"},
+  "desc_autodarts": {
+    "de": "Verwalte den Autodarts-Hintergrunddienst. Starte, stoppe oder installiere die Software und greife schnell auf die Weboberfläche zu.",
+    "en": "Manage the Autodarts background service. Start, stop, or install the software and quickly access the web interface."
+  },
+  "desc_autoglow": {
+    "de": "Steuere die AutoGlow LED-Beleuchtung. Hier kannst du den Dienst verwalten, installieren und die Konfigurations-GUI öffnen.",
+    "en": "Control the AutoGlow LED lighting. Here you can manage the service, install it, and open the configuration GUI."
+  },
+  "desc_kiosk": {
+    "de": "Richte einen automatischen Vollbild-Modus (Kiosk) für Autodarts ein. Inklusive Browser-Wahl und Not-Aus via Power-Button.",
+    "en": "Set up an automated full-screen mode (Kiosk) for Autodarts. Includes browser selection and emergency exit via power button."
+  },
+  "desc_rotation": {
+    "de": "Passe die Ausrichtung von Monitor und Touchscreen an. Sorgt dafür, dass Eingaben auch nach einer Drehung korrekt erkannt werden.",
+    "en": "Adjust the orientation of the monitor and touchscreen. Ensures that inputs are correctly recognized even after rotation."
+  },
+  "btn_start": {"de": "Starten", "en": "Start"},
+  "btn_stop": {"de": "Stoppen", "en": "Stop"},
+  "btn_restart": {"de": "Neustarten", "en": "Restart"},
+  "btn_install": {"de": "Installieren", "en": "Install"},
+  "btn_uninstall": {"de": "Deinstallieren", "en": "Uninstall"},
+  "st_active": {"de": "● Aktiv (Läuft)", "en": "● Active (Running)"},
+  "st_inactive": {"de": "● Inaktiv (Gestoppt)", "en": "● Inactive (Stopped)"},
+  "st_nofile": {"de": "● Nicht installiert", "en": "● Not installed"},
+  "msg_action_complete": {"de": "Aktion abgeschlossen.", "en": "Action completed."},
+  "msg_error": {"de": "Ein Fehler ist aufgetreten:", "en": "An error occurred:"},
+  "msg_loading": {"de": "Aktion wird ausgeführt...", "en": "Action in progress..."},
+  "experimental_info": {
+    "de": "⚠️ EXPERIMENTELL: Diese App befindet sich in Entwicklung. Das Passwort muss für einige Funktionen ggf. mehrfach hintereinander eingegeben werden.",
+    "en": "⚠️ EXPERIMENTAL: This app is in development. You may need to enter your password multiple times in a row for some features."
+  },
+  "kiosk_url_lbl": {"de": "Ziel-URL:", "en": "Target URL:"},
+  "kiosk_browser_ch": {"de": " Chromium (Empfohlen) ", "en": " Chromium (Recommended) "},
+  "kiosk_browser_ff": {"de": " Firefox ", "en": " Firefox "},
+  "btn_autostart_on": {"de": "AUTOSTART AN", "en": "AUTOSTART ON"},
+  "btn_autostart_off": {"de": "AUTOSTART AUS", "en": "AUTOSTART OFF"},
+  "btn_launch_now": {"de": "JETZT STARTEN", "en": "LAUNCH NOW"},
+  "ks_header": {"de": " Bonus: Kill-Switch ", "en": " Bonus: Kill-Switch "},
+  "btn_ks_learn": {"de": "TASTE ANLERNEN", "en": "LEARN KEY"},
+  "ks_current_none": {"de": "AKTUELL: KEINE", "en": "CURRENT: NONE"},
+  "ks_current": {"de": "AKTUELL: ", "en": "CURRENT: "},
+  "btn_ks_on": {"de": "KILL-SWITCH: AN", "en": "KILL-SWITCH: ON"},
+  "btn_ks_off": {"de": "KILL-SWITCH: AUS", "en": "KILL-SWITCH: OFF"},
+  "btn_ks_installed": {"de": "KILL-SWITCH: AUS (Installiert)", "en": "KILL-SWITCH: OFF (Installed)"},
+  "ks_learn_title": {"de": "Taste anlernen", "en": "Learn Key"},
+  "ks_learn_desc": {"de": "Drücke die gewünschte Taste\n5x SCHNELL hintereinander", "en": "Press the desired key\n5x QUICKLY in a row"},
+  "ks_msg_learn_first": {"de": "Zuerst Taste anlernen!", "en": "Learn key first!"},
+  "rot_mon_lbl": {"de": "Monitor wählen:", "en": "Select Monitor:"},
+  "rot_touch_lbl": {"de": "Touch-Input wählen:", "en": "Select Touch Input:"},
+  "rot_normal_btn": {"de": "NORMAL (0°)", "en": "NORMAL (0°)"},
+  "rot_right_btn": {"de": "RECHTS (90° CW)", "en": "RIGHT (90° CW)"},
+  "rot_left_btn": {"de": "LINKS (90° CCW)", "en": "LEFT (90° CCW)"},
+  "rot_msg_mon_req": {"de": "Bitte wähle einen Monitor aus.", "en": "Please select a monitor."},
+  "rot_msg_reboot": {
+    "de": "Die Rotation wurde gespeichert, wird aber erst nach einem Neustart wirksam.\nMöchtest du das System jetzt neu starten?",
+    "en": "Rotation has been saved but will only take effect after a reboot.\nWould you like to restart the system now?"
+  },
+  "update_available_msg": {"de": "Eine neue Version ist verfügbar. Klicke erneut auf den Button zum Installieren.", "en": "A new version is available. Click the button again to install."},
+  "update_confirm_msg": {"de": "Möchtest du SUIT jetzt aktualisieren? Die App wird neu gestartet.", "en": "Do you want to update SUIT now? The app will be restarted."},
+  "btn_do_update": {"de": "⬇️ Jetzt Aktualisieren", "en": "⬇️ Update Now"},
+  "msg_uptodate": {"de": "SUIT ist bereits auf dem neuesten Stand.", "en": "SUIT is already up to date."},
+  "msg_updated": {"de": "Update abgeschlossen! Die App wird neu gestartet.", "en": "Update completed! Re-launching app."},
+  "update_err": {"de": "Fehler beim Update-Check.", "en": "Error during update check."}
+}
