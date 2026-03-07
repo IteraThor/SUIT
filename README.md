@@ -54,5 +54,5 @@ If you encounter any issues, SUIT generates a `suit.log` file in its directory. 
 
 fix not working udpates:
 ```
-git -C ~/Desktop/SUIT reset --hard
+git -C ~/Desktop/SUIT fetch --all
 ```
