@@ -253,7 +253,9 @@ class SuitApp(ctk.CTk):
         else:
             if messagebox.askyesno("SUIT", txt("update_confirm_msg")):
                 try:
-                    subprocess.run(["git", "pull"], check=True, cwd=BASE_DIR)
+                    # Force update by resetting to origin/main to avoid conflicts with local changes
+                    subprocess.run(["git", "fetch", "--all"], check=True, cwd=BASE_DIR)
+                    subprocess.run(["git", "reset", "--hard", "origin/main"], check=True, cwd=BASE_DIR)
                     messagebox.showinfo("SUIT", txt("msg_updated"))
                     os.execv(sys.executable, [sys.executable, __file__] + sys.argv[1:])
                 except Exception as e:
