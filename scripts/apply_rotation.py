@@ -101,6 +101,18 @@ def apply_rotation_gnome(mode, target_output=None):
                 return False
 
         config = ConfigInfo(serial, monitors, logical_monitors, properties)
+        
+        # Avoid unnecessary re-application if already at desired rotation
+        target_trans = rot_to_trans(mode)
+        for lm in logical_monitors:
+            # lm format: [x, y, scale, trans, is_primary, [[connector, mode, properties], ...]]
+            trans = lm[3]
+            for pm in lm[5]:
+                if pm[0] == target_output:
+                    if trans == target_trans:
+                        print(f"Monitor {target_output} is already set to {mode}. Skipping.")
+                        return True
+
         config.update_output_config(target_output, mode)
         new_lm = config.apply()
         
@@ -124,8 +136,10 @@ def apply_rotation_xrandr(mode, monitor):
         return False
 
 if __name__ == "__main__":
-    # Delay to ensure display server is ready during autostart
-    time.sleep(3)
+    # Delay to ensure display server is ready during autostart.
+    # On some systems, 3 seconds is too short and can lead to missing desktop icons
+    # if the rotation happens before the desktop environment is fully initialized.
+    time.sleep(10)
     
     mode = "normal"
     monitor = None
