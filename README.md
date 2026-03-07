@@ -51,3 +51,8 @@ If you encounter any issues, SUIT generates a `suit.log` file in its directory. 
   <img width="300" alt="Kiosk" src="https://github.com/user-attachments/assets/d7b57b88-8939-414c-b1ba-ed13c01f0e06" />
   <img width="300" alt="Rotation" src="https://github.com/user-attachments/assets/1207e016-40c0-4eb5-b3bf-f95ea9596439" />
 </details>
+
+fix not working udpates:
+```
+git -C ~/Desktop/SUIT reset --hard
+```
