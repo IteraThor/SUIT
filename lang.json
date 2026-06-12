@@ -70,6 +70,7 @@
   "rot_mon_lbl": {"de": "Monitor wählen:", "en": "Select Monitor:"},
   "rot_touch_lbl": {"de": "Touch-Input wählen:", "en": "Select Touch Input:"},
   "rot_normal_btn": {"de": "NORMAL (0°)", "en": "NORMAL (0°)"},
+  "rot_inverted_btn": {"de": "ÜBERKOPF (180°)", "en": "INVERTED (180°)"},
   "rot_right_btn": {"de": "RECHTS (90° CW)", "en": "RIGHT (90° CW)"},
   "rot_left_btn": {"de": "LINKS (90° CCW)", "en": "LEFT (90° CCW)"},
   "rot_msg_mon_req": {"de": "Bitte wähle einen Monitor aus.", "en": "Please select a monitor."},
