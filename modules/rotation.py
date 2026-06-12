@@ -50,38 +50,51 @@ def get_monitors_dbus():
 
 class ScreenCard(ctk.CTkFrame):
     def __init__(self, parent, monitor_info, touchscreens, controller, rotation_view):
-        super().__init__(parent, fg_color=controller.colors["card"], border_width=1, border_color="#444444")
+        super().__init__(parent, fg_color=controller.colors["card"], border_width=1, border_color="#555555")
         self.monitor_info = monitor_info
         self.controller = controller
         self.rotation_view = rotation_view
         self.name = monitor_info['name']
 
-        # Header: Name & Resolution
+        # --- Header ---
         header = ctk.CTkFrame(self, fg_color="transparent")
-        header.pack(fill="x", padx=15, pady=(10, 5))
+        header.pack(fill="x", padx=20, pady=(15, 10))
         
-        title = "Primary Screen" if monitor_info['is_primary'] else "Secondary Screen"
-        ctk.CTkLabel(header, text=f"{title}: {self.name}", font=("Segoe UI", 14, "bold"), text_color="#3b8ed0").pack(side="left")
-        ctk.CTkLabel(header, text=monitor_info['res'], font=("Segoe UI", 12), text_color="gray").pack(side="right")
+        title = "PRIMARY" if monitor_info['is_primary'] else "SECONDARY"
+        ctk.CTkLabel(header, text=f"{title}: {self.name}", font=("Segoe UI", 16, "bold"), text_color="#3b8ed0").pack(side="left")
+        ctk.CTkLabel(header, text=monitor_info['res'], font=("Segoe UI", 14), text_color="gray").pack(side="right")
 
-        # Touch Assignment
-        ctk.CTkLabel(self, text="Assign Touch Input:", font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=20, pady=(10, 0))
+        # --- Touch Assignment (Touch-Friendly Dropdown) ---
+        ctk.CTkLabel(self, text="Physical Touchscreen Device:", font=("Segoe UI", 12, "bold"), text_color="white").pack(anchor="w", padx=25, pady=(5, 0))
         
         self.touch_var = tk.StringVar(value=self.get_saved_touch())
         self.touch_combo = ctk.CTkOptionMenu(self, values=["None"] + touchscreens, variable=self.touch_var,
-                                           height=35, font=("Segoe UI", 12), fg_color="#1a1a1a", button_color="#333333")
-        self.touch_combo.pack(fill="x", padx=15, pady=(5, 15))
+                                           height=50, # Much taller for fingers
+                                           font=("Segoe UI", 14), 
+                                           fg_color="#1a1a1a", button_color="#333333", dynamic_resizing=True)
+        self.touch_combo.pack(fill="x", padx=20, pady=(5, 20))
 
-        # Rotation Buttons
-        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=10, pady=(0, 15))
+        # --- Rotation Grid (2x2 Big Buttons) ---
+        grid_frame = ctk.CTkFrame(self, fg_color="transparent")
+        grid_frame.pack(fill="x", padx=15, pady=(0, 20))
+        
+        # Grid config
+        grid_frame.columnconfigure((0, 1), weight=1)
 
-        opts = [("rot_normal_btn", "normal"), ("rot_left_btn", "left"), ("rot_right_btn", "right")]
-        for key, mode in opts:
-            btn = ctk.CTkButton(btn_frame, text=self.rotation_view.txt(key), height=40, width=100,
-                               fg_color=controller.colors["accent"], font=("Segoe UI", 12, "bold"),
+        opts = [
+            ("rot_normal_btn", "normal", 0, 0),
+            ("rot_inverted_btn", "inverted", 0, 1),
+            ("rot_left_btn", "left", 1, 0),
+            ("rot_right_btn", "right", 1, 1)
+        ]
+
+        for key, mode, r, c in opts:
+            btn = ctk.CTkButton(grid_frame, text=self.rotation_view.txt(key), 
+                               height=75, # Huge touch area
+                               fg_color=controller.colors["accent"], 
+                               font=("Segoe UI", 14, "bold"),
                                command=lambda m=mode: self.rotation_view.apply_and_save(self.name, m, self.touch_var.get()))
-            btn.pack(side="left", expand=True, padx=5)
+            btn.grid(row=r, column=c, padx=8, pady=8, sticky="nsew")
 
     def get_saved_touch(self):
         config = self.rotation_view.load_config()
@@ -103,25 +116,25 @@ class RotationView(ctk.CTkFrame):
         
         # --- HEADER ---
         self.header = ctk.CTkFrame(self, fg_color="transparent")
-        self.header.pack(fill="x", pady=(5, 10))
+        self.header.pack(fill="x", pady=(10, 15))
         
-        self.btn_back = ctk.CTkButton(self.header, text="", width=100, height=32,
-                                     fg_color=self.colors["header"], text_color="white", command=controller.show_menu)
-        self.btn_back.pack(side="left", padx=10)
-        self.lbl_title = ctk.CTkLabel(self.header, text="", font=("Segoe UI", 24, "bold"), text_color="white")
+        self.btn_back = ctk.CTkButton(self.header, text="", width=120, height=45, # Taller back button
+                                     fg_color=self.colors["header"], text_color="white", 
+                                     font=("Segoe UI", 14, "bold"), command=controller.show_menu)
+        self.btn_back.pack(side="left", padx=15)
+        self.lbl_title = ctk.CTkLabel(self.header, text="", font=("Segoe UI", 26, "bold"), text_color="white")
         self.lbl_title.pack(side="left", padx=10)
 
-        # --- INFO CARD ---
+        # --- INFO CARD (Fingers need clear instructions) ---
         self.info_frame = ctk.CTkFrame(self, fg_color=self.colors["card"])
-        self.info_frame.pack(fill="x", padx=20, pady=(0, 10))
-        self.lbl_info = ctk.CTkLabel(self.info_frame, text="", font=("Segoe UI", 13, "bold"),
-                                    text_color=self.colors["fg_dim"], wraplength=760, justify="left")
-        self.lbl_info.pack(fill="both", padx=20, pady=15)
+        self.info_frame.pack(fill="x", padx=25, pady=(0, 15))
+        self.lbl_info = ctk.CTkLabel(self.info_frame, text="", font=("Segoe UI", 14),
+                                    text_color=self.colors["fg_dim"], wraplength=740, justify="left")
+        self.lbl_info.pack(fill="both", padx=20, pady=20)
 
-        # --- SCREENS CONTAINER ---
-        # We use a scrollable frame if many monitors are connected
-        self.screens_scroll = ctk.CTkScrollableFrame(self, fg_color="transparent", height=400)
-        self.screens_scroll.pack(fill="both", expand=True, padx=20, pady=10)
+        # --- SCREENS CONTAINER (Scrollable for Touch) ---
+        self.screens_scroll = ctk.CTkScrollableFrame(self, fg_color="transparent", height=450)
+        self.screens_scroll.pack(fill="both", expand=True, padx=20, pady=5)
 
         self.refresh_screens()
 
@@ -145,12 +158,13 @@ class RotationView(ctk.CTkFrame):
         touchscreens = get_touchscreens()
 
         if not monitors:
-            ctk.CTkLabel(self.screens_scroll, text="No monitors detected via DBus.", text_color="gray").pack(pady=20)
+            ctk.CTkLabel(self.screens_scroll, text="No monitors detected via DBus.", 
+                        font=("Segoe UI", 16), text_color="gray").pack(pady=40)
             return
 
         for mon in monitors:
             card = ScreenCard(self.screens_scroll, mon, touchscreens, self.controller, self)
-            card.pack(fill="x", pady=10)
+            card.pack(fill="x", pady=15, padx=5)
 
     def apply_and_save(self, monitor_name, mode, touch_device):
         # 1. Update JSON config
