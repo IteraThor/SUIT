@@ -42,7 +42,10 @@ def check_system_dependencies():
     
     if missing:
         print(f"\n[!] Fehlende Abhängigkeiten: {', '.join(missing)}")
-        print("[!] Bitte ausführen: sudo apt install python3-tk python3-dev libdbus-1-dev git libglib2.0-dev build-essential")
+        if os.path.exists("/etc/fedora-release"):
+            print("[!] Bitte ausführen: sudo dnf install python3-tkinter python3-devel dbus-devel git glib2-devel gcc gcc-c++ make")
+        else:
+            print("[!] Bitte ausführen: sudo apt install python3-tk python3-dev libdbus-1-dev git libglib2.0-dev build-essential")
         return False
     return True
 
@@ -104,7 +107,13 @@ Categories=Utility;
         except:
             pass
 
+        # Kopie in den Application-Ordner für das Startmenü
+        app_dir = os.path.expanduser("~/.local/share/applications")
+        if not os.path.exists(app_dir):
+            os.makedirs(app_dir)
+        shutil.copy(desktop_file_path, os.path.join(app_dir, "SUIT.desktop"))
+
         print(f"[+] Starter erfolgreich erstellt unter: {desktop_file_path}")
-        print("[+] Du kannst SUIT jetzt von deinem Desktop/Schreibtisch starten.")
+        print("[+] Eine Kopie wurde im Anwendungsmenü gespeichert.")
     except Exception as e:
         print(f"[!] Starter konnte nicht erstellt werden: {e}")
