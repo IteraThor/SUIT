@@ -4,14 +4,9 @@ from tkinter import messagebox
 import os
 import subprocess
 import sys
+import json
+import dbus
 from modules.utils import ServiceUtils
-
-def get_monitors():
-    try:
-        output = subprocess.check_output(["xrandr"], text=True)
-        return [line.split()[0] for line in output.splitlines() if " connected" in line]
-    except:
-        return []
 
 def get_touchscreens():
     try:
@@ -20,6 +15,77 @@ def get_touchscreens():
         return [line.strip() for line in output.splitlines() if line.strip()]
     except:
         return []
+
+def get_monitors_dbus():
+    """Gets connected monitors and their current logical state via GNOME DBus."""
+    try:
+        bus = dbus.SessionBus()
+        dc = bus.get_object('org.gnome.Mutter.DisplayConfig', '/org/gnome/Mutter/DisplayConfig')
+        dc_iface = dbus.Interface(dc, dbus_interface='org.gnome.Mutter.DisplayConfig')
+        serial, monitors, logical_monitors, properties = dc_iface.GetCurrentState()
+        
+        results = []
+        for lm in logical_monitors:
+            x, y, scale, trans, is_primary, phys_monitors = lm[:6]
+            for pm in phys_monitors:
+                name = pm[0]
+                # Find physical info for resolution
+                res = "Unknown"
+                for m_info in monitors:
+                    if m_info[0][0] == name:
+                        for mode in m_info[1]:
+                            if 'is-current' in mode[6]:
+                                res = f"{mode[2]}x{mode[3]}"
+                                break
+                results.append({
+                    'name': name,
+                    'res': res,
+                    'is_primary': is_primary,
+                    'rotation': trans
+                })
+        return results
+    except Exception as e:
+        print(f"DBus Monitor Detection Error: {e}")
+        return []
+
+class ScreenCard(ctk.CTkFrame):
+    def __init__(self, parent, monitor_info, touchscreens, controller, rotation_view):
+        super().__init__(parent, fg_color=controller.colors["card"], border_width=1, border_color="#444444")
+        self.monitor_info = monitor_info
+        self.controller = controller
+        self.rotation_view = rotation_view
+        self.name = monitor_info['name']
+
+        # Header: Name & Resolution
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=15, pady=(10, 5))
+        
+        title = "Primary Screen" if monitor_info['is_primary'] else "Secondary Screen"
+        ctk.CTkLabel(header, text=f"{title}: {self.name}", font=("Segoe UI", 14, "bold"), text_color="#3b8ed0").pack(side="left")
+        ctk.CTkLabel(header, text=monitor_info['res'], font=("Segoe UI", 12), text_color="gray").pack(side="right")
+
+        # Touch Assignment
+        ctk.CTkLabel(self, text="Assign Touch Input:", font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=20, pady=(10, 0))
+        
+        self.touch_var = tk.StringVar(value=self.get_saved_touch())
+        self.touch_combo = ctk.CTkOptionMenu(self, values=["None"] + touchscreens, variable=self.touch_var,
+                                           height=35, font=("Segoe UI", 12), fg_color="#1a1a1a", button_color="#333333")
+        self.touch_combo.pack(fill="x", padx=15, pady=(5, 15))
+
+        # Rotation Buttons
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=10, pady=(0, 15))
+
+        opts = [("rot_normal_btn", "normal"), ("rot_left_btn", "left"), ("rot_right_btn", "right")]
+        for key, mode in opts:
+            btn = ctk.CTkButton(btn_frame, text=self.rotation_view.txt(key), height=40, width=100,
+                               fg_color=controller.colors["accent"], font=("Segoe UI", 12, "bold"),
+                               command=lambda m=mode: self.rotation_view.apply_and_save(self.name, m, self.touch_var.get()))
+            btn.pack(side="left", expand=True, padx=5)
+
+    def get_saved_touch(self):
+        config = self.rotation_view.load_config()
+        return config.get(self.name, {}).get('touch_device', 'None')
 
 class RotationView(ctk.CTkFrame):
     def __init__(self, parent, controller):
@@ -30,15 +96,14 @@ class RotationView(ctk.CTkFrame):
         
         # Paths
         self.user_home = os.path.expanduser("~")
-        self.rotation_config = os.path.join(self.user_home, ".suit_rotation_config")
+        self.rotation_config = os.path.join(self.user_home, ".suit_rotation_config.json")
         self.autostart_dir = os.path.join(self.user_home, ".config/autostart")
         self.rotation_desktop = os.path.join(self.autostart_dir, "suit-rotation.desktop")
         self.rotation_script = os.path.join(self.project_dir, "scripts/apply_rotation.py")
-        self.udev_rule_final = "/etc/udev/rules.d/99-suit-touch.rules"
         
         # --- HEADER ---
         self.header = ctk.CTkFrame(self, fg_color="transparent")
-        self.header.pack(fill="x", pady=(5, 15))
+        self.header.pack(fill="x", pady=(5, 10))
         
         self.btn_back = ctk.CTkButton(self.header, text="", width=100, height=32,
                                      fg_color=self.colors["header"], text_color="white", command=controller.show_menu)
@@ -53,91 +118,61 @@ class RotationView(ctk.CTkFrame):
                                     text_color=self.colors["fg_dim"], wraplength=760, justify="left")
         self.lbl_info.pack(fill="both", padx=20, pady=15)
 
-        # --- SELECTION AREA ---
-        self.select_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.select_frame.pack(fill="x", pady=5, padx=40)
+        # --- SCREENS CONTAINER ---
+        # We use a scrollable frame if many monitors are connected
+        self.screens_scroll = ctk.CTkScrollableFrame(self, fg_color="transparent", height=400)
+        self.screens_scroll.pack(fill="both", expand=True, padx=20, pady=10)
 
-        # Monitor Selection
-        self.lbl_mon = ctk.CTkLabel(self.select_frame, text="", font=("Segoe UI", 13, "bold"), text_color="white")
-        self.lbl_mon.pack(anchor="w", padx=5)
-        self.monitors = get_monitors()
-        self.mon_combo = ctk.CTkOptionMenu(self.select_frame, values=self.monitors if self.monitors else ["None Found"], 
-                                         height=50, font=("Segoe UI", 14), fg_color="#1a1a1a", button_color="#333333", text_color="white")
-        self.mon_combo.pack(fill="x", pady=(5, 15))
+        self.refresh_screens()
 
-        # Touchscreen Selection
-        self.lbl_touch = ctk.CTkLabel(self.select_frame, text="", font=("Segoe UI", 13, "bold"), text_color="white")
-        self.lbl_touch.pack(anchor="w", padx=5)
-        self.touchscreens = get_touchscreens()
-        self.touch_combo = ctk.CTkOptionMenu(self.select_frame, values=self.touchscreens if self.touchscreens else ["None Found"],
-                                           height=50, font=("Segoe UI", 14), fg_color="#1a1a1a", button_color="#333333", text_color="white")
-        self.touch_combo.pack(fill="x", pady=(5, 25))
-
-        # --- BUTTON GRID ---
-        self.btn_grid_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.btn_grid_frame.pack(expand=True, pady=10)
-
-        self.rot_options = [
-            ("rot_normal_btn", "normal", "1 0 0 0 1 0 0 0 1"),
-            ("rot_right_btn", "right", "0 1 0 -1 0 1 0 0 1"),
-            ("rot_left_btn", "left", "0 -1 1 1 0 0 0 0 1")
-        ]
-        self.rot_buttons = []
-
-        # Custom matrices for ACDC Co., Ltd. ACDC Touch Input Device on Fedora Dual Monitor (1200p left, 1080p right)
-        self.calibrated_matrices = {
-            "normal": "0.5 0 0.5 0 0.9 0.1 0 0 1",
-            "right": "0 0.45 0.5 -1.0 0 1.0 0 0 1", # Math adjusted: 0.5w * 0.9h
-            "left": "0 -0.45 0.95 1.0 0 0.1 0 0 1"   # Math adjusted for rotation
-        }
-
-        for i, (key, x_val, matrix) in enumerate(self.rot_options):
-            btn = ctk.CTkButton(self.btn_grid_frame, text="", height=65, width=220,
-                               fg_color=self.colors["accent"], text_color="white", font=("Segoe UI", 14, "bold"),
-                               command=lambda x=x_val, m=matrix: self.save_and_apply(x, m))
-            btn.pack(side="left", padx=15)
-            self.rot_buttons.append((btn, key))
-
-        self.update_texts()
-
-    def save_and_apply(self, x_val, matrix):
+    def txt(self, k): 
         l = getattr(self.controller, "lang", "en")
-        def txt(k): return self.controller.texts.get(k, {}).get(l, k)
-        target_mon = self.mon_combo.get()
-        target_touch = self.touch_combo.get()
-        if not target_mon or target_mon == "None Found":
-            messagebox.showwarning("SUIT", txt("rot_msg_mon_req"))
+        return self.controller.texts.get(k, {}).get(l, k)
+
+    def load_config(self):
+        if os.path.exists(self.rotation_config):
+            try:
+                with open(self.rotation_config, "r") as f:
+                    return json.load(f)
+            except: pass
+        return {}
+
+    def refresh_screens(self):
+        for child in self.screens_scroll.winfo_children():
+            child.destroy()
+
+        monitors = get_monitors_dbus()
+        touchscreens = get_touchscreens()
+
+        if not monitors:
+            ctk.CTkLabel(self.screens_scroll, text="No monitors detected via DBus.", text_color="gray").pack(pady=20)
             return
 
-        # Check for ACDC device on Fedora for special calibration
-        if target_touch == "ACDC Co., Ltd. ACDC Touch Input Device" and x_val in self.calibrated_matrices:
-            matrix = self.calibrated_matrices[x_val]
-            print(f"Using hardware-calibrated matrix for {x_val}: {matrix}")
+        for mon in monitors:
+            card = ScreenCard(self.screens_scroll, mon, touchscreens, self.controller, self)
+            card.pack(fill="x", pady=10)
 
-        try:
-            with open(self.rotation_config, "w") as f:
-                f.write(f"ROTATION={x_val}\nMONITOR={target_mon}\nTOUCH='{target_touch}'\nMATRIX='{matrix}'\n")
-            if not os.path.exists(self.autostart_dir): os.makedirs(self.autostart_dir)
-            with open(self.rotation_desktop, "w") as f:
-                f.write(f"[Desktop Entry]\nType=Application\nName=SUIT-Rotation\nExec={sys.executable} {self.rotation_script} {x_val} {target_mon}\nTerminal=false\n")
-            if target_touch and target_touch != "None Found":
-                udev_rule = f'ACTION=="add|change", ENV{{ID_INPUT_TOUCHSCREEN}}=="1", ATTRS{{name}}=="{target_touch}", ENV{{LIBINPUT_CALIBRATION_MATRIX}}="{matrix}"\n'
-                temp_rule = "/tmp/suit_touch.rules"
-                with open(temp_rule, "w") as f: f.write(udev_rule)
-                cmd = f"cp {temp_rule} {self.udev_rule_final} && udevadm control --reload-rules && udevadm trigger --subsystem-match=input"
-                subprocess.run(ServiceUtils.sudo_cmd(cmd), shell=True)
-            if messagebox.askyesno("SUIT", txt("rot_msg_reboot")):
-                subprocess.run(ServiceUtils.sudo_cmd("reboot"), shell=True)
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to save rotation: {e}")
+    def apply_and_save(self, monitor_name, mode, touch_device):
+        # 1. Update JSON config
+        config = self.load_config()
+        config[monitor_name] = {
+            'rotation': mode,
+            'touch_device': touch_device
+        }
+        with open(self.rotation_config, "w") as f:
+            json.dump(config, f)
+
+        # 2. Update Autostart Desktop file
+        if not os.path.exists(self.autostart_dir): os.makedirs(self.autostart_dir)
+        with open(self.rotation_desktop, "w") as f:
+            f.write(f"[Desktop Entry]\nType=Application\nName=SUIT-Rotation\nExec={sys.executable} {self.rotation_script}\nTerminal=false\n")
+
+        # 3. Execute immediately
+        cmd = f"{sys.executable} {self.rotation_script} {mode} {monitor_name} '{touch_device}'"
+        ServiceUtils.run_bash_script(self, cmd, f"Rotating {monitor_name}")
 
     def update_texts(self):
-        l = getattr(self.controller, "lang", "en")
-        def txt(k): return self.controller.texts.get(k, {}).get(l, k)
-        self.btn_back.configure(text=txt("btn_back"))
-        self.lbl_title.configure(text=txt("btn_touch"))
-        self.lbl_info.configure(text=txt("desc_rotation"))
-        self.lbl_mon.configure(text=txt("rot_mon_lbl"))
-        self.lbl_touch.configure(text=txt("rot_touch_lbl"))
-        for btn, key in self.rot_buttons:
-            btn.configure(text=txt(key))
+        self.btn_back.configure(text=self.txt("btn_back"))
+        self.lbl_title.configure(text=self.txt("btn_touch"))
+        self.lbl_info.configure(text=self.txt("desc_rotation"))
+        self.refresh_screens()
