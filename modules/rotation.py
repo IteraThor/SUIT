@@ -84,6 +84,13 @@ class RotationView(ctk.CTkFrame):
         ]
         self.rot_buttons = []
 
+        # Custom matrices for ACDC Co., Ltd. ACDC Touch Input Device on Fedora Dual Monitor (1200p left, 1080p right)
+        self.calibrated_matrices = {
+            "normal": "0.5 0 0.5 0 0.9 0.1 0 0 1",
+            "right": "0 0.45 0.5 -1.0 0 1.0 0 0 1", # Math adjusted: 0.5w * 0.9h
+            "left": "0 -0.45 0.95 1.0 0 0.1 0 0 1"   # Math adjusted for rotation
+        }
+
         for i, (key, x_val, matrix) in enumerate(self.rot_options):
             btn = ctk.CTkButton(self.btn_grid_frame, text="", height=65, width=220,
                                fg_color=self.colors["accent"], text_color="white", font=("Segoe UI", 14, "bold"),
@@ -101,6 +108,12 @@ class RotationView(ctk.CTkFrame):
         if not target_mon or target_mon == "None Found":
             messagebox.showwarning("SUIT", txt("rot_msg_mon_req"))
             return
+
+        # Check for ACDC device on Fedora for special calibration
+        if target_touch == "ACDC Co., Ltd. ACDC Touch Input Device" and x_val in self.calibrated_matrices:
+            matrix = self.calibrated_matrices[x_val]
+            print(f"Using hardware-calibrated matrix for {x_val}: {matrix}")
+
         try:
             with open(self.rotation_config, "w") as f:
                 f.write(f"ROTATION={x_val}\nMONITOR={target_mon}\nTOUCH='{target_touch}'\nMATRIX='{matrix}'\n")
