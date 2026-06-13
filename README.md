@@ -7,7 +7,7 @@
 SUIT is a graphical toolkit designed to simplify the deployment and management of an **Autodarts system** on Linux, specifically optimized for Ubuntu and Wayland environments.
 
 <div align="center">
-  <img width="300" height="434" alt="Main Menu" src="https://github.com/user-attachments/assets/8b95ad84-579b-41c8-a201-5e79a3c0c6c7" />
+  <img width="300" height="434" alt="Main Menu" src="###" />
 </div>
 
 ## Features
