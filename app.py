@@ -62,8 +62,7 @@ class SuitApp(ctk.CTk):
         logger.info("Starting SUIT Application (Modern UI)...")
         self.title("SUIT - Setup Utility")
         
-        # Set size
-        self.geometry("850x720")
+        # Set size (Initial, but allow it to grow)
         self.minsize(800, 650)
         self.project_dir = BASE_DIR
         
@@ -71,18 +70,22 @@ class SuitApp(ctk.CTk):
         self.load_config()
         self.load_translations()
 
-        # Improved High-Contrast Palette
+        # Modern Minimalist Palette (Zinc-based)
         self.colors = {
-            "bg": "#000000",        # Pure Black
-            "card": "#1a1a1a",      # Dark Grey Card
-            "header": "#444444",    # Much brighter header for buttons
-            "accent": "#1f538d",    # Blue accent
-            "success": "#28a745",   # Green
-            "danger": "#d9534f",    # Red
-            "warning": "#ffcc00",   # Yellow
+            "bg": "#18181b",        # Zinc 900
+            "card": "#27272a",      # Zinc 800
+            "header": "#3f3f46",    # Zinc 700
+            "accent": "#3b82f6",    # Blue 500
+            "success": "#22c55e",   # Green 500
+            "danger": "#ef4444",    # Red 500
+            "warning": "#eab308",   # Yellow 500
             "fg": "#ffffff",        # Pure White
-            "fg_dim": "#eeeeee"     # Near White for descriptions
+            "fg_dim": "#d4d4d8"     # Zinc 300 (Brighter than before for better contrast)
         }
+        
+        # Global Button Style Override
+        ctk.set_appearance_mode("Dark")
+        ctk.set_default_color_theme("blue")
 
         # --- FRAME LOADING ---
         self.container = ctk.CTkFrame(self, fg_color="transparent")
@@ -91,9 +94,12 @@ class SuitApp(ctk.CTk):
         self.container.grid_columnconfigure(0, weight=1)
 
         # --- TOP OVERLAY (Language Switcher) ---
-        self.lang_btn = ctk.CTkButton(self, text="DE | EN", width=60, height=32,
-                                     fg_color="#252526", hover_color=self.colors["accent"],
-                                     font=("Segoe UI", 11, "bold"), command=self.toggle_language)
+        self.lang_btn = ctk.CTkButton(self, text="DE | EN", width=65, height=32, corner_radius=8,
+                                     fg_color=self.colors["card"], 
+                                     border_color=self.colors["header"],
+                                     border_width=1,
+                                     hover_color=self.colors["accent"],
+                                     font=("Roboto", 11, "bold"), command=self.toggle_language)
         self.lang_btn.place(relx=1.0, rely=0.0, anchor="ne", x=-20, y=20)
 
         self.frames = {}

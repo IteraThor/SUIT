@@ -8,62 +8,86 @@ class MainMenu(ctk.CTkFrame):
         self.texts = controller.texts
         self.colors = controller.colors
         
+        # Configure Grid
+        self.grid_columnconfigure((0, 1), weight=1, uniform="tiles")
+        self.grid_rowconfigure((1, 2), weight=1, uniform="tiles")
+
         # Title
-        self.lbl_title = ctk.CTkLabel(self, text="", font=("Segoe UI", 32, "bold"), text_color="white")
-        self.lbl_title.pack(pady=(20, 20)) # Reduced padding
+        self.lbl_title = ctk.CTkLabel(self, text="", 
+                                     font=("Roboto", 36, "bold"), 
+                                     text_color="white")
+        self.lbl_title.grid(row=0, column=0, columnspan=2, pady=(20, 40))
         
-        # Menu Buttons
-        self._make_menu_btn(self.controller.show_autodarts, "btn_autodarts")
-        self._make_menu_btn(self.controller.show_autoglow, "btn_autoglow")
-        self._make_menu_btn(self.controller.show_kiosk, "btn_kiosk")
-        self._make_menu_btn(self.controller.show_touch, "btn_touch")
+        # Menu Tiles (2x2 Grid)
+        self._make_tile(self.controller.show_autodarts, "btn_autodarts", "🎯", 1, 0)
+        self._make_tile(self.controller.show_autoglow, "btn_autoglow", "💡", 1, 1)
+        self._make_tile(self.controller.show_kiosk, "btn_kiosk", "🖥️", 2, 0)
+        self._make_tile(self.controller.show_touch, "btn_touch", "📱", 2, 1)
         
-        # --- EXPERIMENTAL INFO CARD ---
-        self.info_card = ctk.CTkFrame(self, fg_color="#2a2100", border_color=self.colors["warning"], border_width=1)
-        self.info_card.pack(fill="x", padx=80, pady=(20, 10))
-        
-        self.lbl_exp = ctk.CTkLabel(self.info_card, text="", 
-                                   text_color="#ffcc00", font=("Segoe UI", 12, "italic"), 
+        # --- EXPERIMENTAL INFO ---
+        self.lbl_exp = ctk.CTkLabel(self, text="", 
+                                   text_color=self.colors["warning"], 
+                                   font=("Roboto", 13, "italic"), 
                                    wraplength=600)
-        self.lbl_exp.pack(fill="x", pady=10) # Reduced padding
+        self.lbl_exp.grid(row=3, column=0, columnspan=2, pady=(30, 10))
 
         # Footer Button (Update)
         self.btn_upd = ctk.CTkButton(self, text="", height=50,
-                                    fg_color=self.colors["header"], text_color="white", hover_color=self.colors["accent"],
+                                    fg_color=self.colors["card"], 
+                                    border_color=self.colors["header"],
+                                    border_width=1,
+                                    text_color="white", 
+                                    text_color_disabled="white",
+                                    hover_color=self.colors["accent"],
+                                    font=("Roboto", 14, "bold"),
                                     command=self.controller.update_suit)
-        self.btn_upd.pack(fill="x", padx=80, pady=(15, 20))
+        self.btn_upd.grid(row=4, column=0, columnspan=2, sticky="ew", padx=80, pady=(10, 20))
 
         self.update_texts()
 
-    def _make_menu_btn(self, cmd, text_key):
-        btn = ctk.CTkButton(self, text="", height=55, corner_radius=8,
-                           font=("Segoe UI", 15, "bold"), 
-                           text_color="white", text_color_disabled="#cccccc",
+    def _make_tile(self, cmd, text_key, emoji, row, col):
+        # Container for the tile to manage padding
+        frame = ctk.CTkFrame(self, fg_color="transparent")
+        frame.grid(row=row, column=col, sticky="nsew", padx=15, pady=15)
+        
+        btn = ctk.CTkButton(frame, text="", height=180, corner_radius=15,
+                           fg_color=self.colors["card"],
+                           border_color=self.colors["header"],
+                           border_width=1,
+                           font=("Roboto", 18, "bold"), 
+                           text_color="white", 
+                           text_color_disabled="white",
+                           hover_color=self.colors["accent"],
                            command=cmd)
-        btn.pack(fill="x", padx=80, pady=6) 
+        btn.pack(expand=True, fill="both")
+        
+        # Store emoji for update_texts
+        setattr(self, f"_{text_key}_emoji", emoji)
         setattr(self, f"_{text_key}", btn) 
 
     def update_texts(self):
         """Safely updates all UI text strings based on current language."""
         l = self.controller.lang
         try:
-            self.lbl_title.configure(text=self.texts.get("menu_title", {}).get(l, ""), text_color="white")
-            self._btn_autodarts.configure(text=self.texts.get("btn_autodarts", {}).get(l, ""), text_color="white")
-            self._btn_autoglow.configure(text=self.texts.get("btn_autoglow", {}).get(l, ""), text_color="white")
-            self._btn_kiosk.configure(text=self.texts.get("btn_kiosk", {}).get(l, ""), text_color="white")
+            self.lbl_title.configure(text=self.texts.get("menu_title", {}).get(l, ""))
             
-            if hasattr(self, "_btn_touch"):
-                self._btn_touch.configure(text=self.texts.get("btn_touch", {}).get(l, ""), text_color="white")
+            # Update Tiles with Emojis
+            keys = ["btn_autodarts", "btn_autoglow", "btn_kiosk", "btn_touch"]
+            for key in keys:
+                btn = getattr(self, f"_{key}")
+                emoji = getattr(self, f"_{key}_emoji")
+                raw_text = self.texts.get(key, {}).get(l, "")
+                btn.configure(text=f"{emoji}\n\n{raw_text}")
             
-            self.lbl_exp.configure(text=self.texts.get("experimental_info", {}).get(l, ""), text_color="#ffcc00")
+            self.lbl_exp.configure(text=self.texts.get("experimental_info", {}).get(l, ""))
             
             # Update button logic
             if self.controller.update_available:
                 self.btn_upd.configure(text=self.texts.get("btn_do_update", {}).get(l, "Update Now"), 
-                                      fg_color=self.colors["accent"], text_color="white")
+                                      fg_color=self.colors["accent"], border_width=0)
             else:
                 self.btn_upd.configure(text=self.texts.get("btn_update", {}).get(l, "Check for Updates"), 
-                                      fg_color=self.colors["header"], text_color="white")
+                                      fg_color=self.colors["card"], border_width=1)
 
         except Exception as e:
             print(f"Update texts error in MainMenu: {e}")

@@ -3,172 +3,6 @@ import customtkinter as ctk
 from tkinter import messagebox
 import os
 import subprocess
-import serial.tools.list_ports
-from modules.utils import ServiceUtils
-
-class AutoGlowView(ctk.CTkFrame):
-    # Deployment settings
-    AUTOGLOW_REPO = "https://github.com/IteraThor/AutoGlow.git"
-    SERVICE_NAME = "autoglow"
-
-    def __init__(self, parent, controller):
-        super().__init__(parent, fg_color="transparent")
-        self.controller = controller
-        self.texts = controller.texts
-        self.colors = controller.colors
-        self.project_dir = controller.project_dir
-        
-        # Dynamic paths
-        self.user_home = os.path.expanduser("~")
-        self.autoglow_dir = os.path.join(self.user_home, "AutoGlow")
-        
-        # Header
-        self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.header_frame.pack(fill="x", pady=(5, 10))
-        
-        self.btn_back = ctk.CTkButton(self.header_frame, text="", width=100, height=32,
-                                     fg_color=self.colors["header"], text_color="white", command=controller.show_menu)
-        self.btn_back.pack(side="left", padx=10)
-        
-        self.lbl_title = ctk.CTkLabel(self.header_frame, text="", font=("Segoe UI", 24, "bold"), text_color="white")
-        self.lbl_title.pack(side="left", padx=20)
-
-        # --- HARDWARE & SERVICE STATUS CARD ---
-        self.hw_frame = ctk.CTkFrame(self, fg_color=self.colors["card"])
-        self.hw_frame.pack(fill="x", padx=20, pady=(0, 10))
-        
-        # Hardware Row
-        hw_row = ctk.CTkFrame(self.hw_frame, fg_color="transparent")
-        hw_row.pack(fill="x", padx=20, pady=(10, 5))
-        
-        self.lbl_hw_title = ctk.CTkLabel(hw_row, text="Hardware:", font=("Segoe UI", 13, "bold"), text_color=self.colors["fg_dim"])
-        self.lbl_hw_title.pack(side="left")
-        
-        self.lbl_hw_status = ctk.CTkLabel(hw_row, text="Scanning...", font=("Segoe UI", 13, "bold"))
-        self.lbl_hw_status.pack(side="left", padx=10)
-        
-        self.btn_hw_test = ctk.CTkButton(hw_row, text="TEST", width=60, height=24, fg_color=self.colors["header"], text_color="white", command=self.test_animation)
-        self.btn_hw_test.pack(side="right", padx=(5, 0))
-
-        # Websocket Row
-        ws_row = ctk.CTkFrame(self.hw_frame, fg_color="transparent")
-        ws_row.pack(fill="x", padx=20, pady=(5, 10))
-        
-        self.lbl_ws_title = ctk.CTkLabel(ws_row, text="Autodarts Connection:", font=("Segoe UI", 13, "bold"), text_color=self.colors["fg_dim"])
-        self.lbl_ws_title.pack(side="left")
-        
-        self.lbl_ws_status = ctk.CTkLabel(ws_row, text="Checking...", font=("Segoe UI", 13, "bold"))
-        self.lbl_ws_status.pack(side="left", padx=10)
-
-        # Status
-        self.status_container = ctk.CTkFrame(self, fg_color=self.colors["card"])
-        self.status_container.pack(fill="x", padx=20, pady=10)
-        self.status_lbl = ctk.CTkLabel(self.status_container, text="", 
-                                      font=("Segoe UI", 18, "bold"))
-        self.status_lbl.pack(expand=True, pady=15)
-
-        # Service Controls
-        self.ctrl_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.ctrl_frame.pack(fill="x", pady=10, padx=15)
-        
-        self.btn_start = ctk.CTkButton(self.ctrl_frame, text="", height=50,
-                                      fg_color=self.colors["accent"], text_color="white", 
-                                      command=lambda: self._run_cmd("start"))
-        self.btn_start.pack(side="left", expand=True, fill="x", padx=10)
-        
-        self.btn_stop = ctk.CTkButton(self.ctrl_frame, text="", height=50,
-                                     fg_color=self.colors["header"], text_color="white", 
-                                     command=lambda: self._run_cmd("stop"))
-        self.btn_stop.pack(side="left", expand=True, fill="x", padx=10)
-        
-        self.btn_restart = ctk.CTkButton(self.ctrl_frame, text="", height=50,
-                                        fg_color=self.colors["header"], text_color="white", 
-                                        command=lambda: self._run_cmd("restart"))
-        self.btn_restart.pack(side="left", expand=True, fill="x", padx=10)
-
-        # Config GUI
-        self.conf_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.conf_frame.pack(fill="x", pady=5, padx=30)
-        self.btn_config = ctk.CTkButton(self.conf_frame, text="", height=45,
-                                       fg_color="#1f538d", text_color="white", 
-                                       command=self.open_config)
-        self.btn_config.pack(fill="x", pady=5)
-        self.lbl_config_hint = ctk.CTkLabel(self.conf_frame, text="", font=("Segoe UI", 11, "bold"), text_color=self.colors["warning"])
-        self.lbl_config_hint.pack()
-
-        # System
-        self.sys_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.sys_frame.pack(fill="x", pady=5, padx=30)
-        self.btn_inst = ctk.CTkButton(self.sys_frame, text="", height=45,
-                                     fg_color=self.colors["success"], text_color="white", 
-                                     command=self.run_install)
-        self.btn_inst.pack(fill="x", pady=5)
-        
-        self.btn_uninst = ctk.CTkButton(self.sys_frame, text="", height=45,
-                                       fg_color="#3e3e42", text_color="white", 
-                                       hover_color=self.colors["danger"], command=self.run_uninstall)
-        self.btn_uninst.pack(fill="x", pady=5)
-
-        self.update_texts()
-
-    def test_animation(self):
-        """Sends a test rainbow command for 3 seconds, then reverts to Throw."""
-        port = self.get_esp32_port()
-        if not port:
-            messagebox.showwarning("AutoGlow", "No ESP32 detected!")
-            return
-        
-        status = ServiceUtils.check_status(self.SERVICE_NAME)
-        if status == "running":
-            messagebox.showwarning("AutoGlow", "Please stop the service before testing hardware directly.")
-            return
-
-        import json
-        import serial
-        import time
-        try:
-            with serial.Serial(port, 115200, timeout=1) as ser:
-                time.sleep(1.5) # Settle
-                # 1. Start Rainbow
-                anim = {"on": True, "bri": 255, "seg": {"fx": 9, "sx": 128, "ix": 128}}
-                ser.write((json.dumps(anim) + '\n').encode())
-                
-                # 2. Wait 3 seconds
-                time.sleep(3)
-                
-                # 3. Transition to 'Throw' (Green)
-                throw = {"on": True, "bri": 255, "seg": {"fx": 0, "col": [[0, 255, 0]]}}
-                ser.write((json.dumps(throw) + '\n').encode())
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not connect to {port}: {e}")
-
-    def check_ws_connection(self):
-        """Checks if port 3180 (Autodarts) is reachable."""
-        import socket
-        try:
-            with socket.create_connection(("127.0.0.1", 3180), timeout=0.5):
-                return True
-        except:
-            return False
-
-    def get_esp32_port(self):
-        """Attempts to find the ESP32 serial port."""
-        KNOWN_VID_PIDS = [(0x10C4, 0xEA60), (0x1A86, 0x7523), (0x0403, 0x6001), (0x303A, 0x1001)]
-        ports = serial.tools.list_ports.comports()
-        for port in ports:
-            if (port.vid, port.pid) in KNOWN_VID_PIDS:
-                return port.device
-        return None
-
-    def _run_cmd(self, action):
-        script = f"systemctl {action} {self.SERVICE_NAME}"
-        ServiceUtils.run_bash_script(self, script, f"AutoGlow {action}", on_close=self.update_status)
-
-import tkinter as tk
-import customtkinter as ctk
-from tkinter import messagebox
-import os
-import subprocess
 import threading
 import serial.tools.list_ports
 from modules.utils import ServiceUtils
@@ -192,90 +26,106 @@ class AutoGlowView(ctk.CTkFrame):
         
         # Header
         self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.header_frame.pack(fill="x", pady=(5, 10))
+        self.header_frame.pack(fill="x", pady=(10, 25))
         
-        self.btn_back = ctk.CTkButton(self.header_frame, text="", width=100, height=32,
-                                     fg_color=self.colors["header"], text_color="white", command=controller.show_menu)
-        self.btn_back.pack(side="left", padx=10)
+        # Back Button (Cleaner icon-style)
+        self.btn_back = ctk.CTkButton(self.header_frame, text="←", width=50, height=35,
+                                     fg_color=self.colors["card"], 
+                                     border_color=self.colors["header"],
+                                     border_width=1,
+                                     text_color="white", command=controller.show_menu)
+        self.btn_back.pack(side="left", padx=20)
         
-        self.lbl_title = ctk.CTkLabel(self.header_frame, text="", font=("Segoe UI", 24, "bold"), text_color="white")
-        self.lbl_title.pack(side="left", padx=20)
+        # Title
+        self.lbl_title = ctk.CTkLabel(self.header_frame, text="", font=("Roboto", 28, "bold"), text_color="white")
+        self.lbl_title.pack(side="left", padx=10)
 
         # --- HARDWARE & SERVICE STATUS CARD ---
-        self.hw_frame = ctk.CTkFrame(self, fg_color=self.colors["card"])
-        self.hw_frame.pack(fill="x", padx=20, pady=(0, 10))
+        self.hw_frame = ctk.CTkFrame(self, fg_color=self.colors["card"], corner_radius=12,
+                                    border_color=self.colors["header"], border_width=1)
+        self.hw_frame.pack(fill="x", padx=30, pady=(0, 15))
         
         # Hardware Row
         hw_row = ctk.CTkFrame(self.hw_frame, fg_color="transparent")
-        hw_row.pack(fill="x", padx=20, pady=(10, 5))
+        hw_row.pack(fill="x", padx=20, pady=(15, 8))
         
-        self.lbl_hw_title = ctk.CTkLabel(hw_row, text="Hardware:", font=("Segoe UI", 13, "bold"), text_color=self.colors["fg_dim"])
+        self.lbl_hw_title = ctk.CTkLabel(hw_row, text="Hardware:", font=("Roboto", 14, "bold"), text_color=self.colors["fg_dim"])
         self.lbl_hw_title.pack(side="left")
         
-        self.lbl_hw_status = ctk.CTkLabel(hw_row, text="Scanning...", font=("Segoe UI", 13, "bold"))
+        self.lbl_hw_status = ctk.CTkLabel(hw_row, text="Scanning...", font=("Roboto", 14, "bold"))
         self.lbl_hw_status.pack(side="left", padx=10)
         
-        self.btn_hw_test = ctk.CTkButton(hw_row, text="TEST", width=60, height=24, fg_color=self.colors["header"], text_color="white", command=self.test_animation)
+        self.btn_hw_test = ctk.CTkButton(hw_row, text="TEST", width=70, height=28, 
+                                        fg_color=self.colors["header"], corner_radius=6,
+                                        text_color="white", text_color_disabled="white",
+                                        font=("Roboto", 12, "bold"),
+                                        command=self.test_animation)
         self.btn_hw_test.pack(side="right", padx=(5, 0))
 
         # Websocket Row
         ws_row = ctk.CTkFrame(self.hw_frame, fg_color="transparent")
-        ws_row.pack(fill="x", padx=20, pady=(5, 10))
+        ws_row.pack(fill="x", padx=20, pady=(8, 15))
         
-        self.lbl_ws_title = ctk.CTkLabel(ws_row, text="Autodarts Connection:", font=("Segoe UI", 13, "bold"), text_color=self.colors["fg_dim"])
+        self.lbl_ws_title = ctk.CTkLabel(ws_row, text="Autodarts Connection:", font=("Roboto", 14, "bold"), text_color=self.colors["fg_dim"])
         self.lbl_ws_title.pack(side="left")
         
-        self.lbl_ws_status = ctk.CTkLabel(ws_row, text="Checking...", font=("Segoe UI", 13, "bold"))
+        self.lbl_ws_status = ctk.CTkLabel(ws_row, text="Checking...", font=("Roboto", 14, "bold"))
         self.lbl_ws_status.pack(side="left", padx=10)
 
-        # Status
-        self.status_container = ctk.CTkFrame(self, fg_color=self.colors["card"])
-        self.status_container.pack(fill="x", padx=20, pady=10)
+        # Status Label (Service)
+        self.status_container = ctk.CTkFrame(self, fg_color="transparent")
+        self.status_container.pack(fill="x", padx=30, pady=5)
         self.status_lbl = ctk.CTkLabel(self.status_container, text="", 
-                                      font=("Segoe UI", 18, "bold"))
-        self.status_lbl.pack(expand=True, pady=15)
+                                      font=("Roboto", 18, "bold"))
+        self.status_lbl.pack(expand=True, pady=10)
 
         # Service Controls
         self.ctrl_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.ctrl_frame.pack(fill="x", pady=10, padx=15)
+        self.ctrl_frame.pack(fill="x", pady=20, padx=30)
         
-        self.btn_start = ctk.CTkButton(self.ctrl_frame, text="", height=50,
-                                      fg_color=self.colors["accent"], text_color="white", 
+        self.btn_start = ctk.CTkButton(self.ctrl_frame, text="", height=55, corner_radius=10,
+                                      text_color="white", text_color_disabled="white", 
+                                      font=("Roboto", 15, "bold"),
                                       command=lambda: self._run_cmd("start"))
         self.btn_start.pack(side="left", expand=True, fill="x", padx=10)
         
-        self.btn_stop = ctk.CTkButton(self.ctrl_frame, text="", height=50,
-                                     fg_color=self.colors["header"], text_color="white", 
+        self.btn_stop = ctk.CTkButton(self.ctrl_frame, text="", height=55, corner_radius=10,
+                                     text_color="white", text_color_disabled="white", 
+                                     font=("Roboto", 15, "bold"),
                                      command=lambda: self._run_cmd("stop"))
         self.btn_stop.pack(side="left", expand=True, fill="x", padx=10)
         
-        self.btn_restart = ctk.CTkButton(self.ctrl_frame, text="", height=50,
-                                        fg_color=self.colors["header"], text_color="white", 
+        self.btn_restart = ctk.CTkButton(self.ctrl_frame, text="", height=55, corner_radius=10,
+                                        text_color="white", text_color_disabled="white", 
+                                        font=("Roboto", 15, "bold"),
                                         command=lambda: self._run_cmd("restart"))
         self.btn_restart.pack(side="left", expand=True, fill="x", padx=10)
 
         # Config GUI
         self.conf_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.conf_frame.pack(fill="x", pady=5, padx=30)
-        self.btn_config = ctk.CTkButton(self.conf_frame, text="", height=45,
-                                       fg_color="#1f538d", text_color="white", 
+        self.conf_frame.pack(fill="x", pady=10, padx=40)
+        self.btn_config = ctk.CTkButton(self.conf_frame, text="", height=50, corner_radius=10,
+                                       text_color="white", text_color_disabled="white", 
+                                       font=("Roboto", 15, "bold"),
                                        command=self.open_config)
         self.btn_config.pack(fill="x", pady=5)
-        self.lbl_config_hint = ctk.CTkLabel(self.conf_frame, text="", font=("Segoe UI", 11, "bold"), text_color=self.colors["warning"])
+        self.lbl_config_hint = ctk.CTkLabel(self.conf_frame, text="", font=("Roboto", 12, "italic"), text_color=self.colors["warning"])
         self.lbl_config_hint.pack()
 
         # System
         self.sys_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.sys_frame.pack(fill="x", pady=5, padx=30)
-        self.btn_inst = ctk.CTkButton(self.sys_frame, text="", height=45,
-                                     fg_color=self.colors["success"], text_color="white", 
+        self.btn_inst = ctk.CTkButton(self.sys_frame, text="", height=48, corner_radius=10,
+                                     text_color="white", text_color_disabled="white", 
+                                     font=("Roboto", 14, "bold"),
                                      command=self.run_install)
-        self.btn_inst.pack(fill="x", pady=5)
+        self.btn_inst.pack(fill="x", pady=8)
         
-        self.btn_uninst = ctk.CTkButton(self.sys_frame, text="", height=45,
-                                       fg_color="#3e3e42", text_color="white", 
-                                       hover_color=self.colors["danger"], command=self.run_uninstall)
-        self.btn_uninst.pack(fill="x", pady=5)
+        self.btn_uninst = ctk.CTkButton(self.sys_frame, text="", height=48, corner_radius=10,
+                                       text_color="white", text_color_disabled="white", 
+                                       font=("Roboto", 14, "bold"),
+                                       command=self.run_uninstall)
+        self.btn_uninst.pack(fill="x", pady=8)
 
         self.update_texts()
 
@@ -357,35 +207,58 @@ class AutoGlowView(ctk.CTkFrame):
         l = self.controller.lang
         def txt(k): return self.texts.get(k, {}).get(l, k)
         
+        grey = self.colors["header"]
+        red = self.colors["danger"]
+        blue = self.colors["accent"]
+        green = self.colors["success"]
+        
         is_installed = status != "nofile"
         is_running = status == "running"
 
         # Update Service Status
         if is_running:
-            self.status_lbl.configure(text=txt("st_active"), text_color=self.colors["success"])
+            self.status_lbl.configure(text=txt("st_active"), text_color=green)
         elif is_installed:
-            self.status_lbl.configure(text=txt("st_inactive"), text_color=self.colors["danger"])
+            self.status_lbl.configure(text=txt("st_inactive"), text_color=red)
         else:
-            self.status_lbl.configure(text=txt("st_nofile"), text_color="gray")
+            self.status_lbl.configure(text=txt("st_nofile"), text_color=self.colors["fg_dim"])
 
         # Update Hardware Status
         if esp_port:
-            self.lbl_hw_status.configure(text=f"{txt('ag_hw_found')} ({esp_port})", text_color=self.colors["success"])
+            self.lbl_hw_status.configure(text=f"{txt('ag_hw_found')} ({esp_port})", text_color=green)
+            self.btn_hw_test.configure(state="normal" if not is_running else "disabled", 
+                                      fg_color=grey if is_running else grey)
         else:
             self.lbl_hw_status.configure(text=txt('ag_hw_missing'), text_color=self.colors["warning"])
+            self.btn_hw_test.configure(state="disabled", fg_color=grey)
 
         # Update Websocket Status
         if ws_conn:
-            self.lbl_ws_status.configure(text=txt("ag_ws_connected"), text_color=self.colors["success"])
+            self.lbl_ws_status.configure(text=txt("ag_ws_connected"), text_color=green)
         else:
             self.lbl_ws_status.configure(text=txt("ag_ws_failed"), text_color=self.colors["warning"])
 
-        self.btn_inst.configure(state="disabled" if is_installed else "normal")
-        self.btn_uninst.configure(state="normal" if is_installed else "disabled")
-        self.btn_start.configure(state="normal" if is_installed and not is_running else "disabled")
-        self.btn_stop.configure(state="normal" if is_running else "disabled")
-        self.btn_restart.configure(state="normal" if is_installed else "disabled")
-        self.btn_config.configure(state="normal" if is_installed else "disabled")
+        # System Buttons logic
+        if not is_installed:
+            self.btn_inst.configure(state="normal", fg_color=green)
+            self.btn_uninst.configure(state="disabled", fg_color=grey)
+            self.btn_start.configure(state="disabled", fg_color=grey)
+            self.btn_stop.configure(state="disabled", fg_color=grey)
+            self.btn_restart.configure(state="disabled", fg_color=grey)
+            self.btn_config.configure(state="disabled", fg_color=grey)
+        else:
+            self.btn_inst.configure(state="disabled", fg_color=grey)
+            self.btn_uninst.configure(state="normal", fg_color=red, hover_color="#b91c1c")
+            self.btn_config.configure(state="normal", fg_color=blue, hover_color="#2563eb")
+            
+            if is_running:
+                self.btn_start.configure(state="disabled", fg_color=grey)
+                self.btn_stop.configure(state="normal", fg_color=red, hover_color="#b91c1c")
+                self.btn_restart.configure(state="normal", fg_color=blue, hover_color="#2563eb")
+            else:
+                self.btn_start.configure(state="normal", fg_color=blue, hover_color="#2563eb")
+                self.btn_stop.configure(state="disabled", fg_color=grey)
+                self.btn_restart.configure(state="normal", fg_color=blue, hover_color="#2563eb")
 
     def open_config(self):
         """Stops the service (if running) and launches the standalone config GUI."""
@@ -400,26 +273,19 @@ class AutoGlowView(ctk.CTkFrame):
         display = os.environ.get("DISPLAY", ":0")
         xauth = os.environ.get("XAUTHORITY", "")
         
-        # Ensure we have access to the X server if running as sudo/root
         try: subprocess.run(["xhost", "+si:localuser:root"], check=False)
         except: pass
 
-        # Combine stopping the service and opening the GUI into one sudo command
-        # to minimize password prompts.
         full_cmd = f"systemctl stop {self.SERVICE_NAME} && env DISPLAY={display} XAUTHORITY={xauth} {python_exe} {gui_script}"
         cmd = ServiceUtils.sudo_cmd(full_cmd)
         
         subprocess.Popen(cmd, shell=True, cwd=self.autoglow_dir)
-        
-        # Give it a second and refresh status
         self.after(1000, self.update_status)
 
     def run_install(self):
         """Clones the repository and runs the setup script."""
         import getpass
         user = os.getenv("USER") or getpass.getuser()
-        # Using && for everything to ensure the first failure stops the chain
-        # and returns a non-zero exit code.
         script = (
             f"rm -rf {self.autoglow_dir} && "
             f"cd {self.user_home} && "
@@ -450,7 +316,7 @@ class AutoGlowView(ctk.CTkFrame):
         l = getattr(self.controller, "lang", "en")
         def txt(k): return self.texts.get(k, {}).get(l, k)
 
-        self.btn_back.configure(text=txt("btn_back"))
+        # self.btn_back.configure(text=txt("btn_back")) # Forced Icon
         self.lbl_title.configure(text=txt("ag_header"))
         self.lbl_hw_title.configure(text=txt("ag_hw_title"))
         self.lbl_ws_title.configure(text=txt("ag_ws_title"))
