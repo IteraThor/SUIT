@@ -1,7 +1,7 @@
 import tkinter as tk
 import customtkinter as ctk
 from tkinter import messagebox
-import os
+from pathlib import Path
 import sys
 import subprocess
 import threading
@@ -15,18 +15,17 @@ class KioskView(ctk.CTkFrame):
         super().__init__(parent, fg_color="transparent")
         self.controller = controller
         self.colors = controller.colors
-        self.project_dir = controller.project_dir
+        self.project_dir = Path(controller.project_dir)
         self.learn_win = None
         self.is_updating = False
         
         # Paths
-        self.user_home = os.path.expanduser("~")
-        self.autostart_dir = os.path.join(self.user_home, ".config/autostart")
-        self.ch_desktop = os.path.join(self.user_home, ".config/autostart/suit-chromium.desktop")
+        self.autostart_dir = Path.home() / ".config/autostart"
+        self.ch_desktop = self.autostart_dir / "suit-chromium.desktop"
         
-        self.killswitch_file = os.path.join(self.project_dir, "scripts/killswitch.py")
-        self.ks_service_file = "/etc/systemd/system/suit-killswitch.service"
-        self.config_file = os.path.join(self.user_home, ".suit_killswitch_config")
+        self.killswitch_file = self.project_dir / "scripts/killswitch.py"
+        self.ks_service_file = Path("/etc/systemd/system/suit-killswitch.service")
+        self.config_file = Path.home() / ".suit_killswitch_config"
         
         # --- HEADER ---
         self.header = ctk.CTkFrame(self, fg_color="transparent")
@@ -136,10 +135,10 @@ class KioskView(ctk.CTkFrame):
 
     def toggle_autostart(self, browser):
         target_file = self.ch_desktop
-        if os.path.exists(target_file):
-            os.remove(target_file)
+        if target_file.exists():
+            target_file.unlink()
         else:
-            if not os.path.exists(self.autostart_dir): os.makedirs(self.autostart_dir, exist_ok=True)
+            if not self.autostart_dir.exists(): self.autostart_dir.mkdir(parents=True, exist_ok=True)
             url = self.url_ent.get().strip()
             browser_cmd = f"chromium-browser --kiosk --password-store=basic {url}"
             cmd = f"bash -c 'sleep 3; {browser_cmd}'"
@@ -163,7 +162,7 @@ class KioskView(ctk.CTkFrame):
 
         l = getattr(self.controller, "lang", "en")
         def txt(k): return self.controller.texts.get(k, {}).get(l, k)
-        learn_script = os.path.join(self.project_dir, "scripts/tmp_learn.py")
+        learn_script = self.project_dir / "scripts" / "tmp_learn.py"
         with open(learn_script, "w") as f:
             f.write(f"""
 import evdev, time, json, sys, os
@@ -210,7 +209,8 @@ except Exception as e:
         proc = subprocess.Popen(ServiceUtils.sudo_cmd(f"{sys.executable} {path}"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, shell=True, bufsize=1)
         success = False
         old_ts = 0
-        if os.path.exists(self.config_file): old_ts = os.path.getmtime(self.config_file)
+        path = Path(path)
+        if self.config_file.exists(): old_ts = self.config_file.stat().st_mtime
         try:
             while True:
                 line = proc.stdout.readline()
@@ -236,9 +236,9 @@ except Exception as e:
             proc.terminate()
             proc.wait(timeout=1)
         except: pass
-        if proc.returncode == 0 or (os.path.exists(self.config_file) and os.path.getmtime(self.config_file) > old_ts): success = True
-        if os.path.exists(path):
-            try: os.remove(path)
+        if proc.returncode == 0 or (self.config_file.exists() and self.config_file.stat().st_mtime > old_ts): success = True
+        if path.exists():
+            try: path.unlink()
             except: pass
         if success: self.after(100, self.auto_enable_ks)
         else: self.after(100, self.update_status)
@@ -251,12 +251,12 @@ except Exception as e:
         status = ServiceUtils.check_status("suit-killswitch")
         is_installed = (status == "running" or status == "stopped")
         if force_enable or not is_installed:
-            if not os.path.exists(self.config_file):
+            if not self.config_file.exists():
                 messagebox.showwarning("SUIT", txt("ks_msg_learn_first"))
                 return
             python_exe = sys.executable
             svc_content = f"""[Unit]\nDescription=SUIT Kill-Switch\nAfter=multi-user.target\n\n[Service]\nType=simple\nExecStart={python_exe} {self.killswitch_file} {self.config_file}\nRestart=always\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy=multi-user.target\n"""
-            temp_svc = os.path.join(self.user_home, "suit-killswitch.service")
+            temp_svc = Path.home() / "suit-killswitch.service"
             try:
                 with open(temp_svc, "w") as f: f.write(svc_content)
                 cmd = ServiceUtils.sudo_cmd(f"mv {temp_svc} {self.ks_service_file} && systemctl daemon-reload && systemctl enable suit-killswitch && systemctl start suit-killswitch")
@@ -287,7 +287,7 @@ except Exception as e:
             ks_status = ServiceUtils.check_status("suit-killswitch")
             
             # Browser status
-            ch_active = os.path.exists(self.ch_desktop)
+            ch_active = self.ch_desktop.exists()
 
             # Update UI on main thread
             self.after(0, lambda: self._update_ui(osk_active, ks_status, ch_active))
@@ -313,7 +313,7 @@ except Exception as e:
                                      hover_color="#1a8a38" if osk_active else "#52525b")
 
         # Killswitch Config
-        if os.path.exists(self.config_file):
+        if self.config_file.exists():
             try:
                 with open(self.config_file, "r") as f:
                     data = json.load(f)

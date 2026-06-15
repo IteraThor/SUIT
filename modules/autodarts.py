@@ -3,7 +3,7 @@ import customtkinter as ctk
 from tkinter import messagebox
 import webbrowser
 import subprocess
-import os
+from pathlib import Path
 from modules.utils import ServiceUtils
 
 class AutodartsView(ctk.CTkFrame):
@@ -110,13 +110,13 @@ class AutodartsView(ctk.CTkFrame):
         texts = getattr(self.controller, "texts", {})
         def txt(k): return texts.get(k, {}).get(l, k)
 
-        service_file = "/etc/systemd/system/autodarts.service"
+        service_file = Path("/etc/systemd/system/autodarts.service")
         grey = self.colors["header"]
         red = self.colors["danger"]
         blue = self.colors["accent"]
         green = self.colors["success"]
         
-        if not os.path.exists(service_file):
+        if not service_file.exists():
             self.status_lbl.configure(text=txt("st_nofile"), text_color=self.colors["fg_dim"])
             # Install is clickable
             self.btn_inst.configure(state="normal", fg_color=green)

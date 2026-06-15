@@ -10,7 +10,7 @@ class MainMenu(ctk.CTkFrame):
         
         # Configure Grid
         self.grid_columnconfigure((0, 1), weight=1, uniform="tiles")
-        self.grid_rowconfigure((1, 2), weight=1, uniform="tiles")
+        self.grid_rowconfigure((1, 2, 3), weight=1, uniform="tiles")
 
         # Title
         self.lbl_title = ctk.CTkLabel(self, text="", 
@@ -18,18 +18,19 @@ class MainMenu(ctk.CTkFrame):
                                      text_color="white")
         self.lbl_title.grid(row=0, column=0, columnspan=2, pady=(20, 40))
         
-        # Menu Tiles (2x2 Grid)
+        # Menu Tiles
         self._make_tile(self.controller.show_autodarts, "btn_autodarts", "🎯", 1, 0)
         self._make_tile(self.controller.show_autoglow, "btn_autoglow", "💡", 1, 1)
         self._make_tile(self.controller.show_kiosk, "btn_kiosk", "🖥️", 2, 0)
         self._make_tile(self.controller.show_touch, "btn_touch", "📱", 2, 1)
+        self._make_tile(self.controller.show_iterathor, "btn_iterathor", "🐧", 3, 0)
         
         # --- EXPERIMENTAL INFO ---
         self.lbl_exp = ctk.CTkLabel(self, text="", 
                                    text_color=self.colors["warning"], 
                                    font=("Roboto", 13, "italic"), 
                                    wraplength=600)
-        self.lbl_exp.grid(row=3, column=0, columnspan=2, pady=(30, 10))
+        self.lbl_exp.grid(row=4, column=0, columnspan=2, pady=(30, 10))
 
         # Footer Button (Update)
         self.btn_upd = ctk.CTkButton(self, text="", height=50,
@@ -41,7 +42,7 @@ class MainMenu(ctk.CTkFrame):
                                     hover_color=self.colors["accent"],
                                     font=("Roboto", 14, "bold"),
                                     command=self.controller.update_suit)
-        self.btn_upd.grid(row=4, column=0, columnspan=2, sticky="ew", padx=80, pady=(10, 20))
+        self.btn_upd.grid(row=5, column=0, columnspan=2, sticky="ew", padx=80, pady=(10, 20))
 
         self.update_texts()
 
@@ -72,7 +73,7 @@ class MainMenu(ctk.CTkFrame):
             self.lbl_title.configure(text=self.texts.get("menu_title", {}).get(l, ""))
             
             # Update Tiles with Emojis
-            keys = ["btn_autodarts", "btn_autoglow", "btn_kiosk", "btn_touch"]
+            keys = ["btn_autodarts", "btn_autoglow", "btn_kiosk", "btn_touch", "btn_iterathor"]
             for key in keys:
                 btn = getattr(self, f"_{key}")
                 emoji = getattr(self, f"_{key}_emoji")

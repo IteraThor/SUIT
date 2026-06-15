@@ -1,5 +1,5 @@
 import subprocess
-import os
+from pathlib import Path
 import time
 import customtkinter as ctk
 from tkinter import messagebox
@@ -9,8 +9,8 @@ class ServiceUtils:
     @staticmethod
     def check_status(service_name):
         """Checks the status based on file existence and systemctl."""
-        service_path = f"/etc/systemd/system/{service_name}.service"
-        if not os.path.exists(service_path):
+        service_path = Path("/etc/systemd/system") / f"{service_name}.service"
+        if not service_path.exists():
             return "nofile"
         
         try:
@@ -22,9 +22,9 @@ class ServiceUtils:
     @staticmethod
     def get_distro():
         """Detects the Linux distribution."""
-        if os.path.exists("/etc/fedora-release"):
+        if Path("/etc/fedora-release").exists():
             return "fedora"
-        if os.path.exists("/etc/debian_version") or os.path.exists("/etc/lsb-release"):
+        if Path("/etc/debian_version").exists() or Path("/etc/lsb-release").exists():
             return "debian"
         return "unknown"
 

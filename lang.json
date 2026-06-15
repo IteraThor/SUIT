@@ -1,10 +1,11 @@
 {
   "app_title": {"de": "SUIT - Setup Utility", "en": "SUIT - Setup Utility"},
   "menu_title": {"de": "SUIT HAUPTMENÜ", "en": "SUIT MAIN MENU"},
-  "btn_autodarts": {"de": "🎯 AUTODARTS MANAGER", "en": "🎯 AUTODARTS MANAGER"},
-  "btn_autoglow": {"de": "💡 AUTOGLOW MANAGER", "en": "💡 AUTOGLOW MANAGER"},
-  "btn_kiosk": {"de": "🖥️ KIOSK & KILLSWITCH", "en": "🖥️ KIOSK & KILLSWITCH"},
-  "btn_touch": {"de": "🔄 MONITOR & TOUCH", "en": "🔄 MONITOR & TOUCH"},
+  "btn_autodarts": {"de": "AUTODARTS MANAGER", "en": "AUTODARTS MANAGER"},
+  "btn_autoglow": {"de": "AUTOGLOW MANAGER", "en": "AUTOGLOW MANAGER"},
+  "btn_kiosk": {"de": "KIOSK & KILLSWITCH", "en": "KIOSK & KILLSWITCH"},
+  "btn_touch": {"de": "MONITOR & TOUCH", "en": "MONITOR & TOUCH"},
+  "btn_iterathor": {"de": "ITERATHOR SETUP", "en": "ITERATHOR SETUP"},
   "btn_update": {"de": "⬇️ SUIT Update suchen", "en": "⬇️ Check for Updates"},
   "btn_back": {"de": "❮ Zurück", "en": "❮ Back"},
   "loading": {"de": "Lade Status...", "en": "Loading status..."},
@@ -20,6 +21,24 @@
   "ag_config": {"de": "Konfiguration öffnen", "en": "Open Config"},
   "ag_config_hint": {"de": "Hinweis: Öffnet GUI auf dem Desktop", "en": "Note: Opens GUI on desktop"},
   "kiosk_header": {"de": "Kiosk & Killswitch", "en": "Kiosk & Killswitch"},
+  "it_header": {"de": "IteraThor Fedora Setup", "en": "IteraThor Fedora Setup"},
+  "it_step1_lbl": {"de": "1. System Energie-Einstellungen", "en": "1. System Energy Settings"},
+  "it_step1_desc": {"de": "Maximale Leistung, Bildschirm dimmt/schläft nicht, Power-Button fährt PC herunter.", "en": "Max performance, disables screen dimming/sleep, sets power button to shutdown."},
+  "it_step2_lbl": {"de": "2. Automatischer Login", "en": "2. Automatic Login"},
+  "it_step2_desc": {"de": "Meldet den aktuellen Benutzer beim Start automatisch an.", "en": "Automatically logs in the current user at startup."},
+  "it_step3_lbl": {"de": "3. GNOME Keyring Fix", "en": "3. GNOME Keyring Fix"},
+  "it_step3_desc": {"de": "Installiert Seahorse und zeigt Anweisungen zum Deaktivieren des Keyring-Passworts.", "en": "Installs Seahorse and shows instructions to disable the keyring password."},
+  "it_step4_lbl": {"de": "4. System Debloat (Apps entfernen)", "en": "4. System Debloat (Remove Apps)"},
+  "it_step4_desc": {"de": "Entfernt nicht benötigte Standard-Apps wie LibreOffice, Kontakte, Wetter etc.", "en": "Removes unnecessary default apps like LibreOffice, Contacts, Weather etc."},
+  "it_step5_lbl": {"de": "5. Software Installation", "en": "5. Software Installation"},
+  "it_step5_desc": {"de": "Installiere nützliche Programme für dein Setup.", "en": "Install useful applications for your setup."},
+  "it_step6_lbl": {"de": "6. Darts Scorer Setup", "en": "6. Darts Scorer Setup"},
+  "it_step6_desc": {"de": "Installiere und konfiguriere Waydroid, um Darts Scorer zu nutzen.", "en": "Install and configure Waydroid to run Darts Scorer."},
+  "it_step7_lbl": {"de": "7. Desktop Visuals anpassen", "en": "7. Desktop Visuals Setup"},
+  "it_step7_desc": {"de": "Setzt das Hintergrundbild und aktiviert den Dark Mode für GNOME.", "en": "Sets the background image and enables dark mode for GNOME."},
+  "it_btn_tools": {"de": "Tools für Autodarts", "en": "Tools for Autodarts"},
+
+  "it_btn_apply": {"de": "Anwenden", "en": "Apply"},
   "desc_autodarts": {
     "de": "Verwalte den Autodarts-Hintergrunddienst. Starte, stoppe oder installiere die Software und greife schnell auf die Weboberfläche zu.",
     "en": "Manage the Autodarts background service. Start, stop, or install the software and quickly access the web interface."
@@ -35,6 +54,10 @@
   "desc_rotation": {
     "de": "Passe die Ausrichtung von Monitor und Touchscreen an. Sorgt dafür, dass Eingaben auch nach einer Drehung korrekt erkannt werden.",
     "en": "Adjust the orientation of the monitor and touchscreen. Ensures that inputs are correctly recognized even after rotation."
+  },
+  "desc_iterathor": {
+    "de": "Assistierte Fedora-Einrichtung, so wie IteraThor sie nutzt.",
+    "en": "Assisted Fedora setup the way IteraThor uses it."
   },
   "btn_start": {"de": "Starten", "en": "Start"},
   "btn_stop": {"de": "Stoppen", "en": "Stop"},

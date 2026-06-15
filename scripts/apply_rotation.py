@@ -1,6 +1,6 @@
 import dbus
 import sys
-import os
+from pathlib import Path
 import subprocess
 import time
 import json
@@ -175,10 +175,10 @@ def calculate_and_apply_matrix(monitor_name, touch_device_name):
         print(f"Error applying udev rule: {e}")
 
 if __name__ == "__main__":
-    config_path = os.path.expanduser("~/.suit_rotation_config.json")
+    config_path = Path.home() / ".suit_rotation_config.json"
     
     if len(sys.argv) < 3:
-        if os.path.exists(config_path):
+        if config_path.exists():
             try:
                 with open(config_path, "r") as f:
                     config = json.load(f)
@@ -217,7 +217,7 @@ if __name__ == "__main__":
                 # If we passed "None" for touch, check the config to see if ANOTHER screen has touch
                 # before we blindly delete the udev rule.
                 touch_applied = False
-                if os.path.exists(config_path):
+                if config_path.exists():
                     try:
                         with open(config_path, "r") as f:
                             config = json.load(f)

@@ -2,12 +2,12 @@ import evdev
 import subprocess
 import time
 import json
-import os
+from pathlib import Path
 import sys
 
 # Absolute path for the service
-DEFAULT_CONFIG_PATH = os.path.expanduser("~/.suit_killswitch_config")
-CONFIG_PATH = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CONFIG_PATH
+DEFAULT_CONFIG_PATH = Path.home() / ".suit_killswitch_config"
+CONFIG_PATH = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_CONFIG_PATH
 
 def kill_kiosk():
     try:
@@ -22,7 +22,7 @@ def main():
     print("SUIT Killswitch service starting up...", flush=True)
     
     while True:
-        if not os.path.exists(CONFIG_PATH):
+        if not CONFIG_PATH.exists():
             print(f"Waiting for config: {CONFIG_PATH}", flush=True)
             time.sleep(5)
             continue
@@ -34,7 +34,7 @@ def main():
             device_path = config.get('device')
             target_key = config.get('key')
             
-            if not os.path.exists(device_path):
+            if not device_path or not Path(device_path).exists():
                 print(f"Device not found: {device_path}", flush=True)
                 time.sleep(5)
                 continue

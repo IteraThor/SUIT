@@ -1,7 +1,7 @@
 import tkinter as tk
 import customtkinter as ctk
 from tkinter import messagebox
-import os
+from pathlib import Path
 import sys
 import json
 import logging
@@ -10,8 +10,14 @@ import fcntl
 import time
 import importlib.metadata
 
+# Paths
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.append(str(BASE_DIR))
+LOG_FILE = BASE_DIR / "suit.log"
+CONFIG_FILE = Path.home() / ".suit_config.json"
+lock_file = Path.home() / ".suit.lock"
+
 # Set up logging
-LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "suit.log")
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -22,19 +28,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Global Exception Handler
+def global_exception_handler(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    logger.error("Unhandled exception:", exc_info=(exc_type, exc_value, exc_traceback))
+
+sys.excepthook = global_exception_handler
+
 # Single Instance Lock
-lock_file = os.path.expanduser("~/.suit.lock")
 lock_fp = open(lock_file, 'w')
 try:
     fcntl.lockf(lock_fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
 except IOError:
     print("SUIT is already running.")
     sys.exit(0)
-
-# Paths
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(BASE_DIR)
-CONFIG_FILE = os.path.expanduser("~/.suit_config.json")
 
 from modules.utils import ServiceUtils
 
@@ -43,6 +52,7 @@ from modules.menu import MainMenu
 from modules.autodarts import AutodartsView
 from modules.autoglow import AutoGlowView
 from modules.kiosk import KioskView
+from modules.iterathor import IterathorView
 
 # Optional Rotation
 try:
@@ -56,6 +66,9 @@ ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
 class SuitApp(ctk.CTk):
+    def report_callback_exception(self, exc, val, tb):
+        logger.error("Unhandled UI exception:", exc_info=(exc, val, tb))
+
     def __init__(self):
         super().__init__()
         self.withdraw() # Hide window during initialization
@@ -107,7 +120,7 @@ class SuitApp(ctk.CTk):
         self.last_lang_switch = 0
         
         # Initialize views (MainMenu last to ensure it stays on top initially)
-        views = [AutodartsView, AutoGlowView, KioskView]
+        views = [AutodartsView, AutoGlowView, KioskView, IterathorView]
         if RotationView: views.append(RotationView)
         views.append(MainMenu)
 
@@ -146,8 +159,8 @@ class SuitApp(ctk.CTk):
         self.after(5000, self.poll_services)
 
     def check_requirements(self):
-        req_file = os.path.join(BASE_DIR, "requirements.txt")
-        if not os.path.exists(req_file):
+        req_file = BASE_DIR / "requirements.txt"
+        if not req_file.exists():
             return
 
         missing = []
@@ -186,7 +199,7 @@ class SuitApp(ctk.CTk):
 
     def load_config(self):
         self.lang = "en"
-        if os.path.exists(CONFIG_FILE):
+        if CONFIG_FILE.exists():
             try:
                 with open(CONFIG_FILE, "r") as f:
                     config = json.load(f)
@@ -202,7 +215,7 @@ class SuitApp(ctk.CTk):
             logger.error(f"Failed to save config: {e}")
 
     def load_translations(self):
-        lang_path = os.path.join(BASE_DIR, "lang.json")
+        lang_path = BASE_DIR / "lang.json"
         try:
             with open(lang_path, "r") as f:
                 self.texts = json.load(f)
@@ -238,6 +251,7 @@ class SuitApp(ctk.CTk):
     def show_autodarts(self): self.show_frame(AutodartsView)
     def show_autoglow(self): self.show_frame(AutoGlowView)
     def show_kiosk(self): self.show_frame(KioskView)
+    def show_iterathor(self): self.show_frame(IterathorView)
     def show_touch(self):
         if RotationView: self.show_frame(RotationView)
         else: logger.warning("RotationView missing.")

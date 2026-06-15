@@ -1,7 +1,7 @@
 import tkinter as tk
 import customtkinter as ctk
 from tkinter import messagebox
-import os
+from pathlib import Path
 import subprocess
 import threading
 import serial.tools.list_ports
@@ -17,12 +17,11 @@ class AutoGlowView(ctk.CTkFrame):
         self.controller = controller
         self.texts = controller.texts
         self.colors = controller.colors
-        self.project_dir = controller.project_dir
+        self.project_dir = Path(controller.project_dir)
         self.is_updating = False
         
         # Dynamic paths
-        self.user_home = os.path.expanduser("~")
-        self.autoglow_dir = os.path.join(self.user_home, "AutoGlow")
+        self.autoglow_dir = Path.home() / "AutoGlow"
         
         # Header
         self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -262,14 +261,15 @@ class AutoGlowView(ctk.CTkFrame):
 
     def open_config(self):
         """Stops the service (if running) and launches the standalone config GUI."""
-        gui_script = os.path.join(self.autoglow_dir, "settings_gui.py")
-        venv_python = os.path.join(self.autoglow_dir, "venv", "bin", "python3")
-        python_exe = venv_python if os.path.exists(venv_python) else "python3"
+        gui_script = self.autoglow_dir / "settings_gui.py"
+        venv_python = self.autoglow_dir / "venv" / "bin" / "python3"
+        python_exe = venv_python if venv_python.exists() else "python3"
         
-        if not os.path.exists(gui_script):
+        if not gui_script.exists():
             messagebox.showerror("Error", f"Config script not found: {gui_script}")
             return
 
+        import os
         display = os.environ.get("DISPLAY", ":0")
         xauth = os.environ.get("XAUTHORITY", "")
         
@@ -279,19 +279,20 @@ class AutoGlowView(ctk.CTkFrame):
         full_cmd = f"systemctl stop {self.SERVICE_NAME} && env DISPLAY={display} XAUTHORITY={xauth} {python_exe} {gui_script}"
         cmd = ServiceUtils.sudo_cmd(full_cmd)
         
-        subprocess.Popen(cmd, shell=True, cwd=self.autoglow_dir)
+        subprocess.Popen(cmd, shell=True, cwd=str(self.autoglow_dir))
         self.after(1000, self.update_status)
 
     def run_install(self):
         """Clones the repository and runs the setup script with Fedora fixes."""
         import getpass
         distro = ServiceUtils.get_distro()
+        import os
         user = os.getenv("USER") or getpass.getuser()
         
         # Base setup commands
         setup_cmds = [
             f"rm -rf {self.autoglow_dir}",
-            f"cd {self.user_home}",
+            f"cd {Path.home()}",
             f"git clone {self.AUTOGLOW_REPO}",
             f"sudo chown -R {user}:{user} {self.autoglow_dir}",
             f"cd {self.autoglow_dir}",

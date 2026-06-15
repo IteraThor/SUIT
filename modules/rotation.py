@@ -1,7 +1,7 @@
 import tkinter as tk
 import customtkinter as ctk
 from tkinter import messagebox
-import os
+from pathlib import Path
 import subprocess
 import sys
 import json
@@ -99,13 +99,12 @@ class RotationView(ctk.CTkFrame):
         super().__init__(parent, fg_color="transparent")
         self.controller = controller
         self.colors = controller.colors
-        self.project_dir = controller.project_dir
+        self.project_dir = Path(controller.project_dir)
         
-        self.user_home = os.path.expanduser("~")
-        self.rotation_config = os.path.join(self.user_home, ".suit_rotation_config.json")
-        self.autostart_dir = os.path.join(self.user_home, ".config/autostart")
-        self.rotation_desktop = os.path.join(self.autostart_dir, "suit-rotation.desktop")
-        self.rotation_script = os.path.join(self.project_dir, "scripts/apply_rotation.py")
+        self.rotation_config = Path.home() / ".suit_rotation_config.json"
+        self.autostart_dir = Path.home() / ".config/autostart"
+        self.rotation_desktop = self.autostart_dir / "suit-rotation.desktop"
+        self.rotation_script = self.project_dir / "scripts" / "apply_rotation.py"
 
         self.monitors = get_monitors_dbus()
         self.touchscreens = get_touchscreens()
@@ -328,7 +327,7 @@ class RotationView(ctk.CTkFrame):
         apply_rotation.py: it re-applies rotations and writes ROT(target) * H for
         whichever screen has the touch device. Running it after boot does NOT bind
         the matrix to the live device -- only the on-disk rule, read at boot, does."""
-        os.system(f"{sys.executable} {self.rotation_script}")
+        subprocess.run(f"{sys.executable} {self.rotation_script}", shell=True)
 
     def _reboot_to_apply(self):
         """A touch udev rule is only consumed when the device initialises at boot,
@@ -343,7 +342,7 @@ class RotationView(ctk.CTkFrame):
         ):
             # Write the rule to disk FIRST so it is loaded during the next boot.
             self._write_udev_rule_from_config()
-            os.system("sudo reboot")
+            subprocess.run("sudo reboot", shell=True)
         else:
             # Still write it so it is correct whenever the user reboots later.
             self._write_udev_rule_from_config()
@@ -394,7 +393,7 @@ class RotationView(ctk.CTkFrame):
             ctk.CTkLabel(busy, text="Applying rotation & rebooting…",
                          font=("Roboto", 22, "bold"), text_color="white").pack(expand=True)
             # Let the message paint, then rotate + write the rule + reboot.
-            self.after(500, lambda: os.system(f"{cmd_rot} && sudo reboot"))
+            self.after(500, lambda: subprocess.run(f"{cmd_rot} && sudo reboot", shell=True))
             return
 
         # --- No touchscreen on this screen ---
@@ -429,7 +428,7 @@ class RotationView(ctk.CTkFrame):
 
 
     def load_config(self):
-        if os.path.exists(self.rotation_config):
+        if self.rotation_config.exists():
             try:
                 with open(self.rotation_config, "r") as f: return json.load(f)
             except: pass
