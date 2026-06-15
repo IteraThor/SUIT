@@ -148,7 +148,28 @@ class AutodartsView(ctk.CTkFrame):
             self.btn_restart.configure(state="normal", fg_color=blue, hover_color="#2563eb")
 
     def do_install(self):
-        cmd = ServiceUtils.sudo_cmd("bash <(curl -sL get.autodarts.io)")
+        distro = ServiceUtils.get_distro()
+        import getpass
+        user = getpass.getuser()
+        
+        # The installer handles sudo internally where needed. 
+        # We must run it as a normal user so it installs into the correct home directory.
+        base_cmd = "bash <(curl -sL get.autodarts.io)"
+        
+        if distro == "fedora":
+            # Fedora fixes:
+            # 1. Installer uses 'adduser' which fails on Fedora -> we fix with 'usermod'
+            # 2. SELinux: binaries in home dirs often need specific context to be executed by systemd
+            # 3. Group changes/SELinux fixes require a service restart
+            cmd = (
+                f"{base_cmd}; "
+                f"sudo usermod -aG video {user}; "
+                f"sudo chcon -t bin_t /home/{user}/.local/opt/autodarts/autodarts 2>/dev/null || true; "
+                f"sudo systemctl restart autodarts"
+            )
+        else:
+            cmd = base_cmd
+
         ServiceUtils.run_bash_script(self, cmd, "Installation", on_close=self.update_status)
 
     def do_uninstall(self):

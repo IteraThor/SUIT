@@ -20,6 +20,15 @@ class ServiceUtils:
             return "stopped"
 
     @staticmethod
+    def get_distro():
+        """Detects the Linux distribution."""
+        if os.path.exists("/etc/fedora-release"):
+            return "fedora"
+        if os.path.exists("/etc/debian_version") or os.path.exists("/etc/lsb-release"):
+            return "debian"
+        return "unknown"
+
+    @staticmethod
     def sudo_cmd(shell_cmd):
         """Returns the command for root privileges."""
         if shell_cmd.startswith("sudo "):

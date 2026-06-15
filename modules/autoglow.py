@@ -283,18 +283,36 @@ class AutoGlowView(ctk.CTkFrame):
         self.after(1000, self.update_status)
 
     def run_install(self):
-        """Clones the repository and runs the setup script."""
+        """Clones the repository and runs the setup script with Fedora fixes."""
         import getpass
+        distro = ServiceUtils.get_distro()
         user = os.getenv("USER") or getpass.getuser()
-        script = (
-            f"rm -rf {self.autoglow_dir} && "
-            f"cd {self.user_home} && "
-            f"git clone {self.AUTOGLOW_REPO} && "
-            f"sudo chown -R {user}:{user} {self.autoglow_dir} && "
-            f"cd {self.autoglow_dir} && "
-            f"chmod +x setup.sh && "
-            f"sudo bash setup.sh"
-        )
+        
+        # Base setup commands
+        setup_cmds = [
+            f"rm -rf {self.autoglow_dir}",
+            f"cd {self.user_home}",
+            f"git clone {self.AUTOGLOW_REPO}",
+            f"sudo chown -R {user}:{user} {self.autoglow_dir}",
+            f"cd {self.autoglow_dir}",
+            f"chmod +x setup.sh"
+        ]
+
+        if distro == "fedora":
+            # Fedora fixes:
+            # 1. Install system dependencies that setup.sh (using apt) will miss
+            # 2. Run setup.sh (it will fail the apt part but continue)
+            # 3. Apply SELinux context to the python binary in venv so systemd can run it
+            fedora_fixes = [
+                "sudo dnf install -y python3-tkinter python3-devel pkgconf-pkg-config gcc gcc-c++ make",
+                "sudo bash setup.sh",
+                f"sudo chcon -t bin_t {self.autoglow_dir}/venv/bin/python3 2>/dev/null || true",
+                f"sudo systemctl restart {self.SERVICE_NAME}"
+            ]
+            script = " && ".join(setup_cmds + fedora_fixes)
+        else:
+            script = " && ".join(setup_cmds + ["sudo bash setup.sh"])
+
         ServiceUtils.run_bash_script(self, script, "Installation", on_close=self.update_status)
 
     def run_uninstall(self):
