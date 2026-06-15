@@ -302,11 +302,11 @@ class AutoGlowView(ctk.CTkFrame):
             # Fedora fixes:
             # 1. Install system dependencies that setup.sh (using apt) will miss
             # 2. Run setup.sh (it will fail the apt part but continue)
-            # 3. Apply SELinux context to the python binary in venv so systemd can run it
+            # 3. Apply SELinux context to the python binary in venv (using -h for symlinks)
             fedora_fixes = [
                 "sudo dnf install -y python3-tkinter python3-devel pkgconf-pkg-config gcc gcc-c++ make",
                 "sudo bash setup.sh",
-                f"sudo chcon -t bin_t {self.autoglow_dir}/venv/bin/python3 2>/dev/null || true",
+                f"sudo chcon -h -t bin_t {self.autoglow_dir}/venv/bin/python* 2>/dev/null || true",
                 f"sudo systemctl restart {self.SERVICE_NAME}"
             ]
             script = " && ".join(setup_cmds + fedora_fixes)

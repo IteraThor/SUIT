@@ -164,7 +164,7 @@ class AutodartsView(ctk.CTkFrame):
             cmd = (
                 f"{base_cmd}; "
                 f"sudo usermod -aG video {user}; "
-                f"sudo chcon -t bin_t /home/{user}/.local/opt/autodarts/autodarts 2>/dev/null || true; "
+                f"sudo chcon -h -t bin_t /home/{user}/.local/opt/autodarts/autodarts 2>/dev/null || true; "
                 f"sudo systemctl restart autodarts"
             )
         else:
