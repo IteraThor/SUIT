@@ -38,6 +38,23 @@
   "it_step7_desc": {"de": "Setzt das Hintergrundbild und aktiviert den Dark Mode für GNOME.", "en": "Sets the background image and enables dark mode for GNOME."},
   "it_btn_tools": {"de": "Tools für Autodarts", "en": "Tools for Autodarts"},
 
+  "btn_aic8800": {"de": "AIC8800 DRIVER", "en": "AIC8800 DRIVER"},
+  "aic_header": {"de": "AIC8800 WLAN Driver", "en": "AIC8800 WiFi Driver"},
+  "aic_info": {
+    "de": "Installiert den AIC8800 Treiber direkt aus dem Projektordner (drivers/aic8800).",
+    "en": "Installs the AIC8800 driver directly from the project folder (drivers/aic8800)."
+  },
+  "aic_local_lbl": {"de": "Treiber lokal installieren", "en": "Install Local Driver"},
+  "aic_local_desc": {"de": "Kopiert Modul und Firmware aus dem Repository und lädt den Treiber.", "en": "Copies module and firmware from the repository and loads the driver."},
+  "aic_msg_kernel_mismatch": {
+    "de": "Kein passender Treiber für Kernel {cur_kernel} im Ordner drivers/aic8800 gefunden!",
+    "en": "No matching driver for kernel {cur_kernel} found in drivers/aic8800!"
+  },
+  "aic_msg_no_driver": {
+    "de": "Treiber-Ordner 'drivers/aic8800' wurde nicht im Projekt gefunden!",
+    "en": "Driver folder 'drivers/aic8800' not found in project!"
+  },
+
   "it_btn_apply": {"de": "Anwenden", "en": "Apply"},
   "desc_autodarts": {
     "de": "Verwalte den Autodarts-Hintergrunddienst. Starte, stoppe oder installiere die Software und greife schnell auf die Weboberfläche zu.",

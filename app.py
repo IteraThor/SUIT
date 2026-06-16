@@ -53,6 +53,7 @@ from modules.autodarts import AutodartsView
 from modules.autoglow import AutoGlowView
 from modules.kiosk import KioskView
 from modules.iterathor import IterathorView
+from modules.aic8800 import AIC8800View
 
 # Optional Rotation
 try:
@@ -120,7 +121,7 @@ class SuitApp(ctk.CTk):
         self.last_lang_switch = 0
         
         # Initialize views (MainMenu last to ensure it stays on top initially)
-        views = [AutodartsView, AutoGlowView, KioskView, IterathorView]
+        views = [AutodartsView, AutoGlowView, KioskView, IterathorView, AIC8800View]
         if RotationView: views.append(RotationView)
         views.append(MainMenu)
 
@@ -252,6 +253,7 @@ class SuitApp(ctk.CTk):
     def show_autoglow(self): self.show_frame(AutoGlowView)
     def show_kiosk(self): self.show_frame(KioskView)
     def show_iterathor(self): self.show_frame(IterathorView)
+    def show_aic8800(self): self.show_frame(AIC8800View)
     def show_touch(self):
         if RotationView: self.show_frame(RotationView)
         else: logger.warning("RotationView missing.")
