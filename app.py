@@ -3,6 +3,7 @@ import customtkinter as ctk
 from tkinter import messagebox
 from pathlib import Path
 import sys
+import os
 import json
 import logging
 import subprocess
@@ -53,7 +54,6 @@ from modules.autodarts import AutodartsView
 from modules.autoglow import AutoGlowView
 from modules.kiosk import KioskView
 from modules.iterathor import IterathorView
-from modules.aic8800 import AIC8800View
 
 # Optional Rotation
 try:
@@ -121,7 +121,7 @@ class SuitApp(ctk.CTk):
         self.last_lang_switch = 0
         
         # Initialize views (MainMenu last to ensure it stays on top initially)
-        views = [AutodartsView, AutoGlowView, KioskView, IterathorView, AIC8800View]
+        views = [AutodartsView, AutoGlowView, KioskView, IterathorView]
         if RotationView: views.append(RotationView)
         views.append(MainMenu)
 
@@ -253,15 +253,15 @@ class SuitApp(ctk.CTk):
     def show_autoglow(self): self.show_frame(AutoGlowView)
     def show_kiosk(self): self.show_frame(KioskView)
     def show_iterathor(self): self.show_frame(IterathorView)
-    def show_aic8800(self): self.show_frame(AIC8800View)
     def show_touch(self):
         if RotationView: self.show_frame(RotationView)
         else: logger.warning("RotationView missing.")
 
-    def update_suit(self):
+    def update_suit(self, force=False):
         l = self.lang
         def txt(k): return self.texts.get(k, {}).get(l, k)
-        if not self.update_available:
+        
+        if not force and not self.update_available:
             try:
                 subprocess.run(["git", "fetch"], check=True, cwd=BASE_DIR, capture_output=True)
                 res = subprocess.run(["git", "status", "-uno"], check=True, cwd=BASE_DIR, capture_output=True, text=True)
@@ -273,11 +273,15 @@ class SuitApp(ctk.CTk):
             except Exception as e:
                 messagebox.showerror("Error", f"Check failed: {e}")
         else:
-            if messagebox.askyesno("SUIT", txt("update_confirm_msg")):
+            msg = txt("update_confirm_msg") if not force else "Force update will overwrite all local changes. Continue?"
+            if messagebox.askyesno("SUIT", msg):
                 try:
-                    # Force update by resetting to origin/main to avoid conflicts with local changes
-                    subprocess.run(["git", "fetch", "--all"], check=True, cwd=BASE_DIR)
-                    subprocess.run(["git", "reset", "--hard", "origin/main"], check=True, cwd=BASE_DIR)
+                    if force:
+                        subprocess.run(["git", "fetch", "--all"], check=True, cwd=BASE_DIR)
+                        subprocess.run(["git", "reset", "--hard", "origin/main"], check=True, cwd=BASE_DIR)
+                    else:
+                        subprocess.run(["git", "pull"], check=True, cwd=BASE_DIR)
+                    
                     messagebox.showinfo("SUIT", txt("msg_updated"))
                     os.execv(sys.executable, [sys.executable, __file__] + sys.argv[1:])
                 except Exception as e:

@@ -24,7 +24,6 @@ class MainMenu(ctk.CTkFrame):
         self._make_tile(self.controller.show_kiosk, "btn_kiosk", "🖥️", 2, 0)
         self._make_tile(self.controller.show_touch, "btn_touch", "📱", 2, 1)
         self._make_tile(self.controller.show_iterathor, "btn_iterathor", "🐧", 3, 0)
-        self._make_tile(self.controller.show_aic8800, "btn_aic8800", "📶", 3, 1)
         
         # --- EXPERIMENTAL INFO ---
         self.lbl_exp = ctk.CTkLabel(self, text="", 
@@ -33,8 +32,13 @@ class MainMenu(ctk.CTkFrame):
                                    wraplength=600)
         self.lbl_exp.grid(row=4, column=0, columnspan=2, pady=(30, 10))
 
-        # Footer Button (Update)
-        self.btn_upd = ctk.CTkButton(self, text="", height=50,
+        # Footer Buttons (Update)
+        self.update_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.update_frame.grid(row=5, column=0, columnspan=2, sticky="ew", padx=80, pady=(10, 20))
+        self.update_frame.grid_columnconfigure(0, weight=3)
+        self.update_frame.grid_columnconfigure(1, weight=1)
+
+        self.btn_upd = ctk.CTkButton(self.update_frame, text="", height=50,
                                     fg_color=self.colors["card"], 
                                     border_color=self.colors["header"],
                                     border_width=1,
@@ -43,7 +47,17 @@ class MainMenu(ctk.CTkFrame):
                                     hover_color=self.colors["accent"],
                                     font=("Roboto", 14, "bold"),
                                     command=self.controller.update_suit)
-        self.btn_upd.grid(row=5, column=0, columnspan=2, sticky="ew", padx=80, pady=(10, 20))
+        self.btn_upd.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+
+        self.btn_upd_force = ctk.CTkButton(self.update_frame, text="", height=50,
+                                          fg_color=self.colors["card"],
+                                          border_color=self.colors["header"],
+                                          border_width=1,
+                                          text_color="white",
+                                          hover_color=self.colors["danger"],
+                                          font=("Roboto", 14, "bold"),
+                                          command=lambda: self.controller.update_suit(force=True))
+        self.btn_upd_force.grid(row=0, column=1, sticky="ew", padx=(5, 0))
 
         self.update_texts()
 
@@ -74,7 +88,7 @@ class MainMenu(ctk.CTkFrame):
             self.lbl_title.configure(text=self.texts.get("menu_title", {}).get(l, ""))
             
             # Update Tiles with Emojis
-            keys = ["btn_autodarts", "btn_autoglow", "btn_kiosk", "btn_touch", "btn_iterathor", "btn_aic8800"]
+            keys = ["btn_autodarts", "btn_autoglow", "btn_kiosk", "btn_touch", "btn_iterathor"]
             for key in keys:
                 btn = getattr(self, f"_{key}")
                 emoji = getattr(self, f"_{key}_emoji")
@@ -83,7 +97,9 @@ class MainMenu(ctk.CTkFrame):
             
             self.lbl_exp.configure(text=self.texts.get("experimental_info", {}).get(l, ""))
             
-            # Update button logic
+            # Update buttons logic
+            self.btn_upd_force.configure(text=self.texts.get("btn_force_update", {}).get(l, "Force Update"))
+
             if self.controller.update_available:
                 self.btn_upd.configure(text=self.texts.get("btn_do_update", {}).get(l, "Update Now"), 
                                       fg_color=self.colors["accent"], border_width=0)
