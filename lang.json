@@ -120,5 +120,21 @@
   "sudo_req_text": {
     "de": "Um System-Einstellungen vorzunehmen, benötigt SUIT Administrator-Rechte.\n\nMöchtest du erlauben, dass SUIT Befehle ohne Passwort ausführt?\n(Dies erstellt eine Datei in /etc/sudoers.d/ für den aktuellen Benutzer)",
     "en": "To manage system settings, SUIT requires administrator privileges.\n\nWould you like to allow SUIT to run commands without a password?\n(This creates a file in /etc/sudoers.d/ for the current user)"
-  }
+  },
+  "rot_header": {"de": "Monitor & Touch Manager", "en": "Screen & Touch Manager"},
+  "rot_primary": {"de": "Als Hauptbildschirm festlegen", "en": "Set as primary screen"},
+  "rot_has_touch": {"de": "Dieser Bildschirm hat einen Touchscreen", "en": "This screen has a touchscreen"},
+  "rot_assign_touch": {"de": "Touch-Gerät zuweisen:", "en": "Assign touch device:"},
+  "rot_angle": {"de": "Visueller Winkel: {}°", "en": "Visual Angle: {}°"},
+  "rot_apply": {"de": "EINSTELLUNGEN ANWENDEN", "en": "APPLY SETTINGS"},
+  "rot_identify": {"de": "Identifizieren", "en": "Identify"},
+  "rot_applying_reboot": {"de": "Drehung wird angewendet & Neustart...", "en": "Applying rotation & rebooting..."},
+  "rot_screen": {"de": "Bildschirm", "en": "Screen"},
+  "rot_reboot_title": {"de": "Neustart erforderlich", "en": "Reboot required"},
+  "rot_saved_title": {"de": "Gespeichert", "en": "Saved"},
+  "rot_saved_msg": {"de": "Einstellungen gespeichert. Die Touchscreen-Zuordnung wird beim nächsten Neustart angewendet.", "en": "Settings saved. The touchscreen mapping will be applied on the next reboot."},
+  "rot_apply_reboot_title": {"de": "Anwenden & Neustarten", "en": "Apply & reboot"},
+  "rot_apply_reboot_msg": {"de": "Die Touchscreen-Zuordnung wird erst nach einem Neustart wirksam.\n\nDer Bildschirm wird gedreht und das System jetzt neu gestartet. Fortfahren?", "en": "The touchscreen mapping only takes effect after a reboot.\n\nThe screen will rotate to the new orientation and the system will reboot now. Continue?"},
+  "rot_save_settings_title": {"de": "Einstellungen speichern", "en": "Save Settings"},
+  "rot_save_settings_msg": {"de": "Möchtest du diese Einstellungen dauerhaft speichern?", "en": "Do you want to save these settings permanently?"}
 }

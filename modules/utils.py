@@ -1,4 +1,5 @@
 import subprocess
+import os
 from pathlib import Path
 import time
 import customtkinter as ctk

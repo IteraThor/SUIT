@@ -98,6 +98,7 @@ class RotationView(ctk.CTkFrame):
     def __init__(self, parent, controller):
         super().__init__(parent, fg_color="transparent")
         self.controller = controller
+        self.texts = controller.texts
         self.colors = controller.colors
         self.project_dir = Path(controller.project_dir)
         
@@ -181,10 +182,11 @@ class RotationView(ctk.CTkFrame):
         self.settings_group.pack(fill="x", padx=70, pady=10)
 
         self.var_primary = tk.BooleanVar()
-        ctk.CTkCheckBox(self.settings_group, text="Set as primary screen",
+        self.check_primary = ctk.CTkCheckBox(self.settings_group, text="Set as primary screen",
                         variable=self.var_primary, font=("Roboto", 18, "bold"),
                         checkbox_width=32, checkbox_height=32,
-                        command=self.update_data, text_color="white").pack(anchor="w", pady=10)
+                        command=self.update_data, text_color="white")
+        self.check_primary.pack(anchor="w", pady=10)
 
         self.var_touch = tk.BooleanVar()
         self.check_touch = ctk.CTkCheckBox(self.settings_group, text="This screen has a touchscreen",
@@ -197,8 +199,9 @@ class RotationView(ctk.CTkFrame):
         self.touch_menu_frame = ctk.CTkFrame(self.settings_group, fg_color="#1e293b", corner_radius=10,
                                             border_width=2, border_color=self.colors["accent"])
         
-        ctk.CTkLabel(self.touch_menu_frame, text="Assign touch device:", 
-                    font=("Roboto", 14, "bold"), text_color="#94a3b8").pack(anchor="w", padx=20, pady=(15, 5))
+        self.lbl_assign_touch = ctk.CTkLabel(self.touch_menu_frame, text="Assign touch device:", 
+                    font=("Roboto", 14, "bold"), text_color="#94a3b8")
+        self.lbl_assign_touch.pack(anchor="w", padx=20, pady=(15, 5))
         
         self.var_touch_device = tk.StringVar(value="None")
         self.touch_combo = ctk.CTkOptionMenu(self.touch_menu_frame, values=["None"] + self.touchscreens,
@@ -229,13 +232,15 @@ class RotationView(ctk.CTkFrame):
         self.button_row = ctk.CTkFrame(self.content, fg_color="transparent")
         self.button_row.pack(fill="x", padx=70, pady=(10, 40))
 
-        ctk.CTkButton(self.button_row, text="APPLY SETTINGS", height=65, corner_radius=12,
+        self.btn_apply = ctk.CTkButton(self.button_row, text="APPLY SETTINGS", height=65, corner_radius=12,
                       fg_color=self.colors["accent"], text_color="white", 
-                      font=("Roboto", 18, "bold"), command=self.apply_confirm).pack(side="right", padx=10)
+                      font=("Roboto", 18, "bold"), command=self.apply_confirm)
+        self.btn_apply.pack(side="right", padx=10)
 
-        ctk.CTkButton(self.button_row, text="Identify", height=65, width=150, corner_radius=12,
+        self.btn_identify = ctk.CTkButton(self.button_row, text="Identify", height=65, width=150, corner_radius=12,
                       fg_color="transparent", border_width=1, border_color=self.colors["header"],
-                      text_color="white", font=("Roboto", 16, "bold"), command=self.identify).pack(side="right", padx=10)
+                      text_color="white", font=("Roboto", 16, "bold"), command=self.identify)
+        self.btn_identify.pack(side="right", padx=10)
 
         self.switch_screen(0)
 
@@ -334,11 +339,13 @@ class RotationView(ctk.CTkFrame):
         so a touch-mapping change cannot take effect until a reboot -- AND the rule
         must already be on disk before that reboot. Save is done by the caller; we
         write the rule, then trigger (or defer) the reboot."""
+        l = getattr(self.controller, "lang", "en")
+        texts = getattr(self.controller, "texts", {})
+        def txt(k): return texts.get(k, {}).get(l, k)
+
         if messagebox.askyesno(
-            "Reboot required",
-            "The touchscreen mapping has been saved.\n\n"
-            "Touch calibration rules are only loaded at boot, so the new mapping "
-            "takes effect after a reboot. Reboot now?"
+            txt("rot_reboot_title"),
+            txt("rot_msg_reboot")
         ):
             # Write the rule to disk FIRST so it is loaded during the next boot.
             self._write_udev_rule_from_config()
@@ -347,13 +354,16 @@ class RotationView(ctk.CTkFrame):
             # Still write it so it is correct whenever the user reboots later.
             self._write_udev_rule_from_config()
             messagebox.showinfo(
-                "Saved",
-                "Settings saved. The touchscreen mapping will be applied on the "
-                "next reboot."
+                txt("rot_saved_title"),
+                txt("rot_saved_msg")
             )
             self.refresh_screens()
 
     def apply_confirm(self):
+        l = getattr(self.controller, "lang", "en")
+        texts = getattr(self.controller, "texts", {})
+        def txt(k): return texts.get(k, {}).get(l, k)
+
         curr_name = self.monitors[self.current_idx]['name']
         curr_data = self.screen_data[curr_name]
         curr_mode = self._mode_for(curr_data)
@@ -368,10 +378,8 @@ class RotationView(ctk.CTkFrame):
             # screen never rotates out from under the still-old touch mapping while
             # a dialog is waiting for a tap.
             if not messagebox.askyesno(
-                "Apply & reboot",
-                "The touchscreen mapping only takes effect after a reboot.\n\n"
-                "The screen will rotate to the new orientation and the system will "
-                "reboot now. Continue?"
+                txt("rot_apply_reboot_title"),
+                txt("rot_apply_reboot_msg")
             ):
                 self.refresh_screens()  # reset the preview to the real orientation
                 return
@@ -390,7 +398,7 @@ class RotationView(ctk.CTkFrame):
             sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
             busy.geometry(f"{bw}x{bh}+{(sw - bw) // 2}+{(sh - bh) // 2}")
             busy.configure(fg_color="#18181b")
-            ctk.CTkLabel(busy, text="Applying rotation & rebooting…",
+            ctk.CTkLabel(busy, text=txt("rot_applying_reboot"),
                          font=("Roboto", 22, "bold"), text_color="white").pack(expand=True)
             # Let the message paint, then rotate + write the rule + reboot.
             self.after(500, lambda: subprocess.run(f"{cmd_rot} && sudo reboot", shell=True))
@@ -402,14 +410,18 @@ class RotationView(ctk.CTkFrame):
         cmd = f"{sys.executable} {self.rotation_script} {curr_mode} {curr_name} None 2"
 
         def on_done():
-            if messagebox.askyesno("Save Settings", "Do you want to save these settings permanently?"):
+            if messagebox.askyesno(txt("rot_save_settings_title"), txt("rot_save_settings_msg")):
                 self.do_save()
             else:
                 self.refresh_screens()
 
-        ServiceUtils.run_bash_script(self, cmd, f"Applying {curr_name}", on_close=on_done)
+        ServiceUtils.run_bash_script(self, cmd, f"{txt('rot_apply')} {curr_name}", on_close=on_done)
 
     def do_save(self):
+        l = getattr(self.controller, "lang", "en")
+        texts = getattr(self.controller, "texts", {})
+        def txt(k): return texts.get(k, {}).get(l, k)
+
         config = self._write_config()
 
         curr_name = self.monitors[self.current_idx]['name']
@@ -422,9 +434,9 @@ class RotationView(ctk.CTkFrame):
         if self._config_has_touch(config):
             # A touch mapping exists; its udev rule only loads at boot, so apply
             # the rotation now for feedback and then reboot to load the mapping.
-            ServiceUtils.run_bash_script(self, cmd, f"Saving {curr_name}", on_close=self._reboot_to_apply)
+            ServiceUtils.run_bash_script(self, cmd, f"{txt('rot_saved_title')} {curr_name}", on_close=self._reboot_to_apply)
         else:
-            ServiceUtils.run_bash_script(self, cmd, f"Saving {curr_name}", on_close=self.refresh_screens)
+            ServiceUtils.run_bash_script(self, cmd, f"{txt('rot_saved_title')} {curr_name}", on_close=self.refresh_screens)
 
 
     def load_config(self):
@@ -441,4 +453,31 @@ class RotationView(ctk.CTkFrame):
         if target_idx >= len(self.monitors): target_idx = 0
         self.switch_screen(target_idx)
 
-    def update_texts(self): pass
+    def update_rotation_ui(self):
+        l = getattr(self.controller, "lang", "en")
+        texts = getattr(self.controller, "texts", {})
+        def txt(k): return texts.get(k, {}).get(l, k)
+
+        name = self.monitors[self.current_idx]['name']
+        display_deg = self.screen_data[name]['visual_rotation'] % 360
+        self.lbl_rot_preview.configure(text=txt("rot_angle").format(display_deg))
+
+    def update_texts(self):
+        l = getattr(self.controller, "lang", "en")
+        texts = getattr(self.controller, "texts", {})
+        def txt(k): return texts.get(k, {}).get(l, k)
+
+        self.lbl_title.configure(text=txt("rot_header"))
+        self.check_primary.configure(text=txt("rot_primary"))
+        self.check_touch.configure(text=txt("rot_has_touch"))
+        self.lbl_assign_touch.configure(text=txt("rot_assign_touch"))
+        self.btn_apply.configure(text=txt("rot_apply"))
+        self.btn_identify.configure(text=txt("rot_identify"))
+
+        # Update screen labels
+        for i, label in enumerate(self.screen_labels):
+            mon = self.monitors[i]
+            label.configure(text=f"{txt('rot_screen')} {i+1}\n({mon['name']})")
+
+        # Update rotation preview
+        self.update_rotation_ui()
