@@ -136,5 +136,11 @@
   "rot_apply_reboot_title": {"de": "Anwenden & Neustarten", "en": "Apply & reboot"},
   "rot_apply_reboot_msg": {"de": "Die Touchscreen-Zuordnung wird erst nach einem Neustart wirksam.\n\nDer Bildschirm wird gedreht und das System jetzt neu gestartet. Fortfahren?", "en": "The touchscreen mapping only takes effect after a reboot.\n\nThe screen will rotate to the new orientation and the system will reboot now. Continue?"},
   "rot_save_settings_title": {"de": "Einstellungen speichern", "en": "Save Settings"},
-  "rot_save_settings_msg": {"de": "Möchtest du diese Einstellungen dauerhaft speichern?", "en": "Do you want to save these settings permanently?"}
+  "rot_save_settings_msg": {"de": "Möchtest du diese Einstellungen dauerhaft speichern?", "en": "Do you want to save these settings permanently?"},
+  "btn_usb": {"de": "USB BANDBREITE", "en": "USB BANDWIDTH"},
+  "usb_header": {"de": "USB Bandbreiten-Meter", "en": "USB Bandwidth Meter"},
+  "desc_usb": {
+    "de": "Analysiere deine USB-Controller auf Überlastung durch Kameras, um Verbindungsfehler und Frame-Drops zu vermeiden.",
+    "en": "Analyze your USB controllers for camera overload to prevent connection errors and dropped frames."
+  }
 }

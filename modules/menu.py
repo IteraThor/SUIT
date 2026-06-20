@@ -24,6 +24,7 @@ class MainMenu(ctk.CTkFrame):
         self._make_tile(self.controller.show_kiosk, "btn_kiosk", "🖥️", 2, 0)
         self._make_tile(self.controller.show_touch, "btn_touch", "📱", 2, 1)
         self._make_tile(self.controller.show_iterathor, "btn_iterathor", "🐧", 3, 0)
+        self._make_tile(self.controller.show_usb, "btn_usb", "🔌", 3, 1)
         
         # --- EXPERIMENTAL INFO ---
         self.lbl_exp = ctk.CTkLabel(self, text="", 
@@ -88,7 +89,7 @@ class MainMenu(ctk.CTkFrame):
             self.lbl_title.configure(text=self.texts.get("menu_title", {}).get(l, ""))
             
             # Update Tiles with Emojis
-            keys = ["btn_autodarts", "btn_autoglow", "btn_kiosk", "btn_touch", "btn_iterathor"]
+            keys = ["btn_autodarts", "btn_autoglow", "btn_kiosk", "btn_touch", "btn_iterathor", "btn_usb"]
             for key in keys:
                 btn = getattr(self, f"_{key}")
                 emoji = getattr(self, f"_{key}_emoji")
