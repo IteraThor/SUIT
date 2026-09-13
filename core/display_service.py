@@ -279,6 +279,13 @@ class DisplayService:
             if not touch_device_name or touch_device_name == "None" or not matrix_str:
                 subprocess.run(["sudo", "-n", "rm", "-f", UDEV_RULE_PATH], capture_output=True, check=True)
                 subprocess.run(["sudo", "-n", "udevadm", "control", "--reload-rules"], capture_output=True, check=True)
+                # Trigger input subsystem re-evaluation so stale LIBINPUT_CALIBRATION_MATRIX
+                # entries in /run/udev/data/ are cleared for already-connected devices.
+                subprocess.run(
+                    ["sudo", "-n", "udevadm", "trigger", "--subsystem-match=input"],
+                    capture_output=True,
+                    check=True,
+                )
                 logger.info("Cleared touch calibration udev rule")
                 return True
 
@@ -360,10 +367,15 @@ class DisplayService:
         cls,
         touch_device_name: str,
         connector_name: str,
-        rotation_int: int | None = None
+        rotation_int: int | None = None,
+        prev_touch_device_name: str | None = None
     ) -> bool:
         if not touch_device_name or touch_device_name == "None":
             cls.write_udev_rule(None, None)
+            # Rebind the previously active touch device (if any) so libinput
+            # reloads its property set without the now-deleted calibration matrix.
+            if prev_touch_device_name and prev_touch_device_name not in ("None", "", None):
+                cls.rebind_usb_touch(prev_touch_device_name)
             return True
 
         state = cls.get_current_mutter_state()
@@ -486,7 +498,8 @@ Comment=Maintain screen and touch rotation on boot
         rotation_int: int,
         touch_device_name: str | None = None,
         method: int = 1,
-        persist: bool = True
+        persist: bool = True,
+        prev_touch_device_name: str | None = None
     ) -> bool:
         logger.info(f"Applying display rotation ({rotation_int}) and touch ({touch_device_name}) to {connector_name} (persist={persist})")
 
@@ -495,7 +508,12 @@ Comment=Maintain screen and touch rotation on boot
         if touch_dev:
             cls.apply_touch_calibration(touch_dev, connector_name, rotation_int=rotation_int)
         else:
-            cls.write_udev_rule(None, None)
+            # Pass the previously active device so its USB bus gets rebound after
+            # the rule is cleared, flushing any stale in-memory calibration matrix.
+            cls.apply_touch_calibration(
+                None, connector_name,
+                prev_touch_device_name=prev_touch_device_name
+            )
 
         # 2. Then rotate display via Mutter DBus
         rot_ok = cls.apply_rotation(connector_name, rotation_int, method=method)
