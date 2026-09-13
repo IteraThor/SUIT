@@ -528,8 +528,11 @@ Comment=Maintain screen and touch rotation on boot
         touch_dev = touch_device_name if touch_device_name != "None" else None
         rebind_dev = touch_dev or prev_touch_device_name  # device whose calibration needs refresh
 
-        # 1. Write udev rule with new calibration matrix (does NOT yet affect libinput)
-        if touch_dev:
+        # 1. Write udev rule with new calibration matrix (does NOT yet affect libinput).
+        #    At 0° (normal), clear any existing rule so libinput uses its native default.
+        #    Writing an explicit identity matrix can interfere with the system's own
+        #    default touch mapping and leave the device in a miscalibrated state.
+        if touch_dev and normalize_rotation(rotation_int) != 0:
             state = cls.get_current_mutter_state()
             if state:
                 serial, monitors, logical_monitors, properties = state
