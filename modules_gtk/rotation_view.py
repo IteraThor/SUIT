@@ -162,7 +162,13 @@ class RotationView(Adw.NavigationPage):
             if name not in self.staged_rotations:
                 self.staged_rotations[name] = saved_rot
             if name not in self.staged_touch:
-                self.staged_touch[name] = saved_touch
+                # Auto-select the only touchscreen when none is configured yet.
+                # Prevents "screen rotated but touch didn't" when the user hasn't
+                # manually assigned a device before hitting Apply.
+                if saved_touch in ("None", "", None) and len(touchscreens) == 1:
+                    self.staged_touch[name] = touchscreens[0]
+                else:
+                    self.staged_touch[name] = saved_touch
 
             current_staged_rot = self.staged_rotations[name]
 
