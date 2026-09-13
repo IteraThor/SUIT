@@ -492,6 +492,87 @@ Comment=Maintain screen and touch rotation on boot
             return False
 
     @classmethod
+    def write_monitors_xml(
+        cls,
+        connector_name: str,
+        rotation_int: int,
+        xml_path: Path | None = None
+    ) -> bool:
+        """Write ~/.config/monitors.xml directly so GNOME Mutter boots natively in this rotation."""
+        target = xml_path or (Path.home() / ".config" / "monitors.xml")
+        state = cls.get_current_mutter_state()
+        if not state:
+            return False
+
+        serial, monitors, logical_monitors, properties = state
+        rot_map = {0: "normal", 1: "left", 2: "upside_down", 3: "right"}
+        target_rot_val = normalize_rotation(rotation_int)
+        rot_str = rot_map.get(target_rot_val, "normal")
+
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            lines = [
+                '<monitors version="2">',
+                '  <configuration>',
+                '    <layoutmode>logical</layoutmode>'
+            ]
+
+            for lm in logical_monitors:
+                x, y, scale, trans, is_primary, phys_monitors = lm[:6]
+                for pm in phys_monitors:
+                    p_name = pm[0]
+                    p_vendor, p_prod, p_serial = "unknown", "unknown", "unknown"
+                    mode_w, mode_h, mode_rate = 1920, 1080, 60.0
+                    for m_info in monitors:
+                        if m_info[0][0] == p_name:
+                            p_vendor, p_prod, p_serial = m_info[0][1], m_info[0][2], m_info[0][3]
+                            for mode in m_info[1]:
+                                if "is-current" in mode[6]:
+                                    mode_w = int(mode[1])
+                                    mode_h = int(mode[2])
+                                    mode_rate = float(mode[3])
+                                    break
+
+                    eff_rot = rot_str if p_name == connector_name else rot_map.get(int(trans), "normal")
+                    lines.extend([
+                        '    <logicalmonitor>',
+                        f'      <x>{int(x)}</x>',
+                        f'      <y>{int(y)}</y>',
+                        f'      <scale>{scale}</scale>',
+                        f'      <primary>{"yes" if is_primary else "no"}</primary>',
+                        '      <transform>',
+                        f'        <rotation>{eff_rot}</rotation>',
+                        '        <flipped>no</flipped>',
+                        '      </transform>',
+                        '      <monitor>',
+                        '        <monitorspec>',
+                        f'          <connector>{p_name}</connector>',
+                        f'          <vendor>{p_vendor}</vendor>',
+                        f'          <product>{p_prod}</product>',
+                        f'          <serial>{p_serial}</serial>',
+                        '        </monitorspec>',
+                        '        <mode>',
+                        f'          <width>{mode_w}</width>',
+                        f'          <height>{mode_h}</height>',
+                        f'          <rate>{mode_rate:.3f}</rate>',
+                        '        </mode>',
+                        '      </monitor>',
+                        '    </logicalmonitor>'
+                    ])
+
+            lines.extend([
+                '  </configuration>',
+                '</monitors>\n'
+            ])
+
+            target.write_text("\n".join(lines), encoding="utf-8")
+            logger.info(f"Wrote persistent monitors.xml for {connector_name} (rotation: {rot_str})")
+            return True
+        except Exception:
+            logger.exception("Failed writing monitors.xml")
+            return False
+
+    @classmethod
     def persist_display_config(
         cls,
         connector_name: str,
@@ -501,16 +582,19 @@ Comment=Maintain screen and touch rotation on boot
         autostart_path: Path | None = None
     ) -> bool:
         """Persist confirmed display orientation and touch device to configuration and Mutter."""
-        # 1. Ensure Mutter permanently saves this orientation to ~/.config/monitors.xml
-        cls.apply_rotation(connector_name, rotation_int, method=1)
+        # 1. Write ~/.config/monitors.xml so Mutter loads this orientation on boot
+        cls.write_monitors_xml(connector_name, rotation_int)
 
-        # 2. Update touch calibration rule for the confirmed rotation
+        # 2. Tell Mutter via DBus to apply persistently (method=2)
+        cls.apply_rotation(connector_name, rotation_int, method=2)
+
+        # 3. Update touch calibration rule for the confirmed rotation
         if touch_device_name and touch_device_name != "None":
             cls.apply_touch_calibration(touch_device_name, connector_name, rotation_int=rotation_int)
         else:
             cls.write_udev_rule(None, None)
 
-        # 3. Save to SUIT configuration and ensure autostart
+        # 4. Save to SUIT configuration and ensure autostart
         config = cls.load_config(config_path=config_path)
         config[connector_name] = {
             "rotation": int(rotation_int),
@@ -535,8 +619,6 @@ Comment=Maintain screen and touch rotation on boot
 
         # 1. Write udev rule with new calibration matrix (does NOT yet affect libinput).
         #    At 0° (normal), clear any existing rule so libinput uses its native default.
-        #    Writing an explicit identity matrix can interfere with the system's own
-        #    default touch mapping and leave the device in a miscalibrated state.
         if touch_dev and normalize_rotation(rotation_int) != 0:
             state = cls.get_current_mutter_state()
             if state:
@@ -550,8 +632,8 @@ Comment=Maintain screen and touch rotation on boot
         else:
             cls.write_udev_rule(None, None)
 
-        # 2. Rotate display via Mutter DBus
-        actual_method = method if method is not None else (1 if persist else 2)
+        # 2. Rotate display via Mutter DBus (method 1=temporary, 2=persistent)
+        actual_method = method if method is not None else (2 if persist else 1)
         rot_ok = cls.apply_rotation(connector_name, rotation_int, method=actual_method)
 
         # 3. USB rebind — forces libinput to close+reopen the device so it picks
@@ -577,6 +659,7 @@ Comment=Maintain screen and touch rotation on boot
         """Remove SUIT rotation configuration, autostart entries, and touch calibration rules."""
         cfg_target = config_path or DEFAULT_CONFIG_PATH
         auto_target = autostart_path or DEFAULT_AUTOSTART_PATH
+        mon_xml = Path.home() / ".config" / "monitors.xml"
         success = True
 
         try:
@@ -593,6 +676,14 @@ Comment=Maintain screen and touch rotation on boot
                 logger.info(f"Removed rotation autostart: {auto_target}")
         except Exception:
             logger.exception(f"Failed removing rotation autostart: {auto_target}")
+            success = False
+
+        try:
+            if mon_xml.exists():
+                mon_xml.unlink()
+                logger.info(f"Removed monitors.xml: {mon_xml}")
+        except Exception:
+            logger.exception(f"Failed removing monitors.xml: {mon_xml}")
             success = False
 
         if clear_udev:
@@ -640,24 +731,23 @@ Comment=Maintain screen and touch rotation on boot
                         break
             if current_rot is not None and current_rot != target_rot:
                 logger.info(f"Aligning {mon_name} from {current_rot} to {target_rot}")
-                cls.apply_rotation(mon_name, target_rot, method=1)
+                cls.apply_rotation(mon_name, target_rot, method=2)
                 needs_refresh = True
 
-        if needs_refresh:
-            time.sleep(0.5)
-
-        # Apply touch calibration for configured touch device
-        touch_applied = False
+        # Check if udev rule is in place without unbinding USB unless rule was missing
+        udev_path = Path(UDEV_RULE_PATH)
         for mon_name, settings in config.items():
             touch = settings.get("touch_device")
             target_rot = normalize_rotation(settings.get("rotation", 0))
-            if touch and touch != "None":
-                cls.apply_touch_calibration(touch, mon_name, rotation_int=target_rot)
-                touch_applied = True
-                break
-
-        if not touch_applied:
-            cls.write_udev_rule(None, None)
+            if touch and touch != "None" and target_rot != 0:
+                if not udev_path.exists():
+                    logger.info("Udev rule missing on boot; writing and rebinding")
+                    cls.apply_touch_calibration(touch, mon_name, rotation_int=target_rot)
+            else:
+                if udev_path.exists():
+                    logger.info("Udev rule found when none expected; clearing")
+                    cls.write_udev_rule(None, None)
+            break
 
         return True
 
