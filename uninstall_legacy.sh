@@ -40,15 +40,19 @@ done
 
 echo "[4/4] Removing legacy desktop launchers..."
 for desktop_dir in "$HOME/Desktop" "$HOME/Schreibtisch"; do
-    if [ -f "$desktop_dir/SUIT.desktop" ]; then
-        echo "  - Removing $desktop_dir/SUIT.desktop"
-        rm -f "$desktop_dir/SUIT.desktop"
+    for f in "SUIT.desktop" "de.iterathor.suit.gtk.desktop"; do
+        if [ -f "$desktop_dir/$f" ]; then
+            echo "  - Removing $desktop_dir/$f"
+            rm -f "$desktop_dir/$f"
+        fi
+    done
+done
+for f in "SUIT.desktop" "de.iterathor.suit.gtk.desktop"; do
+    if [ -f "$HOME/.local/share/applications/$f" ]; then
+        echo "  - Removing ~/.local/share/applications/$f"
+        rm -f "$HOME/.local/share/applications/$f"
     fi
 done
-if [ -f "$HOME/.local/share/applications/SUIT.desktop" ]; then
-    echo "  - Removing ~/.local/share/applications/SUIT.desktop"
-    rm -f "$HOME/.local/share/applications/SUIT.desktop"
-fi
 
 echo "========================================="
 echo "Legacy SUIT cleanup completed successfully!"
