@@ -93,51 +93,68 @@ class KioskView(Adw.NavigationPage):
         grp_ext.add(self.row_ext)
 
         # 3. Dartboard Lighting Group
-        grp_light = Adw.PreferencesGroup(
-            title="Dartboard Lighting",
-            description="Control WLED or smart plug illumination directly from the in-game popover menu."
-        )
+        grp_light = Adw.PreferencesGroup(title="Dartboard Lighting")
         main_box.append(grp_light)
 
-        # Enable switch
-        self.row_light_enable = Adw.SwitchRow(
-            title="Dartboard Light Button",
-            subtitle="Show light toggle button inside the in-game kiosk popover."
+        # Compact expander row for light controls
+        self.expander_light = Adw.ExpanderRow(
+            title="Dartboard Light Controls"
         )
         img_light = Gtk.Image.new_from_icon_name("display-brightness-symbolic")
         img_light.set_pixel_size(24)
-        self.row_light_enable.add_prefix(img_light)
-        self.row_light_enable.connect("notify::active", self._on_light_enable_toggled)
-        grp_light.add(self.row_light_enable)
+        self.expander_light.add_prefix(img_light)
+
+        self.switch_light = Gtk.Switch()
+        self.switch_light.set_valign(Gtk.Align.CENTER)
+        self.switch_light.connect("notify::active", self._on_light_enable_toggled)
+        self.expander_light.add_suffix(self.switch_light)
+
+        # Alias for backwards compatibility with tests and callers
+        self.row_light_enable = self.switch_light
 
         # Device Type combo row
-        self.light_type_options = ["WLED (HTTP API)", "Smart Plug (HTTP / Tasmota / Shelly - Placeholder)"]
+        self.light_type_options = [
+            "WLED (HTTP)",
+            "Tasmota (HTTP)",
+            "Shelly (HTTP)"
+        ]
         self.light_type_model = Gtk.StringList.new(self.light_type_options)
         self.row_light_type = Adw.ComboRow(
             title="Device Type",
-            subtitle="WLED controllers use direct HTTP JSON API (/json/state).",
             model=self.light_type_model
         )
         self.row_light_type.connect("notify::selected-item", self._on_light_type_changed)
-        grp_light.add(self.row_light_type)
+        self.expander_light.add_row(self.row_light_type)
 
-        # IP Entry row
+        # IP Entry row with docked Turn ON / Turn OFF test buttons
         self.row_light_ip = Adw.EntryRow(title="Device IP Address")
         self.row_light_ip.connect("notify::text", self._on_light_ip_changed)
-        grp_light.add(self.row_light_ip)
 
-        # Test Connection action row
-        self.row_light_test = Adw.ActionRow(
-            title="Test Connection",
-            subtitle="Verify network reachability and controller response."
-        )
-        self.btn_light_test = Gtk.Button(label="Test Connection")
-        self.btn_light_test.set_valign(Gtk.Align.CENTER)
-        self.btn_light_test.add_css_class("suggested-action")
-        self.btn_light_test.set_size_request(140, 38)
-        self.btn_light_test.connect("clicked", self._on_light_test_clicked)
-        self.row_light_test.add_suffix(self.btn_light_test)
-        grp_light.add(self.row_light_test)
+        box_test_btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        box_test_btns.set_valign(Gtk.Align.CENTER)
+
+        self.btn_light_on = Gtk.Button(label="Turn ON")
+        self.btn_light_on.add_css_class("suggested-action")
+        self.btn_light_on.set_size_request(80, 36)
+        self.btn_light_on.set_valign(Gtk.Align.CENTER)
+        self.btn_light_on.connect("clicked", lambda b: self._test_light_power(True))
+        box_test_btns.append(self.btn_light_on)
+
+        self.btn_light_off = Gtk.Button(label="Turn OFF")
+        self.btn_light_off.add_css_class("secondary-btn")
+        self.btn_light_off.set_size_request(80, 36)
+        self.btn_light_off.set_valign(Gtk.Align.CENTER)
+        self.btn_light_off.connect("clicked", lambda b: self._test_light_power(False))
+        box_test_btns.append(self.btn_light_off)
+
+        # Aliases for backwards compatibility with tests
+        self.btn_light_test = self.btn_light_on
+        self.row_light_test = self.expander_light
+
+        self.row_light_ip.add_suffix(box_test_btns)
+        self.expander_light.add_row(self.row_light_ip)
+
+        grp_light.add(self.expander_light)
 
         self.connect("map", lambda w: self.refresh())
 
@@ -167,12 +184,19 @@ class KioskView(Adw.NavigationPage):
         cfg = LightService.read_config()
         self._loading_light_config = True
         try:
-            self.row_light_enable.set_active(cfg.get("light_enabled", False))
+            enabled = cfg.get("light_enabled", False)
+            self.row_light_enable.set_active(enabled)
+            self.expander_light.set_enable_expansion(enabled)
+            self.expander_light.set_expanded(enabled)
             dev_type = cfg.get("light_device_type", "wled")
-            sel_type = 0 if dev_type == "wled" else 1
+            sel_type = 0
+            if dev_type in ("tasmota", "smart_plug"):
+                sel_type = 1
+            elif dev_type == "shelly":
+                sel_type = 2
             self.row_light_type.set_selected(sel_type)
             self.row_light_ip.set_text(cfg.get("light_ip", ""))
-            self._update_light_ui_sensitivity(cfg.get("light_enabled", False))
+            self._update_light_ui_sensitivity(enabled)
         finally:
             self._loading_light_config = False
 
@@ -180,25 +204,24 @@ class KioskView(Adw.NavigationPage):
         self.row_light_type.set_sensitive(enabled)
         self.row_light_ip.set_sensitive(enabled)
         self.row_light_test.set_sensitive(enabled)
-        self.btn_light_test.set_sensitive(enabled)
-        sel_idx = self.row_light_type.get_selected()
-        if sel_idx == 0:
-            self.row_light_type.set_subtitle("WLED controllers use direct HTTP JSON API (/json/state).")
-        else:
-            self.row_light_type.set_subtitle("Placeholder support for Shelly (/relay/0) and Tasmota (/cm).")
+        self.btn_light_on.set_sensitive(enabled)
+        self.btn_light_off.set_sensitive(enabled)
 
     def _save_light_settings(self):
         if getattr(self, "_loading_light_config", False):
             return
         enabled = self.row_light_enable.get_active()
         sel_idx = self.row_light_type.get_selected()
-        dev_type = "wled" if sel_idx == 0 else "smart_plug"
+        type_keys = ["wled", "tasmota", "shelly"]
+        dev_type = type_keys[sel_idx] if 0 <= sel_idx < len(type_keys) else "wled"
         ip = self.row_light_ip.get_text().strip()
         LightService.save_config(enabled=enabled, device_type=dev_type, ip=ip)
         KioskService.sync_extension_files()
 
     def _on_light_enable_toggled(self, row, param):
         enabled = row.get_active()
+        self.expander_light.set_enable_expansion(enabled)
+        self.expander_light.set_expanded(enabled)
         self._update_light_ui_sensitivity(enabled)
         self._save_light_settings()
         if not getattr(self, "_loading_light_config", False):
@@ -206,36 +229,40 @@ class KioskView(Adw.NavigationPage):
             self.window.show_toast(msg)
 
     def _on_light_type_changed(self, row, param):
-        sel_idx = row.get_selected()
-        if sel_idx == 0:
-            row.set_subtitle("WLED controllers use direct HTTP JSON API (/json/state).")
-        else:
-            row.set_subtitle("Placeholder support for Shelly (/relay/0) and Tasmota (/cm).")
         self._save_light_settings()
 
     def _on_light_ip_changed(self, row, param):
         self._save_light_settings()
 
-    def _on_light_test_clicked(self, btn):
+    def _test_light_power(self, target_on: bool):
         ip = self.row_light_ip.get_text().strip()
         if not ip:
             self.window.show_toast("Please enter a device IP address first.")
             return
 
         sel_idx = self.row_light_type.get_selected()
-        dev_type = "wled" if sel_idx == 0 else "smart_plug"
+        type_keys = ["wled", "tasmota", "shelly"]
+        dev_type = type_keys[sel_idx] if 0 <= sel_idx < len(type_keys) else "wled"
 
-        btn.set_sensitive(False)
-        self.row_light_test.set_subtitle("Testing connection...")
+        self.btn_light_on.set_sensitive(False)
+        self.btn_light_off.set_sensitive(False)
+        action_name = "ON" if target_on else "OFF"
+        self.row_light_test.set_subtitle(f"Sending power {action_name} command...")
 
         def worker():
-            return LightService.test_connection(ip, device_type=dev_type)
+            return LightService.set_power(target_on, config={"light_ip": ip, "light_device_type": dev_type, "light_port": 80})
 
         def on_done(res):
-            btn.set_sensitive(True)
-            ok, msg = res
-            self.row_light_test.set_subtitle(msg)
-            self.window.show_toast(msg)
+            self.btn_light_on.set_sensitive(True)
+            self.btn_light_off.set_sensitive(True)
+            ok, is_on, msg = res
+            if ok:
+                state_str = "ON" if is_on else "OFF"
+                self.row_light_test.set_subtitle(f"Connected: Light is currently {state_str}")
+                self.window.show_toast(f"Dartboard light turned {state_str}")
+            else:
+                self.row_light_test.set_subtitle(f"Error: {msg}")
+                self.window.show_toast(f"Error: {msg}")
 
         run_async(worker, on_done=on_done)
 
