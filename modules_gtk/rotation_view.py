@@ -345,7 +345,8 @@ class RotationView(Adw.NavigationPage):
 
             def revert_worker():
                 return DisplayService.apply_display_and_touch(
-                    connector, prev_rot, prev_touch, persist=True
+                    connector, prev_rot, prev_touch, persist=True,
+                    prev_touch_device_name=target_touch
                 )
 
             def on_revert_done(ok):
@@ -441,7 +442,8 @@ class RotationView(Adw.NavigationPage):
         def worker():
             # Apply with persist=False so unexpected power loss / reboot restores previous settings
             return DisplayService.apply_display_and_touch(
-                connector, target_rot, target_touch, persist=False
+                connector, target_rot, target_touch, persist=False,
+                prev_touch_device_name=prev_touch
             )
 
         def on_done(ok):
