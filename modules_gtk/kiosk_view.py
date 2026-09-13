@@ -68,7 +68,7 @@ class KioskView(Adw.NavigationPage):
         # 2. Browser Integration Group
         grp_ext = Adw.PreferencesGroup(
             title="Browser Integration",
-            description="Adds power, restart, and exit buttons directly into the Autodarts web interface in Chromium."
+            description="Adds controls and illumination toggles directly into the Autodarts web interface in Chromium."
         )
         main_box.append(grp_ext)
 
@@ -92,11 +92,7 @@ class KioskView(Adw.NavigationPage):
         self.row_ext.add_suffix(self.btn_ext_toggle)
         grp_ext.add(self.row_ext)
 
-        # 3. Dartboard Lighting Group
-        grp_light = Adw.PreferencesGroup(title="Dartboard Lighting")
-        main_box.append(grp_light)
-
-        # Compact expander row for light controls
+        # Compact expander row for light controls inside Browser Integration
         self.expander_light = Adw.ExpanderRow(
             title="Dartboard Light Controls"
         )
@@ -112,23 +108,20 @@ class KioskView(Adw.NavigationPage):
         # Alias for backwards compatibility with tests and callers
         self.row_light_enable = self.switch_light
 
-        # Device Type combo row
-        self.light_type_options = [
-            "WLED (HTTP)",
-            "Tasmota (HTTP)",
-            "Shelly (HTTP)"
-        ]
-        self.light_type_model = Gtk.StringList.new(self.light_type_options)
-        self.row_light_type = Adw.ComboRow(
-            title="Device Type",
-            model=self.light_type_model
-        )
-        self.row_light_type.connect("notify::selected-item", self._on_light_type_changed)
-        self.expander_light.add_row(self.row_light_type)
-
-        # IP Entry row with docked Turn ON / Turn OFF test buttons
-        self.row_light_ip = Adw.EntryRow(title="Device IP Address")
+        # Single unified sub-row: Type DropDown + IP Entry + ON/OFF test buttons
+        self.row_light_ip = Adw.EntryRow(title="IP Address")
         self.row_light_ip.connect("notify::text", self._on_light_ip_changed)
+
+        self.light_type_options = [
+            "WLED",
+            "Tasmota",
+            "Shelly"
+        ]
+        self.row_light_type = Gtk.DropDown.new_from_strings(self.light_type_options)
+        self.row_light_type.set_valign(Gtk.Align.CENTER)
+        self.row_light_type.set_margin_end(6)
+        self.row_light_type.connect("notify::selected", self._on_light_type_changed)
+        self.row_light_ip.add_prefix(self.row_light_type)
 
         box_test_btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         box_test_btns.set_valign(Gtk.Align.CENTER)
@@ -154,7 +147,7 @@ class KioskView(Adw.NavigationPage):
         self.row_light_ip.add_suffix(box_test_btns)
         self.expander_light.add_row(self.row_light_ip)
 
-        grp_light.add(self.expander_light)
+        grp_ext.add(self.expander_light)
 
         self.connect("map", lambda w: self.refresh())
 
