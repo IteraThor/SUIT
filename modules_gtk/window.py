@@ -15,11 +15,20 @@ logger = get_logger("window")
 class SuitWindow(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="SUIT for Fedora")
-        self.set_icon_name("de.iterathor.suit.gtk")
         self.set_default_size(1020, 820)
         self.set_size_request(480, 600)
 
         self.project_dir = Path(__file__).resolve().parent.parent
+
+        # Register custom icons directory
+        icons_dir = self.project_dir / "assets" / "icons"
+        if icons_dir.exists():
+            display = Gdk.Display.get_default()
+            if display:
+                icon_theme = Gtk.IconTheme.get_for_display(display)
+                icon_theme.add_search_path(str(icons_dir))
+
+        self.set_icon_name("de.iterathor.suit.gtk")
 
         # Load Touchscreen Optimized CSS
         css_file = self.project_dir / "style_gtk.css"
@@ -34,14 +43,6 @@ class SuitWindow(Adw.ApplicationWindow):
                     )
             except Exception:
                 logger.exception("Error loading style_gtk.css")
-
-        # Register custom symbolic icons directory
-        icons_dir = self.project_dir / "assets" / "icons"
-        if icons_dir.exists():
-            display = Gdk.Display.get_default()
-            if display:
-                icon_theme = Gtk.IconTheme.get_for_display(display)
-                icon_theme.add_search_path(str(icons_dir))
 
         # Toast Overlay (for modern, non-intrusive touch feedback)
         self.toast_overlay = Adw.ToastOverlay()
