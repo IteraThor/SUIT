@@ -33,9 +33,9 @@ def get_rotation_matrix(rotation_int: int | str) -> str:
     rot_val = normalize_rotation(rotation_int)
     matrices = {
         0: "1 0 0 0 1 0 0 0 1",       # Normal (0)
-        1: "0 1 0 -1 0 1 0 0 1",      # Right (90)
+        1: "0 -1 1 1 0 0 0 0 1",      # Right (90)
         2: "-1 0 1 0 -1 1 0 0 1",     # Inverted (180)
-        3: "0 -1 1 1 0 0 0 0 1"       # Left (270)
+        3: "0 1 0 -1 0 1 0 0 1"       # Left (270)
     }
     return matrices.get(rot_val, matrices[0])
 
@@ -98,13 +98,13 @@ def calculate_affine_matrix(
     wf, hf = float(w) / float(total_w), float(h) / float(total_h)
     xf, yf = float(x) / float(total_w), float(y) / float(total_h)
 
-    # Libinput rotation matrices (Mutter: 1=90 CW, 2=180, 3=270 CW)
-    if trans == 1:   # screen 90 CW (right 90) -> rotate touch 90 CCW
-        rot = [0, 1, 0, -1, 0, 1, 0, 0, 1]
+    # Libinput rotation matrices (Mutter: 1=90 Right, 2=180, 3=270 Left)
+    if trans == 1:   # screen 90 Right -> touch matrix for Right
+        rot = [0, -1, 1, 1, 0, 0, 0, 0, 1]
     elif trans == 2: # screen 180 (inverted)   -> 180 (self-inverse)
         rot = [-1, 0, 1, 0, -1, 1, 0, 0, 1]
-    elif trans == 3: # screen 270 CW (left 270) -> rotate touch 90 CW
-        rot = [0, -1, 1, 1, 0, 0, 0, 0, 1]
+    elif trans == 3: # screen 270 Left -> touch matrix for Left
+        rot = [0, 1, 0, -1, 0, 1, 0, 0, 1]
     else:            # Normal (0) / default
         rot = [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
