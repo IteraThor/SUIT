@@ -350,9 +350,11 @@ class RotationView(Adw.NavigationPage):
             self.window.show_toast(f"Reverting display orientation for {connector}...")
 
             def revert_worker():
+                kwargs = {"persist": True}
+                if target_touch and target_touch != "None":
+                    kwargs["prev_touch_device_name"] = target_touch
                 return DisplayService.apply_display_and_touch(
-                    connector, prev_rot, prev_touch, persist=True,
-                    prev_touch_device_name=target_touch
+                    connector, prev_rot, prev_touch, **kwargs
                 )
 
             def on_revert_done(ok):
@@ -447,9 +449,11 @@ class RotationView(Adw.NavigationPage):
 
         def worker():
             # Apply with persist=False so unexpected power loss / reboot restores previous settings
+            kwargs = {"persist": False}
+            if prev_touch and prev_touch != "None":
+                kwargs["prev_touch_device_name"] = prev_touch
             return DisplayService.apply_display_and_touch(
-                connector, target_rot, target_touch, persist=False,
-                prev_touch_device_name=prev_touch
+                connector, target_rot, target_touch, **kwargs
             )
 
         def on_done(ok):
