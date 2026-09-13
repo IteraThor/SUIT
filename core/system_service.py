@@ -286,6 +286,10 @@ class SystemService:
         return DesktopService.is_dark_mode_enabled()
 
     @staticmethod
+    def is_suit_wallpaper_set() -> bool:
+        return DesktopService.is_suit_wallpaper_set()
+
+    @staticmethod
     def is_map_wallpaper_set() -> bool:
         return DesktopService.is_map_wallpaper_set()
 

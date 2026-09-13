@@ -273,9 +273,39 @@ class KioskService:
         return flags
 
     @classmethod
+    def clean_stale_singleton_locks(cls) -> None:
+        """Safely removes stale Singleton lock files from browser config directories."""
+        for name in ["chromium", "google-chrome", "BraveSoftware/Brave-Browser"]:
+            pdir = Path.home() / ".config" / name
+            if pdir.exists():
+                for lock in pdir.glob("Singleton*"):
+                    try:
+                        lock.unlink(missing_ok=True)
+                        logger.debug(f"Removed stale lock: {lock}")
+                    except Exception as e:
+                        logger.debug(f"Failed removing {lock}: {e}")
+
+    @classmethod
+    def ensure_launcher_script(cls) -> Path:
+        bin_dir = Path.home() / ".local" / "share" / "suit" / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        script_path = bin_dir / "launch-kiosk.sh"
+        content = """#!/usr/bin/env bash
+# SUIT Autodarts Kiosk Launcher
+# Remove stale lock files to ensure unattended boot never hangs after crash or hostname change
+rm -f "$HOME/.config/chromium/Singleton"* "$HOME/.config/google-chrome/Singleton"* 2>/dev/null
+
+exec "$@"
+"""
+        script_path.write_text(content, encoding="utf-8")
+        script_path.chmod(0o755)
+        return script_path
+
+    @classmethod
     def generate_desktop_entry(cls, url: str, browser: str = "chromium", enable_controls: bool = True) -> str:
+        launcher = cls.ensure_launcher_script()
         flags = cls.get_kiosk_flags(enable_controls=enable_controls)
-        cmd = f"{browser} {' '.join(flags)} '{url}'"
+        cmd = f'{launcher} {browser} {" ".join(flags)} "{url}"'
         return f"""[Desktop Entry]
 Type=Application
 Name=Autodarts Kiosk
@@ -283,6 +313,7 @@ Exec={cmd}
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5
 """
 
     @classmethod

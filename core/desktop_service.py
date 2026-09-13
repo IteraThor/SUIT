@@ -12,6 +12,9 @@ USER_EXTENSION_DIR = Path.home() / ".local" / "share" / "gnome-shell" / "extensi
 GTK4_CSS_PATH = Path.home() / ".config" / "gtk-4.0" / "gtk.css"
 GTK3_CSS_PATH = Path.home() / ".config" / "gtk-3.0" / "gtk.css"
 
+SUIT_WALLPAPER_ASSET = Path(__file__).resolve().parent.parent / "assets" / "wallpaper_stealth_grey_pattern_ultrasubtle.png"
+SUIT_WALLPAPER_INSTALLED = Path.home() / ".local" / "share" / "suit" / "wallpaper_stealth_grey_pattern_ultrasubtle.png"
+
 SUIT_TOUCH_MARKER_START = "/* --- SUIT TOUCH SCALING START --- */"
 SUIT_TOUCH_MARKER_END = "/* --- SUIT TOUCH SCALING END --- */"
 
@@ -52,7 +55,16 @@ class DesktopService:
             return False
 
     @staticmethod
+    def is_suit_wallpaper_set() -> bool:
+        try:
+            res = subprocess.run(["gsettings", "get", "org.gnome.desktop.background", "picture-uri-dark"], capture_output=True, text=True)
+            return "wallpaper_stealth_grey_pattern_ultrasubtle" in res.stdout
+        except Exception:
+            return False
+
+    @staticmethod
     def is_map_wallpaper_set() -> bool:
+        """Legacy check kept for backwards compatibility."""
         try:
             res = subprocess.run(["gsettings", "get", "org.gnome.desktop.background", "picture-uri-dark"], capture_output=True, text=True)
             return "map-d.svg" in res.stdout
@@ -228,9 +240,11 @@ class DesktopService:
 
     @classmethod
     def get_visuals_status(cls) -> dict:
-        dm = cls.is_dark_mode_enabled()
-        wp = cls.is_map_wallpaper_set()
-        grid = cls.is_system_app_folder_configured()
+        dm = getattr(cls, "is_dark_mode_enabled", DesktopService.is_dark_mode_enabled)()
+        is_suit = getattr(cls, "is_suit_wallpaper_set", DesktopService.is_suit_wallpaper_set)()
+        is_map = getattr(cls, "is_map_wallpaper_set", DesktopService.is_map_wallpaper_set)()
+        wp = is_suit or is_map
+        grid = getattr(cls, "is_system_app_folder_configured", DesktopService.is_system_app_folder_configured)()
         return {
             "dark_mode": dm,
             "wallpaper": wp,
@@ -241,9 +255,14 @@ class DesktopService:
     @classmethod
     def apply_desktop_visuals(cls) -> tuple[bool, str]:
         try:
-            # 1. Wallpaper
-            subprocess.run(["gsettings", "set", "org.gnome.desktop.background", "picture-uri", "'file:///usr/share/backgrounds/gnome/map-l.svg'"], check=False)
-            subprocess.run(["gsettings", "set", "org.gnome.desktop.background", "picture-uri-dark", "'file:///usr/share/backgrounds/gnome/map-d.svg'"], check=False)
+            # 1. Wallpaper — install bundled asset to stable user path, then apply
+            SUIT_WALLPAPER_INSTALLED.parent.mkdir(parents=True, exist_ok=True)
+            if SUIT_WALLPAPER_ASSET.exists():
+                shutil.copy2(str(SUIT_WALLPAPER_ASSET), str(SUIT_WALLPAPER_INSTALLED))
+            wallpaper_uri = f"'file://{SUIT_WALLPAPER_INSTALLED}'"
+            subprocess.run(["gsettings", "set", "org.gnome.desktop.background", "picture-uri", wallpaper_uri], check=False)
+            subprocess.run(["gsettings", "set", "org.gnome.desktop.background", "picture-uri-dark", wallpaper_uri], check=False)
+            subprocess.run(["gsettings", "set", "org.gnome.desktop.background", "picture-options", "'zoom'"], check=False)
 
             # 2. Dark mode
             subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "'prefer-dark'"], check=False)
