@@ -20,7 +20,6 @@ from core.camera_focus_service import CameraFocusService, FocusTrend, FocusAnaly
 from core.audio_tone_service import AudioToneService
 from core.autodarts_service import read_cam_config
 from core.systemd_service import SystemdService
-from core.usb_service import UsbService
 
 logger = get_logger("camera_focus_view")
 
@@ -39,7 +38,6 @@ class CameraFocusView(Adw.NavigationPage):
 
         self.current_step = 0  # 0: Cam 1, 1: Cam 2, 2: Cam 3
         self.configured_cams = ["/dev/video0", "/dev/video2", "/dev/video4"]
-        self.available_cams = []
         self.camera_results = [
             {"score": 0.0, "peak": 0.0, "snapshot": None},
             {"score": 0.0, "peak": 0.0, "snapshot": None},
@@ -133,12 +131,6 @@ class CameraFocusView(Adw.NavigationPage):
         )
         self.lbl_step_desc.add_css_class("dim-label")
         text_box.append(self.lbl_step_desc)
-
-        # Device path dropdown selector
-        self.device_combo = Gtk.DropDown()
-        self.device_combo.set_valign(Gtk.Align.CENTER)
-        self.device_combo.connect("notify::selected", self._on_device_combo_changed)
-        header_card.append(self.device_combo)
 
         # Audio mute toggle button (muted by default)
         self.btn_mute = Gtk.Button.new_from_icon_name("audio-volume-muted-symbolic")
@@ -377,9 +369,6 @@ class CameraFocusView(Adw.NavigationPage):
 
     def _on_init_completed(self, dev_path: str):
         """Called on main thread once background init finishes."""
-        self._populate_device_dropdown()
-        self._set_device_dropdown_active(dev_path)
-
         self.current_step = 0
         self._update_tab_buttons(0)
 
@@ -403,29 +392,6 @@ class CameraFocusView(Adw.NavigationPage):
                 except Exception:
                     logger.exception("Error restarting autodarts.service")
             threading.Thread(target=_bg_restore, daemon=True).start()
-
-    def _populate_device_dropdown(self):
-        """Fill the device dropdown with detected streaming cameras."""
-        try:
-            cams = UsbService.get_camera_devices()
-            self.available_cams = [c.get("dev_path", "") for c in cams if c.get("dev_path")]
-        except Exception:
-            self.available_cams = ["/dev/video0", "/dev/video2", "/dev/video4"]
-
-        if not self.available_cams:
-            self.available_cams = ["/dev/video0", "/dev/video2", "/dev/video4"]
-
-        model = Gtk.StringList.new(self.available_cams)
-        self.device_combo.set_model(model)
-
-    def _set_device_dropdown_active(self, dev_path: str):
-        """Set active item in dropdown matching device path."""
-        model = self.device_combo.get_model()
-        if model:
-            for i in range(model.get_n_items()):
-                if model.get_string(i) == dev_path:
-                    self.device_combo.set_selected(i)
-                    break
 
     def _update_tab_buttons(self, active_idx: int):
         """Update active style on camera tabs."""
@@ -454,7 +420,6 @@ class CameraFocusView(Adw.NavigationPage):
             if idx < len(self.configured_cams)
             else f"/dev/video{idx * 2}"
         )
-        self._set_device_dropdown_active(dev_path)
 
         # Show camera switching spinner overlay
         self.loading_lbl.set_label(f"Opening {cam_name} ({dev_path})...")
@@ -795,17 +760,3 @@ class CameraFocusView(Adw.NavigationPage):
         icon_name = "audio-volume-muted-symbolic" if muted else "audio-volume-high-symbolic"
         self.btn_mute.set_icon_name(icon_name)
         self.btn_mute.set_tooltip_text("Unmute Audio Tone" if muted else "Mute Audio Tone")
-
-    def _on_device_combo_changed(self, dropdown, param):
-        """Handle user changing active camera device path via dropdown."""
-        if self._is_switching_camera:
-            return
-        selected_idx = dropdown.get_selected()
-        model = dropdown.get_model()
-        if model and selected_idx < model.get_n_items():
-            dev = model.get_string(selected_idx)
-            if dev and dev != self.focus_service.current_device:
-                logger.info("Switching step %d to device %s", self.current_step, dev)
-                self._stop_capture_thread()
-                self.focus_service.start_camera(dev)
-                self._start_capture_thread()
