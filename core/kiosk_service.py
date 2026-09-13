@@ -312,10 +312,28 @@ exec "$@"
         return script_path
 
     @classmethod
+    def find_browser_binary(cls) -> str:
+        for candidate in ["chromium-browser", "chromium", "google-chrome", "brave-browser"]:
+            if shutil.which(candidate):
+                return candidate
+        return "chromium"
+
+    @classmethod
+    def resolve_browser(cls, browser: str | None = None) -> str:
+        if not browser:
+            return cls.find_browser_binary()
+        if not shutil.which(browser):
+            detected = cls.find_browser_binary()
+            if shutil.which(detected):
+                return detected
+        return browser
+
+    @classmethod
     def generate_desktop_entry(cls, url: str, browser: str = "chromium", enable_controls: bool = True) -> str:
         launcher = cls.ensure_launcher_script()
+        actual_browser = cls.resolve_browser(browser)
         flags = cls.get_kiosk_flags(enable_controls=enable_controls)
-        cmd = f'{launcher} {browser} {" ".join(flags)} "{url}"'
+        cmd = f'{launcher} {actual_browser} {" ".join(flags)} "{url}"'
         return f"""[Desktop Entry]
 Type=Application
 Name=Autodarts Kiosk
