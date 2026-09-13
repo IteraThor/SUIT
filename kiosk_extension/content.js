@@ -19,6 +19,7 @@
   const SVG_CONFIG = `<svg viewBox="0 0 512 512" fill="currentColor"><path d="M495.9 166.6c3.2 8.7 .5 18.4-6.4 24.6l-43.3 39.4c1.1 8.3 1.7 16.8 1.7 25.4s-.6 17.1-1.7 25.4l43.3 39.4c6.9 6.2 9.6 15.9 6.4 24.6c-4.4 11.9-9.7 23.3-15.8 34.3l-4.7 8.1c-6.6 11-14 21.4-22.1 31.2c-5.9 7.2-15.7 9.6-24.5 6.8l-55.7-17.7c-13.4 10.3-28.2 18.9-44 25.4l-12.5 57.1c-2 9.1-9 16.3-18.2 17.8c-13.8 2.3-28 3.5-42.5 3.5s-28.7-1.2-42.5-3.5c-9.2-1.5-16.2-8.7-18.2-17.8l-12.5-57.1c-15.8-6.5-30.6-15.1-44-25.4L83.1 425.9c-8.8 2.8-18.6 .3-24.5-6.8c-8.1-9.8-15.5-20.2-22.1-31.2l-4.7-8.1c-6.1-11-11.4-22.4-15.8-34.3c-3.2-8.7-.5-18.4 6.4-24.6l43.3-39.4C64.6 273.1 64 264.6 64 256s.6-17.1 1.7-25.4L22.4 191.2c-6.9-6.2-9.6-15.9-6.4-24.6c4.4-11.9 9.7-23.3 15.8-34.3l4.7-8.1c6.6-11 14-21.4 22.1-31.2c5.9-7.2 15.7-9.6 24.5-6.8l55.7 17.7c13.4-10.3 28.2-18.9 44-25.4l12.5-57.1c2-9.1 9-16.3 18.2-17.8C227.3 1.2 241.5 0 256 0s28.7 1.2 42.5 3.5c9.2 1.5 16.2 8.7 18.2 17.8l12.5 57.1c15.8 6.5 30.6 15.1 44 25.4l55.7-17.7c8.8-2.8 18.6-.3 24.5 6.8c8.1 9.8 15.5 20.2 22.1 31.2l4.7 8.1c6.1 11 11.4 22.4 15.8 34.3zM256 336a80 80 0 1 0 0-160 80 80 0 1 0 0 160z"/></svg>`;
   const SVG_ARROW_LEFT = `<svg viewBox="0 0 448 512" fill="currentColor" width="14" height="14"><path d="M9.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.2 288 416 288c17.7 0 32-14.3 32-32s-14.3-32-32-32l-306.7 0L214.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg>`;
   const SVG_CHEVRON = `<svg viewBox="0 0 512 512" fill="currentColor" width="10" height="10"><path d="M233.4 406.6c12.5 12.5 32.8 12.5 45.3 0l192-192c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L256 338.7 86.6 169.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l192 192z"/></svg>`;
+  const SVG_LIGHTBULB = `<svg viewBox="0 0 384 512" fill="currentColor"><path d="M297.2 248.9C311.6 228.3 320 203.2 320 176c0-70.7-57.3-128-128-128S64 105.3 64 176c0 27.2 8.4 52.3 22.8 72.9 3.7 5.3 8.1 11.5 12.8 18.1 11 15.4 22.4 31.4 30.7 47.9 7.4 14.8 11.7 30.6 13.7 47.1h96c2-16.5 6.3-32.3 13.7-47.1 8.3-16.5 19.7-32.5 30.7-47.9 4.7-6.6 9.1-12.8 12.8-18.1zM192 0c97.2 0 176 78.8 176 176 0 38-12 73.3-32.6 102.3-4.2 5.9-8.4 11.9-12.7 17.9-9.8 13.8-19.1 26.8-24.8 38.3-4.5 9.1-7.5 18.4-9.3 27.5H94.4c-1.8-9.1-4.8-18.4-9.3-27.5-5.7-11.5-15-24.5-24.8-38.3-4.3-6-8.5-12-12.7-17.9C28 249.3 16 214 16 176 16 78.8 94.8 0 192 0zm-64 432c0-8.8 7.2-16 16-16h96c8.8 0 16 7.2 16 16v16c0 8.8-7.2 16-16 16h-96c-8.8 0-16-7.2-16-16v-16zm24 64h80c8.8 0 16 7.2 16 16s-7.2 16-16 16h-80c-8.8 0-16-7.2-16-16s7.2-16 16-16z"/></svg>`;
 
   // =========================================================================
   // MODE A: Autodarts Board Configuration Page (localhost:3180)
@@ -89,6 +90,94 @@
     }, duration);
   }
 
+  // =========================================================================
+  // Dartboard Light State & Controls
+  // =========================================================================
+  let lightState = { enabled: false, isOn: false, isBusy: false };
+
+  function updateLightUI() {
+    const sec = document.getElementById("suit-section-light");
+    const icon = document.getElementById("suit-light-icon");
+    const desc = document.getElementById("suit-light-desc");
+    const badge = document.getElementById("suit-light-badge");
+    const item = document.getElementById("suit-item-light");
+    if (!sec) return;
+
+    if (!lightState.enabled) {
+      sec.style.display = "none";
+      return;
+    }
+
+    sec.style.display = "block";
+
+    if (lightState.isBusy) {
+      if (desc) desc.textContent = "Switching...";
+      if (badge) {
+        badge.textContent = "...";
+        badge.className = "suit-light-badge suit-light-busy";
+      }
+      return;
+    }
+
+    if (lightState.isOn) {
+      if (desc) desc.textContent = "Turned On";
+      if (icon) icon.classList.add("suit-light-active");
+      if (item) item.classList.add("suit-item-light-on");
+      if (badge) {
+        badge.textContent = "ON";
+        badge.className = "suit-light-badge suit-light-on";
+      }
+    } else {
+      if (desc) desc.textContent = "Turned Off";
+      if (icon) icon.classList.remove("suit-light-active");
+      if (item) item.classList.remove("suit-item-light-on");
+      if (badge) {
+        badge.textContent = "OFF";
+        badge.className = "suit-light-badge suit-light-off";
+      }
+    }
+  }
+
+  function queryLightStatus() {
+    try {
+      chrome.runtime.sendMessage({ action: "get_light_status" }, (resp) => {
+        if (!chrome.runtime.lastError && resp && resp.status === "ok") {
+          lightState.enabled = Boolean(resp.enabled);
+          lightState.isOn = Boolean(resp.is_on);
+          lightState.isBusy = false;
+          updateLightUI();
+        }
+      });
+    } catch (e) {
+      console.debug("Could not query light status:", e);
+    }
+  }
+
+  function toggleDartboardLight() {
+    if (lightState.isBusy) return;
+    lightState.isBusy = true;
+    updateLightUI();
+
+    try {
+      chrome.runtime.sendMessage({ action: "toggle_light" }, (resp) => {
+        lightState.isBusy = false;
+        if (chrome.runtime.lastError || !resp || resp.status !== "ok") {
+          const err = (chrome.runtime.lastError && chrome.runtime.lastError.message) || (resp && resp.error) || "Failed to toggle light";
+          showToast(`Light Error: ${err}`, 3500);
+          queryLightStatus();
+        } else {
+          lightState.isOn = Boolean(resp.is_on);
+          updateLightUI();
+          showToast(resp.is_on ? "Dartboard light turned on" : "Dartboard light turned off", 2000);
+        }
+      });
+    } catch (e) {
+      lightState.isBusy = false;
+      showToast(`Light Error: ${String(e)}`, 3500);
+      updateLightUI();
+    }
+  }
+
   function getOrCreateTriggerButton() {
     if (triggerBtn && document.contains(triggerBtn)) return triggerBtn;
 
@@ -122,6 +211,20 @@
           <span class="suit-item-desc">Calibration & settings</span>
         </div>
       </button>
+
+      <!-- ACCESSORIES / DARTBOARD LIGHT (Initially hidden until confirmed enabled) -->
+      <div id="suit-section-light" style="display: none;">
+        <div class="suit-popover-divider"></div>
+        <div class="suit-popover-section-title">Accessories</div>
+        <button class="suit-popover-item" id="suit-item-light">
+          <div class="suit-item-icon suit-icon-light" id="suit-light-icon">${SVG_LIGHTBULB}</div>
+          <div class="suit-item-text">
+            <span class="suit-item-label">Dartboard Light</span>
+            <span class="suit-item-desc" id="suit-light-desc">Turned Off</span>
+          </div>
+          <div class="suit-light-badge suit-light-off" id="suit-light-badge">OFF</div>
+        </button>
+      </div>
 
       <!-- DIVIDER -->
       <div class="suit-popover-divider"></div>
@@ -188,6 +291,13 @@
         window.open("http://localhost:3180/config", "_blank");
       }
     });
+
+    const lightBtn = document.getElementById("suit-item-light");
+    if (lightBtn) {
+      lightBtn.addEventListener("click", () => {
+        toggleDartboardLight();
+      });
+    }
 
     document.getElementById("suit-item-exit").addEventListener("click", () => {
       closePopover();
@@ -294,6 +404,7 @@
 
     positionPopover();
     p.classList.add("suit-popover-open");
+    queryLightStatus();
   }
 
   function closePopover() {

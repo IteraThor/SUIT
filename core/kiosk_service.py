@@ -43,6 +43,18 @@ class KioskService:
         return cls.EXTENSION_DIR
 
     @classmethod
+    def sync_extension_files(cls) -> None:
+        """Syncs the latest extension files to user data directory if already installed."""
+        try:
+            if cls.INSTALLED_EXTENSION_DIR.exists() and cls.EXTENSION_DIR.exists():
+                shutil.copytree(cls.EXTENSION_DIR, cls.INSTALLED_EXTENSION_DIR, dirs_exist_ok=True)
+                host_script = cls.INSTALLED_EXTENSION_DIR / "host" / "suit_kiosk_host.py"
+                if host_script.exists():
+                    host_script.chmod(0o755)
+        except Exception:
+            pass
+
+    @classmethod
     def is_permanent_extension_installed(cls, chromium_conf: Path | None = None, desktop_path: Path | None = None) -> bool:
         """Check if the SUIT In-Page Controls extension is permanently configured in Chromium."""
         conf_file = chromium_conf or cls.CHROMIUM_CONF_PATH
