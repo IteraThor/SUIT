@@ -375,4 +375,32 @@ button.compact-btn,
     color: alpha(@window_fg_color, 0.7);
 }
 
+.apply-all-overlay {
+    background-color: rgba(10, 12, 16, 0.82);
+}
+
+.apply-all-card {
+    background-color: @card_bg_color;
+    border: 1px solid alpha(@window_fg_color, 0.14);
+    border-radius: 18px;
+    padding: 30px 36px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.65);
+}
+
+.apply-all-card label.title {
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.apply-all-card label.step-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: @accent_color;
+}
+
+.apply-all-card label.detail-text {
+    font-size: 13px;
+    color: alpha(@window_fg_color, 0.7);
+}
+
 
