@@ -5,6 +5,7 @@ from gi.repository import Gtk, Adw, Gdk
 
 from core.autodarts_service import read_stored_auth, save_stored_auth
 from core.systemd_service import SystemdService
+from modules_gtk.async_utils import open_browser_url
 
 SERVICE_NAME = "autodarts.service"
 
@@ -56,6 +57,7 @@ class BoardSetupDialog(Adw.Window):
 
         link_btn = Gtk.LinkButton(uri="https://play.autodarts.com/boards", label="play.autodarts.com/boards")
         link_btn.set_tooltip_text("Open https://play.autodarts.com/boards in your browser")
+        link_btn.connect("activate-link", self._on_link_activated)
         step1_box.append(link_btn)
         guide_card.append(step1_box)
 
@@ -153,3 +155,7 @@ class BoardSetupDialog(Adw.Window):
         if self.on_saved_cb:
             self.on_saved_cb()
         self.close()
+
+    def _on_link_activated(self, btn):
+        open_browser_url(self, btn.get_uri())
+        return True
