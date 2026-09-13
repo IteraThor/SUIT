@@ -222,6 +222,7 @@ class AutodartsView(Adw.NavigationPage):
 
         self.btn_apply_cam = create_button_with_icon("emblem-ok-symbolic", "Apply & Restart", "suggested-action compact-btn", height=42, touch_btn=True)
         self.btn_apply_cam.connect("clicked", self._on_apply_cam_clicked)
+        self.btn_apply_cam.set_sensitive(False)
         cam_hdr.append(self.btn_apply_cam)
         self.card_cam.append(cam_hdr)
 
@@ -229,13 +230,14 @@ class AutodartsView(Adw.NavigationPage):
         row_controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         row_controls.set_homogeneous(True)
 
-        # Col 1: Resolution
+        # Col 1: Resolution (only enabled once all 3 cameras are selected)
         box_res = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         lbl_res = Gtk.Label(label="Resolution", xalign=0)
         lbl_res.add_css_class("dim-label")
         box_res.append(lbl_res)
-        self.combo_res = Gtk.DropDown.new_from_strings(["1280x720"])
+        self.combo_res = Gtk.DropDown.new_from_strings(["Select all 3 cameras"])
         self.combo_res.set_size_request(-1, 44)
+        self.combo_res.set_sensitive(False)
         box_res.append(self.combo_res)
         row_controls.append(box_res)
 
@@ -256,6 +258,7 @@ class AutodartsView(Adw.NavigationPage):
         box_c1.append(lbl_c1)
         self.combo_c1 = Gtk.DropDown.new_from_strings(["Select camera"])
         self.combo_c1.set_size_request(-1, 44)
+        self.combo_c1.connect("notify::selected", self._on_cam_selection_changed)
         box_c1.append(self.combo_c1)
         row_controls.append(box_c1)
 
@@ -266,6 +269,7 @@ class AutodartsView(Adw.NavigationPage):
         box_c2.append(lbl_c2)
         self.combo_c2 = Gtk.DropDown.new_from_strings(["Select camera"])
         self.combo_c2.set_size_request(-1, 44)
+        self.combo_c2.connect("notify::selected", self._on_cam_selection_changed)
         box_c2.append(self.combo_c2)
         row_controls.append(box_c2)
 
@@ -276,6 +280,7 @@ class AutodartsView(Adw.NavigationPage):
         box_c3.append(lbl_c3)
         self.combo_c3 = Gtk.DropDown.new_from_strings(["Select camera"])
         self.combo_c3.set_size_request(-1, 44)
+        self.combo_c3.connect("notify::selected", self._on_cam_selection_changed)
         box_c3.append(self.combo_c3)
         row_controls.append(box_c3)
 
@@ -609,76 +614,139 @@ class AutodartsView(Adw.NavigationPage):
 
         run_async(uninstall_autodarts, on_done=on_done)
 
+    def _on_cam_selection_changed(self, dropdown, pspec):
+        if getattr(self, "_loading_cam_config", False):
+            return
+        self._update_resolutions_from_cams()
+
+    def _get_selected_cam_paths(self) -> list[str]:
+        paths = []
+        for combo in [self.combo_c1, self.combo_c2, self.combo_c3]:
+            idx = combo.get_selected()
+            if 0 <= idx < len(getattr(self, "cam_options", [])):
+                p = self.cam_options[idx].get("path", "")
+                paths.append(p)
+            else:
+                paths.append("")
+        return paths
+
+    def _update_resolutions_from_cams(self, preferred_res: tuple[int, int] | None = None):
+        cams = self._get_selected_cam_paths()
+        valid_cams = [c for c in cams if c and c.strip()]
+        all_3_selected = (len(valid_cams) == 3 and len(set(valid_cams)) == 3)
+
+        if not all_3_selected:
+            self.res_options = []
+            if len(valid_cams) < 3:
+                placeholder = "Select all 3 cameras"
+            else:
+                placeholder = "Select 3 distinct cameras"
+            self.combo_res.set_model(Gtk.StringList.new([placeholder]))
+            self.combo_res.set_selected(0)
+            self.combo_res.set_sensitive(False)
+            self.btn_apply_cam.set_sensitive(False)
+            return
+
+        # Query common supported resolutions across the 3 selected cameras
+        self.combo_res.set_sensitive(False)
+        self.btn_apply_cam.set_sensitive(False)
+
+        def worker():
+            return get_supported_resolutions(cam_paths=cams)
+
+        def on_done(common_res):
+            self.res_options = common_res
+            if not common_res:
+                self.combo_res.set_model(Gtk.StringList.new(["No common resolution"]))
+                self.combo_res.set_selected(0)
+                self.combo_res.set_sensitive(False)
+                self.btn_apply_cam.set_sensitive(False)
+                return
+
+            res_labels = [f"{w}x{h}" for w, h in common_res]
+            self.combo_res.set_model(Gtk.StringList.new(res_labels))
+            self.combo_res.set_sensitive(True)
+            self.btn_apply_cam.set_sensitive(True)
+
+            target = preferred_res or getattr(self, "current_res", (1280, 720))
+            sel = 0
+            if target in common_res:
+                sel = common_res.index(target)
+            elif (1280, 720) in common_res:
+                sel = common_res.index((1280, 720))
+            self.combo_res.set_selected(sel)
+
+        run_async(worker, on_done=on_done)
+
     def _load_cam_config(self):
         def worker():
             cfg = read_cam_config()
             available = get_available_cameras()
-            supported_res = get_supported_resolutions()
-            return cfg, available, supported_res
+            return cfg, available
 
         def on_done(res):
-            cfg, available, supported_res = res
+            cfg, available = res
             self.cam_options = available
-            self.res_options = supported_res
+            self.current_res = (cfg.get("width", 1280), cfg.get("height", 720))
 
-            # 1. Update Camera Device dropdowns
-            labels = [c["label"] for c in available]
-            for combo, saved_path in [
-                (self.combo_c1, cfg["cams"][0]),
-                (self.combo_c2, cfg["cams"][1]),
-                (self.combo_c3, cfg["cams"][2]),
-            ]:
-                model = Gtk.StringList.new(labels)
-                combo.set_model(model)
-                sel = 0
-                for idx, c in enumerate(available):
-                    if c["path"] and c["path"] == saved_path:
-                        sel = idx
-                        break
-                combo.set_selected(sel)
-                if sel < len(available) and available[sel].get("full_name"):
-                    combo.set_tooltip_text(available[sel]["full_name"])
+            self._loading_cam_config = True
+            try:
+                # 1. Update Camera Device dropdowns
+                labels = [c["label"] for c in available]
+                for combo, saved_path in [
+                    (self.combo_c1, cfg["cams"][0]),
+                    (self.combo_c2, cfg["cams"][1]),
+                    (self.combo_c3, cfg["cams"][2]),
+                ]:
+                    model = Gtk.StringList.new(labels)
+                    combo.set_model(model)
+                    sel = 0
+                    for idx, c in enumerate(available):
+                        if c["path"] and c["path"] == saved_path:
+                            sel = idx
+                            break
+                    combo.set_selected(sel)
+                    if sel < len(available) and available[sel].get("full_name"):
+                        combo.set_tooltip_text(available[sel]["full_name"])
 
-            # 2. Update Resolution dropdown (strictly from camera firmware)
-            res_labels = [f"{w}x{h}" for w, h in supported_res]
-            self.combo_res.set_model(Gtk.StringList.new(res_labels))
-            cur_res = (cfg.get("width", 1280), cfg.get("height", 720))
-            res_sel = 0
-            if cur_res in supported_res:
-                res_sel = supported_res.index(cur_res)
-            self.combo_res.set_selected(res_sel)
+                # 2. Update FPS dropdown (15, 20, 25, 30)
+                cur_fps = cfg.get("fps", 30)
+                fps_sel = 3  # default 30
+                if cur_fps in FPS_OPTIONS:
+                    fps_sel = FPS_OPTIONS.index(cur_fps)
+                self.combo_fps.set_selected(fps_sel)
+            finally:
+                self._loading_cam_config = False
 
-            # 3. Update FPS dropdown (15, 20, 25, 30)
-            cur_fps = cfg.get("fps", 30)
-            fps_sel = 3  # default 30
-            if cur_fps in FPS_OPTIONS:
-                fps_sel = FPS_OPTIONS.index(cur_fps)
-            self.combo_fps.set_selected(fps_sel)
-
+            # 3. Dynamically update common resolutions based on whether all 3 cameras are selected
+            self._update_resolutions_from_cams(preferred_res=self.current_res)
             self.cam_config_loaded = True
 
         run_async(worker, on_done=on_done)
 
     def _on_apply_cam_clicked(self, btn):
+        cams = self._get_selected_cam_paths()
+        valid_cams = [c for c in cams if c and c.strip()]
+        if len(valid_cams) < 3 or len(set(valid_cams)) < 3:
+            self.window.show_toast("Please select 3 distinct cameras.")
+            return
+
         res_idx = self.combo_res.get_selected()
         fps_idx = self.combo_fps.get_selected()
-        c1_idx = self.combo_c1.get_selected()
-        c2_idx = self.combo_c2.get_selected()
-        c3_idx = self.combo_c3.get_selected()
 
-        width, height = self.res_options[res_idx] if res_idx < len(self.res_options) else (1280, 720)
+        if not getattr(self, "res_options", []) or res_idx >= len(self.res_options):
+            self.window.show_toast("Please select a valid resolution.")
+            return
+
+        width, height = self.res_options[res_idx]
         fps = FPS_OPTIONS[fps_idx] if fps_idx < len(FPS_OPTIONS) else 30
-
-        c1_path = self.cam_options[c1_idx]["path"] if c1_idx < len(self.cam_options) else ""
-        c2_path = self.cam_options[c2_idx]["path"] if c2_idx < len(self.cam_options) else ""
-        c3_path = self.cam_options[c3_idx]["path"] if c3_idx < len(self.cam_options) else ""
 
         self.is_busy = True
         self.spinner.start()
         self.window.show_toast(f"Applying {width}x{height} @ {fps} FPS and restarting...")
 
         def worker():
-            save_cam_config([c1_path, c2_path, c3_path], width, height, fps)
+            save_cam_config(cams, width, height, fps)
             SystemdService.restart_unit(SERVICE_NAME)
             return True
 
