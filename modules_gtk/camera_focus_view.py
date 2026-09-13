@@ -224,7 +224,7 @@ class CameraFocusView(Adw.NavigationPage):
 
         self.zoom_drawing_area = Gtk.DrawingArea()
         self.zoom_drawing_area.set_draw_func(self._on_draw_zoom)
-        self.zoom_drawing_area.set_size_request(280, 150)
+        self.zoom_drawing_area.set_size_request(280, 180)
         self.zoom_drawing_area.set_hexpand(True)
         zoom_frame.set_child(self.zoom_drawing_area)
 
@@ -498,13 +498,18 @@ class CameraFocusView(Adw.NavigationPage):
                     )
 
                     # Precompute zoom crop with temporal accumulation and focus peaking
+                    zw = self.zoom_drawing_area.get_width() if hasattr(self, "zoom_drawing_area") else 280
+                    zh = self.zoom_drawing_area.get_height() if hasattr(self, "zoom_drawing_area") else 180
+                    if zw <= 1 or zh <= 1:
+                        zw, zh = 280, 180
+
                     bgra_zoom = self.focus_service.process_zoom_crop(
-                        frame, analysis.target_roi, zoom_factor=self.zoom_factor, out_size=(260, 260)
+                        frame, analysis.target_roi, zoom_factor=self.zoom_factor, out_size=(zw, zh)
                     )
                     zoom_surf = None
                     if bgra_zoom is not None:
                         zoom_surf = cairo.ImageSurface.create_for_data(
-                            bgra_zoom.data, cairo.FORMAT_ARGB32, 260, 260, 260 * 4
+                            bgra_zoom.data, cairo.FORMAT_ARGB32, zw, zh, zw * 4
                         )
 
                     with self._lock:
@@ -706,8 +711,23 @@ class CameraFocusView(Adw.NavigationPage):
             cr.show_text("Waiting...")
             return
 
+        sw = surface.get_width()
+        sh = surface.get_height()
+
+        # Center the magnified surface precisely so that (sw/2, sh/2) aligns with (width/2, height/2)
+        scale = max(width / sw, height / sh)
+        ox = (width - sw * scale) / 2.0
+        oy = (height - sh * scale) / 2.0
+
+        cr.save()
+        cr.rectangle(0, 0, width, height)
+        cr.clip()
+
+        cr.translate(ox, oy)
+        cr.scale(scale, scale)
         cr.set_source_surface(surface, 0, 0)
         cr.paint()
+        cr.restore()
 
         # Center reticle / crosshair
         mx, my = width / 2.0, height / 2.0
