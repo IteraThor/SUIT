@@ -295,6 +295,16 @@ class KioskService:
 # Remove stale lock files to ensure unattended boot never hangs after crash or hostname change
 rm -f "$HOME/.config/chromium/Singleton"* "$HOME/.config/google-chrome/Singleton"* 2>/dev/null
 
+# Automatically dismiss GNOME Shell Overview on startup so kiosk displays fullscreen seamlessly
+(
+    for i in $(seq 1 30); do
+        sleep 0.5
+        if [ "$(busctl --user get-property org.gnome.Shell /org/gnome/Shell org.gnome.Shell OverviewActive 2>/dev/null)" = "b true" ]; then
+            gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.freedesktop.DBus.Properties.Set org.gnome.Shell OverviewActive "<false>" >/dev/null 2>&1
+        fi
+    done
+) &
+
 exec "$@"
 """
         script_path.write_text(content, encoding="utf-8")
