@@ -480,7 +480,7 @@ X-GNOME-Autostart-enabled=true
 Comment=Maintain screen and touch rotation on boot
 """
                 target.write_text(desktop_entry, encoding="utf-8")
-                target.chmod(0o755)
+                target.chmod(0o644)
                 logger.info(f"Created rotation autostart file: {target}")
             else:
                 if target.exists():

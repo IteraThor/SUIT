@@ -297,11 +297,11 @@ rm -f "$HOME/.config/chromium/Singleton"* "$HOME/.config/google-chrome/Singleton
 
 # Automatically dismiss GNOME Shell Overview on startup so kiosk displays fullscreen seamlessly
 (
-    for i in $(seq 1 30); do
-        sleep 0.5
+    for i in $(seq 1 40); do
         if [ "$(busctl --user get-property org.gnome.Shell /org/gnome/Shell org.gnome.Shell OverviewActive 2>/dev/null)" = "b true" ]; then
             gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.freedesktop.DBus.Properties.Set org.gnome.Shell OverviewActive "<false>" >/dev/null 2>&1
         fi
+        sleep 0.25
     done
 ) &
 
@@ -323,7 +323,6 @@ Exec={cmd}
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
-X-GNOME-Autostart-Delay=5
 """
 
     @classmethod
@@ -342,6 +341,7 @@ X-GNOME-Autostart-Delay=5
             target_file.parent.mkdir(parents=True, exist_ok=True)
             entry = cls.generate_desktop_entry(url, browser, enable_controls=enable_controls)
             target_file.write_text(entry, encoding="utf-8")
+            target_file.chmod(0o644)
             logger.info(f"Created kiosk autostart file: {target_file}")
             return True
         except Exception:
