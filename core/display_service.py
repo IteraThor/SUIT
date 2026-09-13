@@ -337,40 +337,51 @@ class DisplayService:
 
     @staticmethod
     def rebind_usb_touch(touch_device_name: str) -> bool:
-        """Force libinput to re-read the LIBINPUT_CALIBRATION_MATRIX for the touch device.
+        """Force libinput to re-read LIBINPUT_CALIBRATION_MATRIX by USB rebind.
 
-        Uses targeted udevadm trigger on the specific event nodes rather than
-        USB unbind/bind. USB rebind causes a full device disconnect that freezes
-        the UI; targeted trigger re-evaluates rules without dropping the device.
+        libinput only reads LIBINPUT_CALIBRATION_MATRIX when the device is first
+        opened. udevadm trigger --action=change updates the DB but has no effect
+        on already-open devices. USB unbind/bind forces libinput to close and
+        reopen the device, picking up the new udev property.
+
+        Call this AFTER the Mutter rotation has been applied so the display
+        transition completes before the touch device momentarily disconnects.
         """
         if not touch_device_name or touch_device_name == "None":
             return False
         try:
-            # Collect all event* sysfs paths whose /device/name matches
-            event_paths = []
-            for name_file in glob.glob("/sys/class/input/event*/device/name"):
+            bus_id = None
+            for name_file in glob.glob("/sys/class/input/input*/name"):
                 try:
                     with open(name_file, "r") as f:
                         if touch_device_name.strip().lower() in f.read().strip().lower():
-                            # /sys/class/input/eventN/device/name -> /sys/class/input/eventN
-                            event_paths.append(str(Path(name_file).resolve().parent.parent))
+                            cur = Path(name_file).resolve().parent
+                            while cur != Path("/"):
+                                if (cur / "idVendor").exists() and (cur / "busnum").exists():
+                                    bus_id = cur.name
+                                    break
+                                cur = cur.parent
+                            if bus_id:
+                                break
                 except Exception:
                     continue
 
-            if event_paths:
-                logger.info(f"Triggering udev re-evaluation for {touch_device_name} ({len(event_paths)} node(s))")
-                for ep in event_paths:
-                    subprocess.run(
-                        ["sudo", "-n", "udevadm", "trigger", "--action=change", ep],
-                        capture_output=True,
-                        check=False,  # best-effort per node
-                    )
+            if bus_id:
+                logger.info(f"Rebinding USB touch device {bus_id} to apply calibration matrix")
+                subprocess.run(
+                    ["sudo", "-n", "tee", "/sys/bus/usb/drivers/usb/unbind"],
+                    input=f"{bus_id}\n", text=True, capture_output=True, check=True,
+                )
+                subprocess.run(
+                    ["sudo", "-n", "tee", "/sys/bus/usb/drivers/usb/bind"],
+                    input=f"{bus_id}\n", text=True, capture_output=True, check=True,
+                )
                 return True
             else:
-                logger.debug(f"Could not locate sysfs event node for: {touch_device_name}")
+                logger.debug(f"Could not locate USB bus ID for touch device: {touch_device_name}")
                 return False
         except Exception:
-            logger.exception("Failed triggering udev for touch device")
+            logger.exception("Failed rebinding USB touch device")
             return False
 
     @classmethod
@@ -514,22 +525,35 @@ Comment=Maintain screen and touch rotation on boot
     ) -> bool:
         logger.info(f"Applying display rotation ({rotation_int}) and touch ({touch_device_name}) to {connector_name} (persist={persist})")
 
-        # 1. First, apply touch calibration matrix, write udev rule and rebind USB
         touch_dev = touch_device_name if touch_device_name != "None" else None
-        if touch_dev:
-            cls.apply_touch_calibration(touch_dev, connector_name, rotation_int=rotation_int)
-        else:
-            # Pass the previously active device so its USB bus gets rebound after
-            # the rule is cleared, flushing any stale in-memory calibration matrix.
-            cls.apply_touch_calibration(
-                None, connector_name,
-                prev_touch_device_name=prev_touch_device_name
-            )
+        rebind_dev = touch_dev or prev_touch_device_name  # device whose calibration needs refresh
 
-        # 2. Then rotate display via Mutter DBus
+        # 1. Write udev rule with new calibration matrix (does NOT yet affect libinput)
+        if touch_dev:
+            state = cls.get_current_mutter_state()
+            if state:
+                serial, monitors, logical_monitors, properties = state
+                matrix_str = calculate_affine_matrix(
+                    logical_monitors, monitors, connector_name, target_trans=rotation_int
+                )
+                if matrix_str:
+                    cls.write_udev_rule(touch_dev, matrix_str)
+                    logger.info(f"Wrote touch calibration rule for {touch_dev}: {matrix_str}")
+        else:
+            cls.write_udev_rule(None, None)
+
+        # 2. Rotate display via Mutter DBus — do this BEFORE USB rebind so the
+        #    display transition finishes before the touch device briefly disconnects.
         rot_ok = cls.apply_rotation(connector_name, rotation_int, method=method)
 
-        # 3. Persist configuration if requested
+        # 3. USB rebind — forces libinput to close+reopen the device so it picks
+        #    up the new LIBINPUT_CALIBRATION_MATRIX. Short sleep lets Mutter finish
+        #    the rotation animation before the input device disconnects momentarily.
+        if rebind_dev and rebind_dev not in ("None", ""):
+            time.sleep(0.6)
+            cls.rebind_usb_touch(rebind_dev)
+
+        # 4. Persist configuration if requested
         if persist:
             cls.persist_display_config(connector_name, rotation_int, touch_device_name)
 
