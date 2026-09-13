@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <path fill="currentColor" fill-rule="evenodd" d="M1 1h6v6H1V1zm1 1v4h4V2H2zm1 1h2v2H3V3zm6-2h6v6H9V1zm1 1v4h4V2h-4zm1 1h2v2h-2V3zM1 9h6v6H1V9zm1 1v4h4v-4H2zm1 1h2v2H3v-2zm6 0h2v1H9v-1zm0 2h1v3H9v-3zm3 0h1v1h-1v-1zm0 2h3v1h-3v-1zm2-4h1v2h-1v-2zm-3-1h3v1h-3V9zm0 2h1v1h-1v-1zm-1 3h1v1h-1v-1z"/>
+</svg>

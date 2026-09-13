@@ -1,0 +1,51 @@
+/* SUIT Touchscreen Scaling for GNOME Top Panel */
+
+#panel.suit-touch-panel,
+#panel {
+  height: 54px;
+  font-size: 13pt;
+}
+
+#panel.suit-touch-panel .panel-button,
+#panel .panel-button {
+  -natural-hpadding: 20px;
+  -minimum-hpadding: 14px;
+  font-weight: bold;
+}
+
+#panel.suit-touch-panel .panel-button .system-status-icon,
+#panel .panel-button .system-status-icon {
+  icon-size: 24px;
+  padding: 0 8px;
+  margin: 0 6px;
+}
+
+#panel.suit-touch-panel .panel-button .panel-status-indicators-box,
+#panel .panel-button .panel-status-indicators-box {
+  spacing: 8px;
+}
+
+#panel.suit-touch-panel .panel-button#panelActivities StBoxLayout,
+#panel .panel-button#panelActivities StBoxLayout {
+  padding: 0 8px;
+  spacing: 8px;
+}
+
+#panel.suit-touch-panel .panel-button#panelActivities .workspace-dot,
+#panel .panel-button#panelActivities .workspace-dot {
+  min-width: 14px;
+  min-height: 14px;
+}
+
+#panel.suit-touch-panel .clock-display,
+#panel .clock-display {
+  font-size: 13pt;
+}
+
+/* Enhanced touch tap visual feedback */
+#panel.suit-touch-panel .panel-button:active,
+#panel.suit-touch-panel .panel-button:checked,
+#panel .panel-button:active,
+#panel .panel-button:checked {
+  box-shadow: inset 0 0 0 100px rgba(255, 255, 255, 0.28);
+}

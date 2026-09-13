@@ -1,0 +1,14 @@
+{
+  "name": "SUIT Touch Scaling",
+  "description": "Optimizes GNOME Shell top panel and buttons for touchscreen use.",
+  "uuid": "touch-scaling@suit",
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "50"
+  ],
+  "version": 1
+}

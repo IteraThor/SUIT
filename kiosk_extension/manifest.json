@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "SUIT Kiosk Controls for Autodarts",
+  "version": "1.1.0",
+  "description": "In-page system power and session controls for Autodarts Kiosk mode.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxjL5UjaJghvRSq8E643PfGG37BQmdAgDrIMrsGOaXZlzCu9jG6U0UuQQcL6F8ioZrofvQDsaqNuFhKZMAYXe2VfuyLG9fNRnJpZkviP72QDvrVruemsUwUj6dK/YuPCW1RdN8dgJW62WErzNtlCOnuI/Be33tVAGyZ/rOLaK1GvUNqRrvTS1kbQbc6OIOaciOqhXeLGHY6v3UozSaimFfvZgIEuwnj2Ai/bS0s6nPzom5n07NHZDGE59SDw+cRA3Wo4mdqkkGIQezTWgr+yTZ8R7LjIIkDUJRzNaP5NyopHDqnK71IIBfZg1lZPa8VPLLmmOFFkNQ9Dta8YE7/ZjKwIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "tabs"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://play.autodarts.com/*",
+        "http://localhost:3180/*",
+        "http://127.0.0.1:3180/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "style.css"
+      ],
+      "run_at": "document_end"
+    }
+  ]
+}
