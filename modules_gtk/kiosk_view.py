@@ -134,7 +134,7 @@ class KioskView(Adw.NavigationPage):
         run_async(worker, on_done=on_done)
 
     def _get_browser_binary(self) -> str:
-        return "chromium-browser" if subprocess.run(["which", "chromium-browser"], capture_output=True).returncode == 0 else "chromium"
+        return KioskService.resolve_browser()
 
     def _on_autostart_toggled(self, row, param):
         active = row.get_active()
