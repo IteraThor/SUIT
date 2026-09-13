@@ -350,7 +350,110 @@ def get_available_cameras(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) ->
     return cams
 
 
-def get_supported_resolutions(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> list[tuple[int, int]]:
+def get_camera_supported_resolutions(cam_path: str, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> set[tuple[int, int]]:
+    """Query supported resolutions (w, h) >= 640x480 for a specific camera device."""
+    if not cam_path or not cam_path.strip():
+        return set()
+
+    res_set: set[tuple[int, int]] = set()
+    real_path = ""
+    try:
+        real_path = str(Path(cam_path).resolve())
+    except Exception:
+        pass
+
+    # 1. Try Autodarts API /api/devices first
+    if is_port_open(host, port):
+        try:
+            req = urllib.request.Request(f"http://{host}:{port}/api/devices", headers={"User-Agent": "SUIT"})
+            with urllib.request.urlopen(req, timeout=0.8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if isinstance(data, list):
+                    for dev in data:
+                        for fmt in dev.get("formats", []):
+                            p = fmt.get("path", "")
+                            p_real = ""
+                            try:
+                                p_real = str(Path(p).resolve())
+                            except Exception:
+                                pass
+                            if p == cam_path or (real_path and (p == real_path or p_real == real_path)):
+                                for r in fmt.get("resolutions", []):
+                                    w, h = r.get("width", 0), r.get("height", 0)
+                                    if w >= 640 and h >= 480:
+                                        res_set.add((w, h))
+                                if res_set:
+                                    return res_set
+        except Exception:
+            pass
+
+    # 2. Query direct V4L ioctl on target device
+    import os, fcntl, struct
+    target_paths = [cam_path]
+    if real_path and real_path != cam_path:
+        target_paths.append(real_path)
+
+    for p in target_paths:
+        try:
+            fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
+            for fmt in [0x47504a4d, 0x56595559]:
+                idx = 0
+                while True:
+                    buf = bytearray(44)
+                    struct.pack_into('II', buf, 0, idx, fmt)
+                    try:
+                        fcntl.ioctl(fd, 0xc02c564a, buf)
+                        f_type = struct.unpack_from('I', buf, 8)[0]
+                        if f_type == 1:
+                            w, h = struct.unpack_from('II', buf, 12)
+                            if w >= 640 and h >= 480:
+                                res_set.add((w, h))
+                        idx += 1
+                    except Exception:
+                        break
+            os.close(fd)
+            if res_set:
+                break
+        except Exception:
+            pass
+
+    return res_set
+
+
+def get_supported_resolutions(
+    cam_paths: list[str] | None = None,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT
+) -> list[tuple[int, int]]:
+    """
+    Returns sorted list of common resolutions (w >= 640, h >= 480).
+    If cam_paths is provided:
+      - Requires all 3 camera slots to be selected with valid, non-empty, distinct paths.
+      - Returns only the intersection of supported resolutions across the 3 selected cameras.
+      - If fewer than 3 cameras are provided/valid, returns an empty list [].
+    If cam_paths is None:
+      - Fallback discovery across all detected devices.
+    """
+    if cam_paths is not None:
+        valid_paths = [p.strip() for p in cam_paths if p and p.strip()]
+        # Require all 3 cameras to be selected and distinct
+        if len(valid_paths) < 3 or len(set(valid_paths)) < 3:
+            return []
+
+        common: set[tuple[int, int]] | None = None
+        for p in valid_paths:
+            s = get_camera_supported_resolutions(p, host=host, port=port)
+            if not s:
+                return []
+            if common is None:
+                common = set(s)
+            else:
+                common = common.intersection(s)
+
+        if common:
+            return sorted(list(common), key=lambda x: (x[0], x[1]), reverse=True)
+        return []
+
     # 1. Query /api/devices from Autodarts engine (exact firmware resolutions)
     devices = []
     if is_port_open(host, port):
