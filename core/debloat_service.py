@@ -26,7 +26,6 @@ class DebloatService:
         "gnome-maps": ("Maps", "Desktop mapping application", "mark-location-symbolic"),
         "simple-scan": ("Document Scanner", "Scanning utility", "scanner-symbolic"),
         "gnome-boxes": ("Boxes", "Virtual machine manager", "computer-symbolic"),
-        "libreoffice": ("LibreOffice", "Office suite (Writer, Calc, Impress)", "x-office-document-symbolic"),
         "libreoffice-core": ("LibreOffice", "Office suite (Writer, Calc, Impress)", "x-office-document-symbolic"),
         "showtime": ("Showtime", "Video player", "video-x-generic-symbolic"),
         "snapshot": ("Snapshot", "Camera app", "camera-photo-symbolic"),
@@ -50,9 +49,9 @@ class DebloatService:
         installed_full = cls.get_installed_bloatware()
         installed_bases = set()
         for full_pkg in installed_full:
-            for key in cls.APP_FRIENDLY_NAMES:
-                if full_pkg == key or full_pkg.startswith(key + "-") or full_pkg.startswith(key):
-                    installed_bases.add(key)
+            for pkg in cls.BLOATWARE_PACKAGES:
+                if full_pkg == pkg or full_pkg.startswith(pkg + "-"):
+                    installed_bases.add(pkg)
                     break
             else:
                 installed_bases.add(full_pkg.split("-")[0])
