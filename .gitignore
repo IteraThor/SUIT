@@ -1,0 +1,8 @@
+__pycache__/
+*.log
+venv/
+.pytest_cache/
+.agents/
+docs/superpowers/
+tests/
+scripts/

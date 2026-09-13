@@ -1,0 +1,356 @@
+/* SUIT for Fedora - Touchscreen Optimization Stylesheet
+   Tailored for 16-inch displays at 1920x1200 / 1200x1920 (~141 DPI) */
+
+/* Generous row heights for effortless finger tapping */
+list.boxed-list > row {
+    min-height: 62px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    padding-left: 16px;
+    padding-right: 16px;
+}
+
+/* Touch-friendly primary action buttons */
+.touch-btn {
+    min-height: 52px;
+    font-size: 15px;
+    font-weight: 600;
+    border-radius: 12px;
+    padding-left: 20px;
+    padding-right: 20px;
+}
+
+/* Big touch tiles for rotation angle toggles (0°, 90°, 180°, 270°) */
+.angle-touch-btn {
+    min-height: 64px;
+    min-width: 84px;
+    font-size: 16px;
+    font-weight: 700;
+    border-radius: 12px;
+}
+
+/* Big buttons for service actions (Start / Stop / Restart) */
+.service-touch-btn {
+    min-height: 52px;
+    min-width: 110px;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: 10px;
+}
+
+/* Enlarge HeaderBar navigation back button for easy thumb reaches */
+headerbar button.image-button {
+    min-width: 44px;
+    min-height: 44px;
+    border-radius: 10px;
+}
+
+/* Larger combo box and dropdown touch targets */
+combobox button,
+dropdown > button {
+    min-height: 46px;
+    font-size: 14px;
+    border-radius: 10px;
+}
+
+/* Switches touch target */
+switch {
+    min-width: 54px;
+    min-height: 30px;
+}
+
+/* Clear card spacing */
+.banner-card {
+    border-radius: 16px;
+}
+
+/* Touch Dashboard Cards */
+.tile-card {
+    background-color: alpha(@window_fg_color, 0.04);
+    border: 1px solid alpha(@window_fg_color, 0.08);
+    border-radius: 16px;
+    padding: 20px;
+}
+
+.tile-card-compact {
+    background-color: alpha(@window_fg_color, 0.04);
+    border: 1px solid alpha(@window_fg_color, 0.08);
+    border-radius: 14px;
+    padding: 12px 16px;
+}
+
+button.compact-btn,
+.compact-btn {
+    min-height: 44px;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: 10px;
+    padding-left: 14px;
+    padding-right: 14px;
+}
+
+.status-pill-running {
+    background-color: alpha(#2ec27e, 0.15);
+    color: #57e389;
+    border: 1px solid alpha(#2ec27e, 0.35);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-weight: 700;
+    font-size: 14px;
+}
+
+.status-pill-stopped {
+    background-color: alpha(#e01b24, 0.15);
+    color: #ff7b63;
+    border: 1px solid alpha(#e01b24, 0.35);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-weight: 700;
+    font-size: 14px;
+}
+
+.status-pill-fault {
+    background-color: alpha(#e5a50a, 0.18);
+    color: #f8e45c;
+    border: 1px solid alpha(#e5a50a, 0.4);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-weight: 700;
+    font-size: 14px;
+}
+
+.status-pill-checking {
+    background-color: alpha(@window_fg_color, 0.08);
+    color: @window_fg_color;
+    border: 1px solid alpha(@window_fg_color, 0.15);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.status-pill-pending {
+    background-color: alpha(#e5a50a, 0.15);
+    color: #f8e45c;
+    border: 1px solid alpha(#e5a50a, 0.35);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-weight: 700;
+    font-size: 14px;
+}
+
+.status-pill-coming-soon {
+    background-color: alpha(@window_fg_color, 0.08);
+    color: alpha(@window_fg_color, 0.65);
+    border: 1px solid alpha(@window_fg_color, 0.16);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.3px;
+}
+
+
+/* Detection Engine Status Row Themes */
+.detection-running image.status-icon {
+    color: #57e389;
+}
+.detection-running label.subtitle {
+    color: #57e389;
+    font-weight: 600;
+}
+
+.detection-stopped image.status-icon {
+    color: alpha(@window_fg_color, 0.6);
+}
+.detection-stopped label.subtitle {
+    color: alpha(@window_fg_color, 0.6);
+}
+
+.detection-fault image.status-icon {
+    color: #f8e45c;
+}
+.detection-fault label.subtitle {
+    color: #f8e45c;
+    font-weight: 600;
+}
+
+
+.tile-card:disabled {
+    opacity: 0.45;
+}
+
+.secondary-btn {
+    background-color: alpha(@window_fg_color, 0.08);
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 14px;
+    min-height: 44px;
+}
+
+.secondary-btn:hover {
+    background-color: alpha(@window_fg_color, 0.14);
+}
+
+.secondary-btn-destructive {
+    background-color: alpha(#e01b24, 0.12);
+    border: 1px solid alpha(#e01b24, 0.25);
+    color: #ff7b63;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 14px;
+    min-height: 44px;
+}
+
+.secondary-btn-destructive:hover {
+    background-color: alpha(#e01b24, 0.22);
+}
+
+/* Warning Notice Banner */
+.warning-card {
+    background-color: alpha(#ff9800, 0.08);
+    border: 1px solid alpha(#ff9800, 0.28);
+    border-radius: 14px;
+    padding: 14px 18px;
+}
+
+.warning-card image {
+    color: #ff9800;
+}
+
+.warning-text {
+    color: #ff9800;
+    font-weight: 500;
+    font-size: 13.5px;
+    line-height: 1.35;
+}
+
+/* Camera Focus Tool Styles */
+.focus-gauge-card {
+    background-color: alpha(@window_fg_color, 0.04);
+    border: 1px solid alpha(@window_fg_color, 0.08);
+    border-radius: 16px;
+    padding: 16px;
+}
+
+.focus-gauge-score {
+    font-size: 46px;
+    font-weight: 800;
+    font-family: monospace;
+    letter-spacing: -1px;
+}
+
+.focus-gauge-score.score-good {
+    color: #2ec27e;
+}
+
+.focus-gauge-score.score-fair {
+    color: #f6d32d;
+}
+
+.focus-gauge-score.score-poor {
+    color: #e01b24;
+}
+
+.focus-trend-badge {
+    padding: 6px 14px;
+    border-radius: 9999px;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+
+.focus-trend-badge.sharpening {
+    background-color: alpha(#2ec27e, 0.18);
+    color: #2ec27e;
+    border: 1px solid alpha(#2ec27e, 0.35);
+}
+
+.focus-trend-badge.stable {
+    background-color: alpha(#3584e4, 0.18);
+    color: #3584e4;
+    border: 1px solid alpha(#3584e4, 0.35);
+}
+
+.focus-trend-badge.overshot {
+    background-color: alpha(#e01b24, 0.18);
+    color: #ff7b63;
+    border: 1px solid alpha(#e01b24, 0.35);
+}
+
+.focus-preview-area {
+    background-color: #0b0d0e;
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    border-radius: 14px;
+    min-height: 420px;
+}
+
+.focus-zoom-card {
+    background-color: alpha(@window_fg_color, 0.04);
+    border: 1px solid alpha(@window_fg_color, 0.08);
+    border-radius: 16px;
+    padding: 12px;
+}
+
+.focus-zoom-frame {
+    background-color: #0b0d0e;
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    border-radius: 12px;
+}
+
+.camera-tab-bar {
+    background-color: alpha(@window_fg_color, 0.05);
+    border: 1px solid alpha(@window_fg_color, 0.08);
+    border-radius: 14px;
+    padding: 4px;
+}
+
+.camera-tab-btn {
+    font-size: 14px;
+    font-weight: 600;
+    padding: 8px 16px;
+    border-radius: 10px;
+    min-height: 44px;
+    transition: all 150ms ease-in-out;
+}
+
+.camera-tab-btn:hover {
+    background-color: alpha(@window_fg_color, 0.08);
+}
+
+.camera-tab-btn.active-tab {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    font-weight: 700;
+}
+
+.focus-loading-overlay {
+    background-color: rgba(11, 13, 14, 0.85);
+    border-radius: 14px;
+}
+
+.usb-path-tag {
+    background-color: alpha(@window_fg_color, 0.07);
+    color: @window_fg_color;
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    border-radius: 8px;
+    padding: 3px 10px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.usb-stat-large {
+    font-size: 22px;
+    font-weight: 800;
+    font-feature-settings: "tnum";
+}
+
+.qr-card {
+    background-color: #ffffff;
+    border-radius: 14px;
+    padding: 10px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+
