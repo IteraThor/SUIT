@@ -353,4 +353,26 @@ button.compact-btn,
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
 }
 
+.dimmed-overlay-target {
+    opacity: 0.22;
+}
+
+.browser-integration-lock-overlay {
+    background-color: rgba(24, 26, 30, 0.92);
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    border-radius: 16px;
+    padding: 22px 26px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+}
+
+.browser-integration-lock-overlay label.title {
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.browser-integration-lock-overlay label.subtitle {
+    font-size: 13px;
+    color: alpha(@window_fg_color, 0.7);
+}
+
 
