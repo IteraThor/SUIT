@@ -243,30 +243,48 @@ class DisplayService:
     @staticmethod
     def get_touchscreens() -> list[str]:
         touchscreens = set()
-        try:
-            output = subprocess.check_output(["udevadm", "info", "--export-db"], text=True)
-            blocks = output.split("\n\n")
-            for block in blocks:
-                if "ID_INPUT_TOUCHSCREEN=1" in block:
-                    for line in block.splitlines():
-                        if line.startswith("E: NAME=") or line.startswith("E: HID_NAME="):
-                            val = line.split("=", 1)[1].strip().strip('"')
-                            if val:
-                                touchscreens.add(val)
-        except Exception:
-            logger.exception("Failed detecting touchscreens via udevadm")
 
-        # Fallback to sysfs search if empty
-        if not touchscreens:
-            for name_file in glob.glob("/sys/class/input/input*/name"):
+        # Fast path: scan already-parsed /run/udev/data/ for event nodes.
+        # Much faster than udevadm info --export-db which dumps the full DB.
+        try:
+            for entry_path in glob.glob("/run/udev/data/c13:*"):
                 try:
-                    p = Path(name_file).parent
-                    # Check if device has absolute coordinates indicative of a touchscreen
-                    prop_file = p / "properties"
-                    if prop_file.exists():
-                        with open(name_file, "r") as f:
-                            dev_name = f.read().strip()
-                        if "touch" in dev_name.lower():
+                    with open(entry_path, "r") as f:
+                        content = f.read()
+                    if "ID_INPUT_TOUCHSCREEN=1" not in content:
+                        continue
+                    for line in content.splitlines():
+                        # Prefer E:ID_MODEL (udev property), fallback to E:NAME
+                        if line.startswith("E:ID_MODEL=") or line.startswith("E:NAME="):
+                            # Format may be E:KEY=VALUE or E: KEY=VALUE
+                            val = line.split("=", 1)[1].strip().strip('"')
+                            vendor_line = next(
+                                (l for l in content.splitlines() if l.startswith("E:ID_VENDOR=")),
+                                ""
+                            )
+                            vendor = vendor_line.split("=", 1)[1].strip() if vendor_line else ""
+                            full_name = f"{vendor} {val}".strip() if vendor else val
+                            if full_name:
+                                touchscreens.add(full_name)
+                            break
+                except Exception:
+                    continue
+        except Exception:
+            logger.exception("Failed scanning /run/udev/data/ for touchscreens")
+
+        # Fallback: read device names from sysfs, using INPUT_PROP_DIRECT (0x2)
+        # to identify touchscreens without spawning any subprocess.
+        if not touchscreens:
+            for name_file in glob.glob("/sys/class/input/event*/device/name"):
+                try:
+                    props_file = name_file.replace("/name", "/properties")
+                    if not Path(props_file).exists():
+                        continue
+                    props_val = int(open(props_file).read().strip(), 16)
+                    # INPUT_PROP_DIRECT (bit 1) = physically attached touchscreen
+                    if props_val & 0x2:
+                        dev_name = open(name_file).read().strip()
+                        if dev_name:
                             touchscreens.add(dev_name)
                 except Exception:
                     continue
@@ -319,47 +337,40 @@ class DisplayService:
 
     @staticmethod
     def rebind_usb_touch(touch_device_name: str) -> bool:
+        """Force libinput to re-read the LIBINPUT_CALIBRATION_MATRIX for the touch device.
+
+        Uses targeted udevadm trigger on the specific event nodes rather than
+        USB unbind/bind. USB rebind causes a full device disconnect that freezes
+        the UI; targeted trigger re-evaluates rules without dropping the device.
+        """
         if not touch_device_name or touch_device_name == "None":
             return False
         try:
-            bus_id = None
-            for name_file in glob.glob("/sys/class/input/input*/name"):
+            # Collect all event* sysfs paths whose /device/name matches
+            event_paths = []
+            for name_file in glob.glob("/sys/class/input/event*/device/name"):
                 try:
                     with open(name_file, "r") as f:
                         if touch_device_name.strip().lower() in f.read().strip().lower():
-                            cur = Path(name_file).resolve().parent
-                            while cur != Path("/"):
-                                if (cur / "idVendor").exists() and (cur / "busnum").exists():
-                                    bus_id = cur.name
-                                    break
-                                cur = cur.parent
-                            if bus_id:
-                                break
+                            # /sys/class/input/eventN/device/name -> /sys/class/input/eventN
+                            event_paths.append(str(Path(name_file).resolve().parent.parent))
                 except Exception:
                     continue
 
-            if bus_id:
-                logger.info(f"Rebinding USB touch device {bus_id} for live calibration update")
-                subprocess.run(
-                    ["sudo", "-n", "tee", "/sys/bus/usb/drivers/usb/unbind"],
-                    input=f"{bus_id}\n",
-                    text=True,
-                    capture_output=True,
-                    check=True,
-                )
-                subprocess.run(
-                    ["sudo", "-n", "tee", "/sys/bus/usb/drivers/usb/bind"],
-                    input=f"{bus_id}\n",
-                    text=True,
-                    capture_output=True,
-                    check=True,
-                )
+            if event_paths:
+                logger.info(f"Triggering udev re-evaluation for {touch_device_name} ({len(event_paths)} node(s))")
+                for ep in event_paths:
+                    subprocess.run(
+                        ["sudo", "-n", "udevadm", "trigger", "--action=change", ep],
+                        capture_output=True,
+                        check=False,  # best-effort per node
+                    )
                 return True
             else:
-                logger.debug(f"Could not locate USB bus ID for touch device: {touch_device_name}")
+                logger.debug(f"Could not locate sysfs event node for: {touch_device_name}")
                 return False
         except Exception:
-            logger.exception("Failed rebinding USB touch device")
+            logger.exception("Failed triggering udev for touch device")
             return False
 
     @classmethod
