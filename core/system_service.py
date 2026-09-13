@@ -277,6 +277,10 @@ class SystemService:
         return WaydroidService.is_virtual_machine()
 
     @classmethod
+    def launch_aurora_store(cls) -> tuple[bool, str]:
+        return WaydroidService.launch_aurora_store.__func__(cls)
+
+    @classmethod
     def launch_darts_scorer(cls) -> tuple[bool, str]:
         return WaydroidService.launch_darts_scorer.__func__(cls)
 

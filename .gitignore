@@ -6,3 +6,6 @@ venv/
 docs/superpowers/
 tests/
 scripts/
+core/private/
+modules_gtk/private/
+private/

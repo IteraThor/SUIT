@@ -7,7 +7,11 @@ from core.system_service import SystemService
 from modules_gtk.async_utils import run_async
 from modules_gtk.ui_helpers import create_button_with_icon, copy_to_clipboard
 from modules_gtk.dialogs.tailscale_dialog import TailscaleAuthDialog
-from modules_gtk.dialogs.darts_scorer_dialog import DartsScorerInstallDialog
+
+try:
+    from modules_gtk.private.darts_scorer_dialog import DartsScorerInstallDialog
+except ImportError:
+    DartsScorerInstallDialog = None
 
 __all__ = ["AdvancedUsersView"]
 
@@ -269,7 +273,19 @@ class AdvancedUsersView(Adw.NavigationPage):
             sbox.set_halign(Gtk.Align.CENTER)
             sbox.set_valign(Gtk.Align.CENTER)
 
-            if w_status.get("darts_scorer"):
+            has_private_installer = DartsScorerInstallDialog is not None
+            is_installed = bool(w_status.get("darts_scorer"))
+
+            if not has_private_installer and not is_installed:
+                self.row_scorer.set_visible(False)
+                self.grp_waydroid.set_title("Android Container (Waydroid)")
+                self.grp_waydroid.set_description("Android container utilities, settings, and apps.")
+            else:
+                self.row_scorer.set_visible(True)
+                self.grp_waydroid.set_title("Darts Scorer")
+                self.grp_waydroid.set_description("Android companion app for live scores, stats, and scoreboard.")
+
+            if is_installed:
                 self.row_scorer.set_subtitle("Android scoreboard app running via Waydroid.")
                 sbox.append(Gtk.Image.new_from_icon_name("media-playback-start-symbolic"))
                 sbox.append(Gtk.Label(label="Launch Scorer"))
@@ -279,7 +295,7 @@ class AdvancedUsersView(Adw.NavigationPage):
                 self.btn_scorer_action.set_sensitive(True)
                 self.btn_scorer_action._is_installed = True
                 self.box_scorer.append(self.btn_scorer_action)
-            else:
+            elif has_private_installer:
                 self.row_scorer.set_subtitle("Android scoreboard app for local score tracking.")
                 sbox.append(Gtk.Image.new_from_icon_name("software-update-available-symbolic"))
                 sbox.append(Gtk.Label(label="1-Click Install"))
@@ -368,12 +384,15 @@ class AdvancedUsersView(Adw.NavigationPage):
             self.window.show_toast("Opening Darts Scorer...")
             return
 
-        def on_finished(success, msg):
-            self.window.show_toast(msg)
-            self.refresh()
+        if DartsScorerInstallDialog is not None:
+            def on_finished(success, msg):
+                self.window.show_toast(msg)
+                self.refresh()
 
-        dialog = DartsScorerInstallDialog(self.window, on_finished)
-        dialog.present()
+            dialog = DartsScorerInstallDialog(self.window, on_finished)
+            dialog.present()
+        else:
+            self.window.show_toast("Darts Scorer installer is not available.")
 
     def _on_sub_debloat_clicked(self, btn):
         self.window.show_toast("Running Waydroid debloat and seamless multi-window setup...")
