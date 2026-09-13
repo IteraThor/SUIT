@@ -16,6 +16,24 @@ try:
 except Exception:
     pass
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
+if os.path.isdir(os.path.join(PROJECT_ROOT, "core")):
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
+else:
+    for cand in [os.path.expanduser("~/SUIT-Fedora"), os.path.expanduser("~/SUIT")]:
+        if os.path.isdir(os.path.join(cand, "core")):
+            if cand not in sys.path:
+                sys.path.insert(0, cand)
+            break
+
+try:
+    from core.light_service import LightService
+except Exception as e:
+    logging.warning("Could not import LightService: %s", e)
+    LightService = None
+
 def read_message():
     raw_len = sys.stdin.buffer.read(4)
     if not raw_len or len(raw_len) < 4:
@@ -101,6 +119,43 @@ def handle_action(action: str) -> dict:
 
     elif action == "ping":
         return {"status": "ok", "action": "ping", "message": "SUIT Kiosk Host ready"}
+
+    elif action == "get_light_status":
+        if not LightService:
+            return {"status": "error", "error": "Light service unavailable"}
+        cfg = LightService.read_config()
+        if not cfg.get("light_enabled"):
+            return {
+                "status": "ok",
+                "action": "get_light_status",
+                "enabled": False,
+                "is_on": False,
+                "ip": cfg.get("light_ip", ""),
+            }
+        reachable, is_on, msg_text = LightService.query_status(cfg)
+        return {
+            "status": "ok",
+            "action": "get_light_status",
+            "enabled": True,
+            "device_type": cfg.get("light_device_type", "wled"),
+            "ip": cfg.get("light_ip", ""),
+            "reachable": reachable,
+            "is_on": is_on,
+            "message": msg_text,
+        }
+
+    elif action == "toggle_light":
+        if not LightService:
+            return {"status": "error", "error": "Light service unavailable"}
+        ok, is_now_on, msg_text = LightService.toggle_light()
+        if ok:
+            return {
+                "status": "ok",
+                "action": "toggle_light",
+                "is_on": is_now_on,
+                "message": msg_text,
+            }
+        return {"status": "error", "action": "toggle_light", "error": msg_text}
 
     return {"status": "error", "error": f"Unknown action: {action}"}
 

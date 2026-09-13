@@ -197,6 +197,51 @@
   color: #da3954 !important;
 }
 
+.suit-item-icon.suit-icon-light {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #707580 !important;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.suit-item-icon.suit-icon-light.suit-light-active {
+  background: rgba(250, 189, 0, 0.22) !important;
+  color: #fabd00 !important;
+  box-shadow: 0 0 14px rgba(250, 189, 0, 0.4) !important;
+}
+
+.suit-popover-item.suit-item-light-on {
+  background: rgba(250, 189, 0, 0.06) !important;
+  border-color: rgba(250, 189, 0, 0.15) !important;
+}
+
+.suit-light-badge {
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  padding: 3px 8px !important;
+  border-radius: 6px !important;
+  letter-spacing: 0.05em !important;
+  user-select: none !important;
+  transition: all 0.2s ease !important;
+}
+
+.suit-light-badge.suit-light-on {
+  background: rgba(250, 189, 0, 0.2) !important;
+  color: #fabd00 !important;
+  border: 1px solid rgba(250, 189, 0, 0.4) !important;
+}
+
+.suit-light-badge.suit-light-off {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: #707580 !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.suit-light-badge.suit-light-busy {
+  background: rgba(74, 137, 255, 0.15) !important;
+  color: #4a89ff !important;
+  border: 1px solid rgba(74, 137, 255, 0.3) !important;
+}
+
 .suit-item-icon svg {
   width: 16px !important;
   height: 16px !important;

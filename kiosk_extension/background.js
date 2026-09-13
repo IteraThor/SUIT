@@ -38,7 +38,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   try {
     chrome.runtime.sendNativeMessage(
       "com.suit.kiosk",
-      { action: request.action },
+      request,
       (response) => {
         if (chrome.runtime.lastError) {
           console.error("SUIT Kiosk Native Message error:", chrome.runtime.lastError.message);
