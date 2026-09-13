@@ -134,9 +134,24 @@ class CameraFocusService:
         target_w, target_h = out_size
         cw = max(20, int(target_w / zoom_factor))
         ch = max(20, int(target_h / zoom_factor))
-        x1 = max(0, min(fw - cw, cx - cw // 2))
-        y1 = max(0, min(fh - ch, cy - ch // 2))
-        crop = frame[y1 : y1 + ch, x1 : x1 + cw]
+
+        x1 = cx - cw // 2
+        y1 = cy - ch // 2
+        x2 = x1 + cw
+        y2 = y1 + ch
+
+        pad_top = max(0, -y1)
+        pad_bottom = max(0, y2 - fh)
+        pad_left = max(0, -x1)
+        pad_right = max(0, x2 - fw)
+
+        if pad_top > 0 or pad_bottom > 0 or pad_left > 0 or pad_right > 0:
+            padded = cv2.copyMakeBorder(
+                frame, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=[10, 12, 15]
+            )
+            crop = padded[y1 + pad_top : y2 + pad_top, x1 + pad_left : x2 + pad_left]
+        else:
+            crop = frame[y1:y2, x1:x2]
 
         if crop.size == 0:
             return None
