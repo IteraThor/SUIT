@@ -437,6 +437,92 @@ class SystemService:
         msg = "All recommended optimizations applied." if all_success else "Some optimizations had warnings."
         return all_success, msg
 
+    @classmethod
+    def apply_all_system_and_apps(
+        cls,
+        user: str,
+        include_touch: bool = False,
+        step_callback=None
+    ) -> tuple[bool, str, list[dict]]:
+        """
+        Sequentially executes all system optimizations, theme/visuals, optional touch tweaks,
+        bloatware removal, and Chromium installation. Excludes Advanced Users.
+        Errors on individual steps do not abort subsequent steps.
+        """
+        step_definitions = [
+            ("Power Profile", "performance", "Locking CPU to maximum performance"),
+            ("Display Always On", True, "Disabling screen blanking and sleep"),
+            ("Automatic Login", True, "Configuring unattended auto-login"),
+            ("Keyring Password", "blank", "Unlocking GNOME Keyring for passwordless boot"),
+            ("Appearance & Theme", "theme", "Applying dark theme and organizing app grid"),
+        ]
+        if include_touch:
+            step_definitions.append(("Touchscreen Tweaks", True, "Enlarging UI elements and touchscreen controls"))
+        step_definitions.append(("Remove Unused Apps", "debloat", "Removing default bloatware packages"))
+        step_definitions.append(("Chromium Browser", "chromium", "Installing Chromium web browser"))
+
+        total_steps = len(step_definitions)
+        results = []
+
+        for idx, (title, action_type, default_desc) in enumerate(step_definitions, 1):
+            if step_callback:
+                step_callback(idx, total_steps, title, default_desc)
+
+            success = False
+            msg = ""
+
+            try:
+                if action_type == "performance":
+                    success = cls.set_performance_profile("throughput-performance")
+                    msg = "Power profile set to performance." if success else "Failed to set power profile."
+                elif title == "Display Always On":
+                    success = cls.set_screen_blanking(True)
+                    msg = "Display always-on configured." if success else "Failed configuring display sleep."
+                elif title == "Automatic Login":
+                    success = cls.set_auto_login(True, user)
+                    msg = "Automatic login enabled." if success else "Failed setting automatic login."
+                elif action_type == "blank":
+                    is_blank, _ = cls.is_keyring_blank_or_unlocked()
+                    if is_blank:
+                        success, msg = True, "Keyring is already unlocked."
+                    else:
+                        success, msg = cls.reset_keyring_to_blank()
+                elif action_type == "theme":
+                    success, msg = cls.apply_desktop_visuals()
+                elif title == "Touchscreen Tweaks":
+                    success, msg = cls.set_touch_scaling(True)
+                elif action_type == "debloat":
+                    bloat = cls.get_installed_bloatware()
+                    if not bloat:
+                        success, msg = True, "No default bloatware detected."
+                    else:
+                        def _debloat_cb(cur, tot, detail_str):
+                            if step_callback:
+                                step_callback(idx, total_steps, title, detail_str)
+                        success, msg = cls.debloat_packages(bloat, progress_callback=_debloat_cb)
+                elif action_type == "chromium":
+                    if cls.is_app_installed("chromium"):
+                        success, msg = True, "Chromium is already installed."
+                    else:
+                        if step_callback:
+                            step_callback(idx, total_steps, title, "Downloading and installing Chromium via DNF...")
+                        success, msg = cls.install_chromium()
+            except Exception as e:
+                logger.exception("Error executing step %s during apply_all", title)
+                success = False
+                msg = f"Error: {e}"
+
+            results.append({"step": title, "success": success, "message": msg})
+
+        all_success = all(r["success"] for r in results)
+        if all_success:
+            summary_msg = "All system configurations applied successfully."
+        else:
+            failed = [r["step"] for r in results if not r["success"]]
+            summary_msg = f"Completed with warnings on: {', '.join(failed)}."
+
+        return all_success, summary_msg, results
+
 
 __all__ = [
     "SystemService",

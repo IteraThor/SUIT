@@ -35,9 +35,13 @@ class SystemView(Adw.NavigationPage):
         self._updating = False
         self.advanced_view = None
 
+        # Root overlay container allowing full-screen modal progress overlay
+        self.root_overlay = Gtk.Overlay()
+        self.set_child(self.root_overlay)
+
         scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
         scrolled.set_kinetic_scrolling(True)
-        self.set_child(scrolled)
+        self.root_overlay.set_child(scrolled)
 
         clamp = Adw.Clamp(maximum_size=820, tightening_threshold=640)
         clamp.set_margin_top(12)
@@ -49,6 +53,58 @@ class SystemView(Adw.NavigationPage):
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         clamp.set_child(main_box)
 
+        # Build Apply All progress overlay widget
+        self.apply_overlay_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.apply_overlay_box.add_css_class("apply-all-overlay")
+        self.apply_overlay_box.set_valign(Gtk.Align.FILL)
+        self.apply_overlay_box.set_halign(Gtk.Align.FILL)
+        self.apply_overlay_box.set_hexpand(True)
+        self.apply_overlay_box.set_vexpand(True)
+        self.apply_overlay_box.set_visible(False)
+
+        # Block background clicks while overlay is active
+        click_blocker = Gtk.GestureClick.new()
+        click_blocker.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        self.apply_overlay_box.add_controller(click_blocker)
+
+        # Centered card inside the overlay
+        center_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        center_box.add_css_class("apply-all-card")
+        center_box.set_valign(Gtk.Align.CENTER)
+        center_box.set_halign(Gtk.Align.CENTER)
+        center_box.set_size_request(420, -1)
+
+        self.apply_spinner = Gtk.Spinner()
+        self.apply_spinner.set_size_request(40, 40)
+        self.apply_spinner.set_halign(Gtk.Align.CENTER)
+        center_box.append(self.apply_spinner)
+
+        self.lbl_apply_main_title = Gtk.Label(label="Applying System Configurations")
+        self.lbl_apply_main_title.add_css_class("title")
+        self.lbl_apply_main_title.set_halign(Gtk.Align.CENTER)
+        center_box.append(self.lbl_apply_main_title)
+
+        self.lbl_apply_step_title = Gtk.Label(label="Preparing...")
+        self.lbl_apply_step_title.add_css_class("step-title")
+        self.lbl_apply_step_title.set_halign(Gtk.Align.CENTER)
+        center_box.append(self.lbl_apply_step_title)
+
+        self.apply_progress_bar = Gtk.ProgressBar()
+        self.apply_progress_bar.set_fraction(0.0)
+        self.apply_progress_bar.set_size_request(340, -1)
+        self.apply_progress_bar.set_halign(Gtk.Align.CENTER)
+        center_box.append(self.apply_progress_bar)
+
+        self.lbl_apply_detail = Gtk.Label(label="Please wait...")
+        self.lbl_apply_detail.add_css_class("detail-text")
+        self.lbl_apply_detail.set_halign(Gtk.Align.CENTER)
+        self.lbl_apply_detail.set_wrap(True)
+        self.lbl_apply_detail.set_max_width_chars(45)
+        center_box.append(self.lbl_apply_detail)
+
+        self.apply_overlay_box.append(center_box)
+        self.root_overlay.add_overlay(self.apply_overlay_box)
+
         # =========================================================================
         # Group 1: System Optimization
         # =========================================================================
@@ -57,12 +113,12 @@ class SystemView(Adw.NavigationPage):
             description="Performance profile, unattended auto-login, and display power settings."
         )
         self.btn_optimize_all = create_button_with_icon(
-            "emblem-ok-symbolic",
-            "Apply Recommended",
+            "system-run-symbolic",
+            "Apply All",
             "suggested-action compact-btn",
             height=34
         )
-        self.btn_optimize_all.connect("clicked", self._on_apply_recommended_clicked)
+        self.btn_optimize_all.connect("clicked", self._on_apply_all_clicked)
         self.grp_system.set_header_suffix(self.btn_optimize_all)
         main_box.append(self.grp_system)
 
@@ -239,21 +295,27 @@ class SystemView(Adw.NavigationPage):
                 vis_status = data["visuals"]
                 is_touch = data["touch"]
 
-                # 1. Recommended Button
-                self.btn_optimize_all.set_child(None)
-                box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-                box.set_halign(Gtk.Align.CENTER)
-                box.set_valign(Gtk.Align.CENTER)
+                # 1. Apply All Button Visibility and State
+                all_configured = (
+                    status["profile_ok"]
+                    and status["autologin_ok"]
+                    and status["power_ok"]
+                    and is_blank
+                    and vis_status.get("all_ok", False)
+                    and (not bloat)
+                    and is_chrom
+                )
 
-                if status["all_ok"]:
-                    box.append(Gtk.Image.new_from_icon_name("emblem-ok-symbolic"))
-                    box.append(Gtk.Label(label="All Recommended Applied"))
-                    self.btn_optimize_all.set_child(box)
-                    self.btn_optimize_all.remove_css_class("suggested-action")
-                    self.btn_optimize_all.add_css_class("secondary-btn")
+                if all_configured:
+                    self.btn_optimize_all.set_visible(False)
                 else:
+                    self.btn_optimize_all.set_visible(True)
+                    self.btn_optimize_all.set_child(None)
+                    box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                    box.set_halign(Gtk.Align.CENTER)
+                    box.set_valign(Gtk.Align.CENTER)
                     box.append(Gtk.Image.new_from_icon_name("system-run-symbolic"))
-                    box.append(Gtk.Label(label="Apply Recommended"))
+                    box.append(Gtk.Label(label="Apply All"))
                     self.btn_optimize_all.set_child(box)
                     self.btn_optimize_all.remove_css_class("secondary-btn")
                     self.btn_optimize_all.add_css_class("suggested-action")
@@ -386,20 +448,78 @@ class SystemView(Adw.NavigationPage):
     # -------------------------------------------------------------------------
     # Callbacks and Action Handlers
     # -------------------------------------------------------------------------
-    def _on_apply_recommended_clicked(self, btn):
-        self.window.show_toast("Applying all recommended optimizations...")
-        btn.set_sensitive(False)
+    def _on_apply_all_clicked(self, btn):
+        dialog = Adw.AlertDialog(
+            heading="Use Touchscreen Tweaks?",
+            body=(
+                "Apply All will configure maximum performance, automatic login, display always-on, "
+                "keyring unlock, dark theme, remove unused default apps, and install Chromium.\n\n"
+                "Will you be using a touchscreen display on this system?"
+            )
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("no", "No, Standard Display")
+        dialog.add_response("yes", "Yes, Touchscreen")
+        dialog.set_response_appearance("yes", Adw.ResponseAppearance.SUGGESTED)
+
+        def on_response(d, resp):
+            if resp not in ("yes", "no"):
+                return
+            include_touch = (resp == "yes")
+            self._start_apply_all(include_touch)
+
+        dialog.connect("response", on_response)
+        dialog.present(self.window)
+
+    def _start_apply_all(self, include_touch: bool):
+        # Freeze UI & show overlay
+        self.btn_optimize_all.set_sensitive(False)
+        if hasattr(self.window, "btn_back"):
+            self.window.btn_back.set_sensitive(False)
+
+        self.lbl_apply_step_title.set_label("Initializing...")
+        self.lbl_apply_detail.set_label("Starting system optimization queue...")
+        self.apply_progress_bar.set_fraction(0.0)
+        self.apply_spinner.start()
+        self.apply_overlay_box.set_visible(True)
+
+        def step_cb(cur, tot, title, detail):
+            def update_ui():
+                frac = (cur / tot) if tot > 0 else 0.0
+                self.lbl_apply_step_title.set_label(f"Step {cur} of {tot}: {title}")
+                self.lbl_apply_detail.set_label(detail)
+                self.apply_progress_bar.set_fraction(min(1.0, max(0.0, frac)))
+                return False
+            GLib.idle_add(update_ui)
 
         def worker():
-            return SystemService.apply_all_recommended(self.user)
+            return SystemService.apply_all_system_and_apps(
+                self.user,
+                include_touch=include_touch,
+                step_callback=step_cb
+            )
 
         def on_done(res):
-            btn.set_sensitive(True)
-            success, msg = res
-            self.window.show_toast(msg)
+            self.apply_spinner.stop()
+            self.apply_overlay_box.set_visible(False)
+            self.btn_optimize_all.set_sensitive(True)
+            if hasattr(self.window, "btn_back"):
+                self.window.btn_back.set_sensitive(True)
+
+            success, summary_msg, _ = res
+            self.window.show_toast(summary_msg)
             self.refresh()
 
-        run_async(worker, on_done=on_done)
+        def on_error(err):
+            self.apply_spinner.stop()
+            self.apply_overlay_box.set_visible(False)
+            self.btn_optimize_all.set_sensitive(True)
+            if hasattr(self.window, "btn_back"):
+                self.window.btn_back.set_sensitive(True)
+            self.window.show_toast(f"Error during Apply All: {err}")
+            self.refresh()
+
+        run_async(worker, on_done=on_done, on_error=on_error)
 
     def _on_autologin_toggled(self, row, param):
         if self._updating:
