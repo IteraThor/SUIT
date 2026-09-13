@@ -6,6 +6,7 @@ import subprocess
 from core.logger import get_logger
 from core.kiosk_service import KioskService
 from core.light_service import LightService
+from core.system_service import SystemService
 from modules_gtk.async_utils import run_async
 
 logger = get_logger("kiosk_view")
@@ -65,12 +66,15 @@ class KioskView(Adw.NavigationPage):
         self.btn_launch.connect("clicked", self._launch_kiosk)
         grp_kiosk.add(self.btn_launch)
 
-        # 2. Browser Integration Group
-        grp_ext = Adw.PreferencesGroup(
+        # 2. Browser Integration Group with Lock Overlay
+        self.overlay_browser = Gtk.Overlay()
+        main_box.append(self.overlay_browser)
+
+        self.grp_ext = Adw.PreferencesGroup(
             title="Browser Integration",
             description="Adds controls and illumination toggles directly into the Autodarts web interface in Chromium."
         )
-        main_box.append(grp_ext)
+        self.overlay_browser.set_child(self.grp_ext)
 
         self.row_ext = Adw.ActionRow(
             title="In-Page Controls in Chromium",
@@ -90,7 +94,7 @@ class KioskView(Adw.NavigationPage):
         self.btn_ext_toggle.add_css_class("suggested-action")
         self.btn_ext_toggle.connect("clicked", self._on_ext_toggle_clicked)
         self.row_ext.add_suffix(self.btn_ext_toggle)
-        grp_ext.add(self.row_ext)
+        self.grp_ext.add(self.row_ext)
 
         # Compact expander row for light controls inside Browser Integration
         self.expander_light = Adw.ExpanderRow(
@@ -147,7 +151,48 @@ class KioskView(Adw.NavigationPage):
         self.row_light_ip.add_suffix(box_test_btns)
         self.expander_light.add_row(self.row_light_ip)
 
-        grp_ext.add(self.expander_light)
+        self.grp_ext.add(self.expander_light)
+
+        # Floating lock card overlay shown when Chromium is not installed
+        self.box_chromium_lock = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.box_chromium_lock.set_halign(Gtk.Align.CENTER)
+        self.box_chromium_lock.set_valign(Gtk.Align.CENTER)
+        self.box_chromium_lock.add_css_class("browser-integration-lock-overlay")
+
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        header_box.set_halign(Gtk.Align.CENTER)
+        img_lock = Gtk.Image.new_from_icon_name("web-browser-symbolic")
+        img_lock.set_pixel_size(24)
+        header_box.append(img_lock)
+
+        lbl_lock_title = Gtk.Label(label="Chromium Required")
+        lbl_lock_title.add_css_class("title")
+        header_box.append(lbl_lock_title)
+        self.box_chromium_lock.append(header_box)
+
+        lbl_lock_desc = Gtk.Label(
+            label="Chromium needs to be installed to use In-Page Controls & Dartboard Lighting."
+        )
+        lbl_lock_desc.add_css_class("subtitle")
+        lbl_lock_desc.set_justify(Gtk.Justification.CENTER)
+        lbl_lock_desc.set_wrap(True)
+        lbl_lock_desc.set_max_width_chars(42)
+        self.box_chromium_lock.append(lbl_lock_desc)
+
+        self.btn_install_chromium = Gtk.Button()
+        self.btn_install_chromium.add_css_class("suggested-action")
+        self.btn_install_chromium.add_css_class("compact-btn")
+        self.btn_install_chromium.set_halign(Gtk.Align.CENTER)
+        self.btn_install_chromium.set_size_request(180, 42)
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_box.set_halign(Gtk.Align.CENTER)
+        btn_box.append(Gtk.Image.new_from_icon_name("software-install-symbolic"))
+        btn_box.append(Gtk.Label(label="Install Chromium"))
+        self.btn_install_chromium.set_child(btn_box)
+        self.btn_install_chromium.connect("clicked", self._on_install_chromium_clicked)
+        self.box_chromium_lock.append(self.btn_install_chromium)
+
+        self.overlay_browser.add_overlay(self.box_chromium_lock)
 
         self.connect("map", lambda w: self.refresh())
 
@@ -173,6 +218,17 @@ class KioskView(Adw.NavigationPage):
             self.btn_ext_toggle.add_css_class("suggested-action")
             self.row_ext.set_subtitle("Load shutdown, restart, and session controls on all Chromium launches.")
 
+        # Check Chromium installation status
+        has_chrom = SystemService.is_app_installed("chromium")
+        if not has_chrom:
+            self.box_chromium_lock.set_visible(True)
+            self.grp_ext.set_sensitive(False)
+            self.grp_ext.add_css_class("dimmed-overlay-target")
+        else:
+            self.box_chromium_lock.set_visible(False)
+            self.grp_ext.set_sensitive(True)
+            self.grp_ext.remove_css_class("dimmed-overlay-target")
+
         # Load light config
         cfg = LightService.read_config()
         self._loading_light_config = True
@@ -192,6 +248,34 @@ class KioskView(Adw.NavigationPage):
             self._update_light_ui_sensitivity(enabled)
         finally:
             self._loading_light_config = False
+
+    def _on_install_chromium_clicked(self, btn):
+        btn.set_sensitive(False)
+        self.window.show_toast("Installing Chromium in background...")
+
+        spinner = Gtk.Spinner()
+        spinner.start()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box.set_halign(Gtk.Align.CENTER)
+        box.append(spinner)
+        box.append(Gtk.Label(label="Installing..."))
+        btn.set_child(box)
+
+        def worker():
+            return SystemService.install_chromium()
+
+        def on_done(res):
+            success, msg = res
+            self.window.show_toast(msg)
+            btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            btn_box.set_halign(Gtk.Align.CENTER)
+            btn_box.append(Gtk.Image.new_from_icon_name("software-install-symbolic"))
+            btn_box.append(Gtk.Label(label="Install Chromium"))
+            btn.set_child(btn_box)
+            btn.set_sensitive(True)
+            self.refresh()
+
+        run_async(worker, on_done=on_done)
 
     def _update_light_ui_sensitivity(self, enabled: bool):
         self.row_light_type.set_sensitive(enabled)
