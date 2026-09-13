@@ -3,6 +3,7 @@ import stat
 import subprocess
 import sys
 import shutil
+import ast
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
@@ -110,18 +111,42 @@ StartupWMClass=de.iterathor.suit.gtk
     except Exception:
         pass
 
-    # 2. Desktop entry (if Desktop folder exists)
+    # 2. Clean up any desktop folder launcher files (GNOME does not use desktop icons)
     desktop_dir = get_desktop_path()
     if desktop_dir.exists() and desktop_dir != Path.home():
         for filename in ["de.iterathor.suit.gtk.desktop", "SUIT.desktop"]:
             desktop_file = desktop_dir / filename
-            desktop_file.write_text(desktop_entry, encoding="utf-8")
-            desktop_file.chmod(desktop_file.stat().st_mode | stat.S_IEXEC)
-            try:
-                subprocess.run(["gio", "set", str(desktop_file), "metadata::trusted", "true"], check=False, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
-            print(f"Desktop launcher created at: {desktop_file}")
+            if desktop_file.exists():
+                try:
+                    desktop_file.unlink()
+                    print(f"Removed unnecessary desktop folder file: {desktop_file}")
+                except Exception:
+                    pass
+
+    # 3. Automatically pin to GNOME Dash favorites
+    pin_to_dash("de.iterathor.suit.gtk.desktop")
+
+
+def pin_to_dash(desktop_file: str = "de.iterathor.suit.gtk.desktop") -> bool:
+    """Pin the SUIT desktop entry to GNOME Shell Dash favorites."""
+    try:
+        res = subprocess.run(["gsettings", "get", "org.gnome.shell", "favorite-apps"], capture_output=True, text=True)
+        out = res.stdout.strip()
+        if out.startswith("["):
+            favs = ast.literal_eval(out)
+            # Remove legacy name if present
+            favs = [f for f in favs if f != "SUIT.desktop"]
+            if desktop_file not in favs:
+                favs.append(desktop_file)
+                val_str = str(favs).replace('"', "'")
+                subprocess.run(["gsettings", "set", "org.gnome.shell", "favorite-apps", val_str], check=True)
+                print(f"Pinned {desktop_file} to GNOME Dash favorites.")
+            else:
+                print(f"{desktop_file} is already pinned to GNOME Dash favorites.")
+            return True
+    except Exception as e:
+        print(f"Note: Could not automatically pin to Dash favorites: {e}")
+        return False
 
 if __name__ == "__main__":
     print("--- SUIT GTK4 Setup ---")

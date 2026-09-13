@@ -14,7 +14,7 @@ To install SUIT, copy and run this single command in your terminal:
 git clone https://github.com/IteraThor/SUIT.git && cd SUIT && chmod +x install.sh && ./install.sh
 ```
 
-Launch **SUIT for Fedora** directly from your application menu or desktop icon once installed.
+Launch **SUIT for Fedora** directly from your application menu or Dash favorites once installed.
 
 ---
 
