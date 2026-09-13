@@ -13,9 +13,17 @@ from core.logger import get_logger
 logger = get_logger("waydroid")
 
 
+try:
+    from core.private.darts_scorer_service import DartsScorerService
+    HAS_PRIVATE_DARTS_SCORER = True
+except ImportError:
+    DartsScorerService = None
+    HAS_PRIVATE_DARTS_SCORER = False
+
+
 class WaydroidService:
     AURORA_APK_URL = "https://gitlab.com/-/project/6922885/uploads/b9f5d827145461a2195699660545160a/AuroraStore-4.8.3.apk"
-    APKEEP_BINARY_URL = "https://github.com/EFForg/apkeep/releases/download/1.0.0/apkeep-x86_64-unknown-linux-gnu"
+    APKEEP_BINARY_URL = getattr(DartsScorerService, "APKEEP_BINARY_URL", "")
 
     @staticmethod
     def is_waydroid_installed() -> bool:
@@ -298,150 +306,33 @@ class WaydroidService:
             return False, f"Failed installing ARM translation: {e}"
 
     @classmethod
+    def has_private_darts_scorer(cls) -> bool:
+        return HAS_PRIVATE_DARTS_SCORER
+
+    @classmethod
+    def is_darts_scorer_installed(cls) -> bool:
+        if DartsScorerService:
+            return DartsScorerService.is_darts_scorer_installed()
+        desktop = Path.home() / ".local/share/applications/waydroid.de.muetzner.dartsscorer.desktop"
+        return desktop.exists()
+
+    @classmethod
     def ensure_apkeep(cls) -> Path | None:
-        bin_dir = Path.home() / ".local/share/suit/bin"
-        bin_dir.mkdir(parents=True, exist_ok=True)
-        apkeep_path = bin_dir / "apkeep"
-        if apkeep_path.exists() and os.access(apkeep_path, os.X_OK):
-            return apkeep_path
-        try:
-            logger.info("Downloading apkeep tool...")
-            subprocess.run(["curl", "-sL", "-o", str(apkeep_path), cls.APKEEP_BINARY_URL], check=True, timeout=60)
-            apkeep_path.chmod(0o755)
-            return apkeep_path
-        except Exception as e:
-            logger.exception("Failed downloading apkeep")
-            return None
+        if DartsScorerService:
+            return DartsScorerService.ensure_apkeep()
+        return None
 
     @classmethod
     def wait_for_android_package_service(cls, timeout: int = 60) -> bool:
-        start = time.time()
-        while time.time() - start < timeout:
-            try:
-                res = subprocess.run(
-                    ["sudo", "-n", "lxc-attach", "-P", "/var/lib/waydroid/lxc", "-n", "waydroid", "--", "service", "check", "package"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                if "found" in res.stdout.lower():
-                    boot_res = subprocess.run(
-                        ["sudo", "-n", "lxc-attach", "-P", "/var/lib/waydroid/lxc", "-n", "waydroid", "--", "getprop", "sys.boot_completed"],
-                        capture_output=True,
-                        text=True,
-                        timeout=5
-                    )
-                    if "1" in boot_res.stdout.strip():
-                        return True
-            except Exception:
-                pass
-            time.sleep(2)
+        if DartsScorerService:
+            return DartsScorerService.wait_for_android_package_service(timeout=timeout)
         return False
 
     @classmethod
     def install_darts_scorer(cls, progress_callback=None) -> tuple[bool, str]:
-        try:
-            logger.info("Downloading and installing Darts Scorer app bundle...")
-            if progress_callback:
-                progress_callback("Preparing downloader tool...", 0.65)
-            apkeep_bin = cls.ensure_apkeep()
-            if not apkeep_bin:
-                return False, "Failed obtaining apkeep utility to download Darts Scorer."
-
-            # Ensure container is active
-            subprocess.run(["sudo", "-n", "systemctl", "start", "waydroid-container"], check=False)
-
-            # Ensure session is active
-            status_res = subprocess.run(["waydroid", "status"], capture_output=True, text=True)
-            if "Session:\tRUNNING" not in status_res.stdout and "Session: RUNNING" not in status_res.stdout:
-                subprocess.run(["waydroid", "session", "stop"], capture_output=True, text=True)
-                subprocess.Popen(["waydroid", "session", "start"])
-                time.sleep(3)
-
-            # Ensure Android package manager service is alive before attempting installation
-            if progress_callback:
-                progress_callback("Waiting for Android package service...", 0.70)
-            if not cls.wait_for_android_package_service(timeout=60):
-                return False, "Android system service did not start in time."
-
-            with tempfile.TemporaryDirectory(prefix="darts_download_") as tmpdir:
-                dl_dir = Path(tmpdir)
-                if progress_callback:
-                    progress_callback("Downloading Darts Scorer app bundle...", 0.78)
-                res = subprocess.run(
-                    [str(apkeep_bin), "-a", "de.muetzner.dartsscorer", "-d", "apk-pure", str(dl_dir)],
-                    capture_output=True,
-                    text=True,
-                    timeout=120
-                )
-                if res.returncode != 0:
-                    logger.warning(f"apkeep download error: {res.stderr}")
-                    return False, f"Failed downloading Darts Scorer: {res.stderr.strip()}"
-
-                xapk_files = list(dl_dir.glob("*.xapk"))
-                apk_files = list(dl_dir.glob("*.apk"))
-
-                splits_dir = dl_dir / "splits"
-                splits_dir.mkdir(parents=True, exist_ok=True)
-
-                if xapk_files:
-                    with zipfile.ZipFile(xapk_files[0], 'r') as zf:
-                        zf.extractall(splits_dir)
-                elif apk_files:
-                    for a in apk_files:
-                        shutil.copy2(a, splits_dir)
-                else:
-                    return False, "No APK package found after download."
-
-                all_splits = list(splits_dir.glob("*.apk"))
-                if not all_splits:
-                    return False, "No valid split APK files found in bundle."
-
-                if progress_callback:
-                    progress_callback("Staging application splits...", 0.88)
-
-                # Stage splits in Waydroid's /data/local/tmp/splits
-                waydroid_splits = Path.home() / ".local/share/waydroid/data/local/tmp/splits"
-                subprocess.run(["sudo", "-n", "rm", "-rf", str(waydroid_splits)], check=False)
-                subprocess.run(["sudo", "-n", "mkdir", "-p", str(waydroid_splits)], check=True)
-                for split in all_splits:
-                    target = waydroid_splits / split.name
-                    subprocess.run(["sudo", "-n", "cp", str(split), str(target)], check=True)
-                subprocess.run(["sudo", "-n", "chmod", "-R", "777", str(waydroid_splits)], check=True)
-
-                if progress_callback:
-                    progress_callback("Committing installation inside Android...", 0.94)
-
-                commit_script = (
-                    "session_id=$(pm install-create -r | tr -dc '0-9')\n"
-                    "for f in /data/local/tmp/splits/*.apk; do\n"
-                    "    name=$(basename \"$f\")\n"
-                    "    size=$(wc -c < \"$f\")\n"
-                    "    pm install-write -S \"$size\" \"$session_id\" \"$name\" \"$f\"\n"
-                    "done\n"
-                    "pm install-commit \"$session_id\"\n"
-                )
-                commit_res = subprocess.run(
-                    ["sudo", "-n", "lxc-attach", "-P", "/var/lib/waydroid/lxc", "-n", "waydroid", "--", "/system/bin/sh", "-c", commit_script],
-                    capture_output=True,
-                    text=True,
-                    timeout=60
-                )
-                subprocess.run(["sudo", "-n", "rm", "-rf", str(waydroid_splits)], check=False)
-
-                if "Success" not in commit_res.stdout:
-                    logger.error(f"Failed committing Darts Scorer APK session: {commit_res.stdout} {commit_res.stderr}")
-                    return False, f"Failed committing installation: {commit_res.stdout or commit_res.stderr}"
-
-            # Verify package installed
-            if not cls.is_darts_scorer_installed():
-                return False, "Installation completed but package could not be verified."
-
-            logger.info("Darts Scorer installed successfully")
-            return True, "Darts Scorer installed successfully."
-        except Exception as e:
-            logger.exception("Failed installing Darts Scorer")
-            return False, f"Failed installing Darts Scorer: {e}"
+        if DartsScorerService:
+            return DartsScorerService.install_darts_scorer(progress_callback=progress_callback)
+        return False, "Darts Scorer automated installer is not available."
 
     @staticmethod
     def get_primary_screen_resolution() -> tuple[int, int]:
@@ -481,50 +372,20 @@ class WaydroidService:
 
     @classmethod
     def pin_darts_scorer_to_dash(cls) -> bool:
-        try:
-            proc = subprocess.run(["gsettings", "get", "org.gnome.shell", "favorite-apps"], capture_output=True, text=True)
-            if proc.returncode == 0:
-                raw = proc.stdout.strip()
-                favs = ast.literal_eval(raw) if raw.startswith("[") else []
-                app_id = "waydroid.de.muetzner.dartsscorer.desktop"
-                if app_id not in favs:
-                    favs.append(app_id)
-                    subprocess.run(["gsettings", "set", "org.gnome.shell", "favorite-apps", str(favs)], check=True)
-                    logger.info(f"Pinned {app_id} to GNOME Dash")
-                return True
-        except Exception as e:
-            logger.exception("Failed pinning Darts Scorer to dash")
+        if DartsScorerService:
+            return DartsScorerService.pin_darts_scorer_to_dash()
         return False
 
     @classmethod
-    def ensure_darts_scorer_launcher(cls) -> Path:
-        bin_dir = Path.home() / ".local/share/suit/bin"
-        bin_dir.mkdir(parents=True, exist_ok=True)
-        script_path = bin_dir / "launch-darts-scorer.sh"
-        script_content = (
-            "#!/usr/bin/env bash\n"
-            "systemctl is-active --quiet waydroid-container || sudo -n systemctl start waydroid-container\n"
-            "waydroid show-full-ui &\n"
-            "sleep 0.3\n"
-            "waydroid app launch de.muetzner.dartsscorer\n"
-        )
-        script_path.write_text(script_content, encoding="utf-8")
-        script_path.chmod(0o755)
-
-        desktop_file = Path.home() / ".local/share/applications/waydroid.de.muetzner.dartsscorer.desktop"
-        if desktop_file.exists():
-            try:
-                content = desktop_file.read_text(encoding="utf-8")
-                new_content = re.sub(r"^Exec=.*$", f"Exec={script_path}", content, flags=re.MULTILINE)
-                desktop_file.write_text(new_content, encoding="utf-8")
-                subprocess.run(["update-desktop-database", str(desktop_file.parent)], check=False)
-            except Exception:
-                logger.exception("Failed updating Darts Scorer desktop file")
-
-        return script_path
+    def ensure_darts_scorer_launcher(cls) -> Path | None:
+        if DartsScorerService:
+            return DartsScorerService.ensure_darts_scorer_launcher()
+        return None
 
     @classmethod
     def full_darts_scorer_setup(cls, progress_callback=None) -> tuple[bool, str]:
+        if not HAS_PRIVATE_DARTS_SCORER:
+            return False, "Darts Scorer automated setup is not available."
         try:
             # Step 1: Ensure Waydroid is installed and initialized
             if not cls.is_waydroid_installed() or not cls.is_waydroid_initialized():
@@ -592,39 +453,40 @@ class WaydroidService:
         return False, "none"
 
     @classmethod
-    def launch_darts_scorer(cls) -> tuple[bool, str]:
+    def launch_aurora_store(cls) -> tuple[bool, str]:
         try:
             is_vm, virt_type = cls.is_virtual_machine()
 
-            # Ensure container service is active
             c_check = subprocess.run(["systemctl", "is-active", "waydroid-container"], capture_output=True, text=True)
             if c_check.stdout.strip() != "active":
                 subprocess.run(["sudo", "-n", "systemctl", "start", "waydroid-container"], check=False)
 
-            # Check if Waydroid session daemon is already running
             status_res = subprocess.run(["waydroid", "status"], capture_output=True, text=True)
             if "Session:\tRUNNING" not in status_res.stdout and "Session: RUNNING" not in status_res.stdout:
-                # Stop any stale session tracking first to prevent RuntimeError
                 subprocess.run(["waydroid", "session", "stop"], capture_output=True, text=True)
-                # Spawn user session daemon in background
                 subprocess.Popen(["waydroid", "session", "start"])
                 time.sleep(2)
 
-            # Check if Darts Scorer is installed directly
-            if cls.is_darts_scorer_installed():
-                launcher = cls.ensure_darts_scorer_launcher()
-                cls.pin_darts_scorer_to_dash()
-                subprocess.Popen([str(launcher)])
-                if is_vm:
-                    return True, f"Launched Darts Scorer. Note: Running in a virtual machine ({virt_type})."
-                return True, "Launched Darts Scorer."
-
-            # Fallback to Aurora Store
             subprocess.Popen(["waydroid", "app", "launch", "com.aurora.store"])
-
             if is_vm:
                 return True, f"Launched Aurora Store. Note: Running in a virtual machine ({virt_type}). Waydroid requires physical GPU hardware acceleration (Intel/AMD) to render UI windows."
             return True, "Launched Aurora Store. Search for 'Darts Scorer' to install or open."
         except Exception as e:
-            logger.exception("Failed launching Darts Scorer / Aurora Store")
-            return False, f"Failed launching: {e}"
+            logger.exception("Failed launching Aurora Store")
+            return False, f"Failed launching Aurora Store: {e}"
+
+    @classmethod
+    def launch_darts_scorer(cls) -> tuple[bool, str]:
+        try:
+            if cls.is_darts_scorer_installed():
+                launcher = cls.ensure_darts_scorer_launcher()
+                cls.pin_darts_scorer_to_dash()
+                if launcher:
+                    subprocess.Popen([str(launcher)])
+                    is_vm, virt_type = cls.is_virtual_machine()
+                    if is_vm:
+                        return True, f"Launched Darts Scorer. Note: Running in a virtual machine ({virt_type})."
+                    return True, "Launched Darts Scorer."
+        except Exception:
+            pass
+        return cls.launch_aurora_store()

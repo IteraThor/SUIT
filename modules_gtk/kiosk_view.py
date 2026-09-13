@@ -196,7 +196,6 @@ class KioskView(Adw.NavigationPage):
     def _update_light_ui_sensitivity(self, enabled: bool):
         self.row_light_type.set_sensitive(enabled)
         self.row_light_ip.set_sensitive(enabled)
-        self.row_light_test.set_sensitive(enabled)
         self.btn_light_on.set_sensitive(enabled)
         self.btn_light_off.set_sensitive(enabled)
 

@@ -15,7 +15,6 @@ from modules_gtk.ui_helpers import (
 )
 from modules_gtk.dialogs.debloat_dialog import DebloatReviewDialog
 from modules_gtk.dialogs.tailscale_dialog import TailscaleAuthDialog
-from modules_gtk.dialogs.darts_scorer_dialog import DartsScorerInstallDialog
 from modules_gtk.advanced_users_view import AdvancedUsersView
 
 __all__ = [
@@ -23,7 +22,6 @@ __all__ = [
     "AdvancedUsersView",
     "DebloatReviewDialog",
     "TailscaleAuthDialog",
-    "DartsScorerInstallDialog",
     "copy_to_clipboard",
     "generate_qr_texture",
     "create_button_with_icon",
