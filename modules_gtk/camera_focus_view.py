@@ -127,7 +127,7 @@ class CameraFocusView(Adw.NavigationPage):
         text_box.append(self.lbl_step_title)
 
         self.lbl_step_desc = Gtk.Label(
-            label="Adjust focus by twisting the camera lens slowly and focus on the furthest double field.",
+            label="Adjust focus by twisting the camera lens slowly and focus on the furthest double field. Rotate until the score reaches a peak — that peak is your target focus value.",
             xalign=0,
             wrap=True,
         )

@@ -148,9 +148,11 @@ class KioskView(Adw.NavigationPage):
         url = self.row_url.get_text().strip() or "https://play.autodarts.com/"
         browser = self._get_browser_binary()
         KioskService.ensure_native_messaging_host()
+        KioskService.clean_stale_singleton_locks()
 
+        launcher = KioskService.ensure_launcher_script()
         flags = KioskService.get_kiosk_flags(enable_controls=True)
-        cmd = f"{browser} {' '.join(flags)} '{url}'"
+        cmd = f"{launcher} {browser} {' '.join(flags)} '{url}'"
         logger.info(f"Launching Kiosk: {cmd}")
         subprocess.Popen(cmd, shell=True)
         self.window.show_toast("Kiosk session launched.")
