@@ -40,7 +40,13 @@ def open_browser_url(parent_window=None, url: str = "") -> bool:
 
     # 1. Direct browser binary execution with Wayland ozone flags
     try:
-        browser = shutil.which("chromium-browser") or shutil.which("chromium") or shutil.which("google-chrome") or shutil.which("firefox")
+        browser = (
+            shutil.which("chromium-browser")
+            or shutil.which("chromium")
+            or shutil.which("google-chrome")
+            or shutil.which("brave-browser")
+            or shutil.which("firefox")
+        )
         if browser:
             env = os.environ.copy()
             if "WAYLAND_DISPLAY" not in env and os.path.exists(f"/run/user/{os.getuid()}/wayland-0"):
@@ -48,7 +54,7 @@ def open_browser_url(parent_window=None, url: str = "") -> bool:
             if "XDG_RUNTIME_DIR" not in env:
                 env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
             flags = []
-            if "chromium" in browser or "chrome" in browser:
+            if "chromium" in browser or "chrome" in browser or "brave" in browser:
                 # Essential for Wayland on Fedora: prevents Ozone platform X11 crash
                 flags = ["--ozone-platform-hint=auto", "--ozone-platform=wayland"]
             subprocess.Popen(
