@@ -135,11 +135,13 @@ class AudioToneService:
 
             # Sweet Spot (>= 95.0%): Harmonious Lock Chord (330 Hz + 495 Hz)
             if score >= 95.0:
-                try:
-                    buf = Gst.Buffer.new_wrapped(self._chord_buffer)
-                    appsrc.emit("push-buffer", buf)
-                except Exception:
-                    pass
+                with self._lock:
+                    if self._running and self._appsrc and not self._muted:
+                        try:
+                            buf = Gst.Buffer.new_wrapped(self._chord_buffer)
+                            self._appsrc.emit("push-buffer", buf)
+                        except Exception:
+                            pass
 
                 chord_deadline = time.monotonic() + 1.2
                 while time.monotonic() < chord_deadline and not self._stop_event.is_set():
@@ -158,11 +160,13 @@ class AudioToneService:
             bucket = min(10, max(0, int(round(norm * 10))))
             ping_data = self._ping_buffers[bucket]
 
-            try:
-                buf = Gst.Buffer.new_wrapped(ping_data)
-                appsrc.emit("push-buffer", buf)
-            except Exception:
-                pass
+            with self._lock:
+                if self._running and self._appsrc and not self._muted:
+                    try:
+                        buf = Gst.Buffer.new_wrapped(ping_data)
+                        self._appsrc.emit("push-buffer", buf)
+                    except Exception:
+                        pass
 
             deadline = time.monotonic() + interval
             snapshot_score = score

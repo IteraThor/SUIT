@@ -8,7 +8,7 @@
   window.__suitKioskInitialized = true;
 
   const isConfigHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-  const isConfigPort = window.location.port === "3180";
+  const isConfigPort = window.location.port === "3180" || window.location.port === "3182";
 
   // =========================================================================
   // SVGs matching Autodarts and Chakra design language
@@ -281,15 +281,22 @@
     // Wire Item Events
     document.getElementById("suit-item-board-config").addEventListener("click", () => {
       closePopover();
-      try {
-        chrome.runtime.sendMessage({ action: "open_tab", url: "http://localhost:3180/config" }, (resp) => {
-          if (chrome.runtime.lastError || (resp && resp.status === "error")) {
-            window.open("http://localhost:3180/config", "_blank");
-          }
-        });
-      } catch (e) {
-        window.open("http://localhost:3180/config", "_blank");
-      }
+      const openConfigUrl = (url) => {
+        try {
+          chrome.runtime.sendMessage({ action: "open_tab", url: url }, (resp) => {
+            if (chrome.runtime.lastError || (resp && resp.status === "error")) {
+              window.open(url, "_blank");
+            }
+          });
+        } catch (e) {
+          window.open(url, "_blank");
+        }
+      };
+
+      // Try v2 port 3182 first, fallback to v1 3180
+      fetch("http://localhost:3182/api/state", { method: "GET", mode: "no-cors", cache: "no-cache" })
+        .then(() => openConfigUrl("http://localhost:3182/config"))
+        .catch(() => openConfigUrl("http://localhost:3180/config"));
     });
 
     const lightBtn = document.getElementById("suit-item-light");

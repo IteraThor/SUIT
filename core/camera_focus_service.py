@@ -17,6 +17,12 @@ from core.logger import get_logger
 logger = get_logger("camera_focus")
 
 
+class LightingState(Enum):
+    TOO_DARK = "too_dark"
+    OPTIMAL = "optimal"
+    OVEREXPOSED = "overexposed"
+
+
 class FocusTrend(Enum):
     SHARPENING = "sharpening"
     STABLE = "stable"
@@ -32,6 +38,7 @@ class FocusAnalysis:
     focal_line_y: int
     bullseye: tuple[int, int]
     target_name: str = "Furthest Double"
+    lighting_state: LightingState = LightingState.OPTIMAL
 
 
 class CameraFocusService:
@@ -46,40 +53,54 @@ class CameraFocusService:
         self._accum_zoom_crop: np.ndarray | None = None
         self._cam_lock = threading.Lock()
 
-    def start_camera(self, dev_path: str, width: int = 1280, height: int = 960) -> bool:
-        """Open raw V4L2 camera device for high-framerate capture."""
+    def start_camera(self, dev_path: str, width: int = 1280, height: int = 960, retries: int = 3) -> bool:
+        """Open raw V4L2 camera device for high-framerate capture with retry backoff."""
         with self._cam_lock:
             self._stop_camera_unlocked()
             self.reset_peak()
-            try:
-                logger.info("Opening camera device %s (%dx%d)", dev_path, width, height)
-                self.cap = cv2.VideoCapture(dev_path, cv2.CAP_V4L2)
-                if not self.cap.isOpened():
-                    # Fallback to default backend
-                    self.cap = cv2.VideoCapture(dev_path)
-                
-                if not self.cap.isOpened():
-                    logger.error("Failed to open camera device %s", dev_path)
-                    return False
-
-                # Configure high-speed MJPG stream to preserve USB bandwidth
-                self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*"MJPG"))
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                self.current_device = dev_path
-                return True
-            except Exception:
-                logger.exception("Exception while opening camera %s", dev_path)
+            
+            import os, time
+            if not os.path.exists(dev_path):
+                logger.warning("Camera device path does not exist: %s", dev_path)
                 return False
+
+            for attempt in range(retries):
+                try:
+                    logger.info("Opening camera device %s (%dx%d) [attempt %d/%d]", dev_path, width, height, attempt + 1, retries)
+                    cap = cv2.VideoCapture(dev_path, cv2.CAP_V4L2)
+                    if not cap.isOpened():
+                        cap.release()
+                        cap = cv2.VideoCapture(dev_path)
+
+                    if cap.isOpened():
+                        # Configure high-speed MJPG stream to preserve USB bandwidth
+                        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*"MJPG"))
+                        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                        self.cap = cap
+                        self.current_device = dev_path
+                        return True
+                    else:
+                        cap.release()
+                except Exception:
+                    logger.exception("Exception while opening camera %s", dev_path)
+
+                if attempt < retries - 1:
+                    time.sleep(0.3)
+
+            logger.error("Failed to open camera device %s after %d attempts", dev_path, retries)
+            return False
 
     def read_frame(self) -> tuple[bool, np.ndarray | None]:
         """Read a single raw frame from the active camera."""
         with self._cam_lock:
-            if not self.cap or not self.cap.isOpened():
+            if self.cap is None or not self.cap.isOpened():
                 return False, None
             try:
                 ret, frame = self.cap.read()
-                return ret, frame
+                if ret and frame is not None and frame.size > 0:
+                    return True, frame
+                return False, None
             except Exception:
                 logger.exception("Error reading frame from camera")
                 return False, None
@@ -297,6 +318,20 @@ class CameraFocusService:
         blended = 0.5 * norm_lap + 0.5 * norm_ten
         return float(np.clip(blended * 100.0, 0.0, 100.0))
 
+    def check_lighting_quality(self, roi: np.ndarray) -> LightingState:
+        """Evaluate if the target patch has acceptable exposure for sharpness scoring."""
+        if roi is None or roi.size == 0:
+            return LightingState.TOO_DARK
+            
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if len(roi.shape) == 3 else roi
+        mean_luma = float(np.mean(gray))
+        
+        if mean_luma < 45.0:
+            return LightingState.TOO_DARK
+        elif mean_luma > 185.0:
+            return LightingState.OVEREXPOSED
+        return LightingState.OPTIMAL
+
     def find_dynamic_focal_line(
         self, image: np.ndarray, bullseye: tuple[int, int], target_roi: tuple[int, int, int, int]
     ) -> int:
@@ -313,7 +348,13 @@ class CameraFocusService:
         # Extract target ROI patch and compute sharpness score
         rx, ry, rw, rh = target_roi
         patch = image[ry : ry + rh, rx : rx + rw]
-        score = self.compute_sharpness(patch)
+        
+        lighting_state = self.check_lighting_quality(patch)
+        
+        if lighting_state != LightingState.OPTIMAL:
+            score = 0.0
+        else:
+            score = self.compute_sharpness(patch)
 
         # Locate current focal line
         focal_line_y = self.find_dynamic_focal_line(image, bullseye, target_roi)
@@ -341,4 +382,5 @@ class CameraFocusService:
             focal_line_y=focal_line_y,
             bullseye=bullseye,
             target_name="Furthest Double",
+            lighting_state=lighting_state,
         )
