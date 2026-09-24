@@ -9,9 +9,10 @@ logger = get_logger("systemd")
 
 class SystemdService:
     @staticmethod
-    def _get_manager_proxy() -> Gio.DBusProxy | None:
+    def _get_manager_proxy(scope: str = "system") -> Gio.DBusProxy | None:
         try:
-            bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+            bus_type = Gio.BusType.SESSION if scope == "user" else Gio.BusType.SYSTEM
+            bus = Gio.bus_get_sync(bus_type, None)
             return Gio.DBusProxy.new_sync(
                 bus,
                 Gio.DBusProxyFlags.NONE,
@@ -22,13 +23,22 @@ class SystemdService:
                 None
             )
         except Exception:
-            logger.exception("Failed to connect to systemd DBus Manager on system bus")
+            logger.exception(f"Failed to connect to systemd DBus Manager on {scope} bus")
             return None
 
     @classmethod
-    def get_status(cls, unit_name: str) -> dict:
+    def get_status(cls, unit_name: str, scope: str = "auto") -> dict:
+        if scope == "auto":
+            user_status = cls._get_status_scoped(unit_name, scope="user")
+            if user_status.get("active_state") != "nofile":
+                return user_status
+            return cls._get_status_scoped(unit_name, scope="system")
+        return cls._get_status_scoped(unit_name, scope=scope)
+
+    @classmethod
+    def _get_status_scoped(cls, unit_name: str, scope: str = "system") -> dict:
         result = {"active_state": "nofile", "sub_state": "dead", "unit_file_state": "missing"}
-        proxy = cls._get_manager_proxy()
+        proxy = cls._get_manager_proxy(scope=scope)
         if not proxy:
             return result
 
@@ -59,7 +69,8 @@ class SystemdService:
             return result
 
         try:
-            bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+            bus_type = Gio.BusType.SESSION if scope == "user" else Gio.BusType.SYSTEM
+            bus = Gio.bus_get_sync(bus_type, None)
             unit_proxy = Gio.DBusProxy.new_sync(
                 bus,
                 Gio.DBusProxyFlags.NONE,
@@ -85,13 +96,21 @@ class SystemdService:
                 result["sub_state"] = sub.unpack() if sub else "dead"
                 result["unit_file_state"] = unit_file.unpack() if unit_file else "unknown"
         except Exception:
-            logger.exception(f"Failed querying properties for {unit_name}")
+            logger.exception(f"Failed querying properties for {unit_name} on {scope} bus")
 
         return result
 
     @classmethod
-    def _execute_unit_action(cls, action: str, unit_name: str, mode: str = "replace") -> bool:
-        proxy = cls._get_manager_proxy()
+    def _execute_unit_action(cls, action: str, unit_name: str, mode: str = "replace", scope: str = "auto") -> bool:
+        target_scope = scope
+        if scope == "auto":
+            status_user = cls._get_status_scoped(unit_name, scope="user")
+            if status_user.get("active_state") != "nofile":
+                target_scope = "user"
+            else:
+                target_scope = "system"
+
+        proxy = cls._get_manager_proxy(scope=target_scope)
         dbus_method = {"start": "StartUnit", "stop": "StopUnit", "restart": "RestartUnit"}.get(action)
         if proxy and dbus_method:
             try:
@@ -102,40 +121,43 @@ class SystemdService:
                     3000,
                     None
                 )
-                logger.info(f"Successfully executed {action} for {unit_name} via DBus")
+                logger.info(f"Successfully executed {action} for {unit_name} via {target_scope} DBus")
                 return True
             except Exception as e:
-                logger.warning(f"DBus {action} failed for {unit_name}: {e}. Trying sudo systemctl fallback...")
+                logger.warning(f"DBus {action} failed for {unit_name} ({target_scope}): {e}. Trying CLI fallback...")
 
-        # Fallback to sudo systemctl (leveraging passwordless sudoers)
+        # Fallback to systemctl CLI
         try:
-            cmd = ["sudo", "systemctl", action, unit_name]
+            if target_scope == "user":
+                cmd = ["systemctl", "--user", action, unit_name]
+            else:
+                cmd = ["sudo", "systemctl", action, unit_name]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if res.returncode == 0:
-                logger.info(f"Successfully executed {action} for {unit_name} via sudo systemctl")
+                logger.info(f"Successfully executed {action} for {unit_name} via {target_scope} systemctl")
                 return True
             else:
-                logger.error(f"sudo systemctl {action} {unit_name} failed: {res.stderr.strip()}")
+                logger.error(f"{target_scope} systemctl {action} {unit_name} failed: {res.stderr.strip()}")
                 return False
         except Exception:
-            logger.exception(f"Failed to execute {action} for {unit_name} via sudo systemctl")
+            logger.exception(f"Failed to execute {action} for {unit_name} via {target_scope} systemctl")
             return False
 
     @classmethod
-    def start_unit(cls, unit_name: str, mode: str = "replace") -> bool:
-        return cls._execute_unit_action("start", unit_name, mode)
+    def start_unit(cls, unit_name: str, mode: str = "replace", scope: str = "auto") -> bool:
+        return cls._execute_unit_action("start", unit_name, mode, scope=scope)
 
     @classmethod
-    def stop_unit(cls, unit_name: str, mode: str = "replace") -> bool:
-        return cls._execute_unit_action("stop", unit_name, mode)
+    def stop_unit(cls, unit_name: str, mode: str = "replace", scope: str = "auto") -> bool:
+        return cls._execute_unit_action("stop", unit_name, mode, scope=scope)
 
     @classmethod
-    def restart_unit(cls, unit_name: str, mode: str = "replace") -> bool:
-        return cls._execute_unit_action("restart", unit_name, mode)
+    def restart_unit(cls, unit_name: str, mode: str = "replace", scope: str = "auto") -> bool:
+        return cls._execute_unit_action("restart", unit_name, mode, scope=scope)
 
     @classmethod
-    def is_unit_active(cls, unit_name: str) -> bool:
+    def is_unit_active(cls, unit_name: str, scope: str = "auto") -> bool:
         """Check if a systemd unit is currently in active state."""
-        status = cls.get_status(unit_name)
+        status = cls.get_status(unit_name, scope=scope)
         return status.get("active_state") == "active"
 

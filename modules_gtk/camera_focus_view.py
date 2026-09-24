@@ -16,7 +16,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw, GLib, Gdk
 
 from core.logger import get_logger
-from core.camera_focus_service import CameraFocusService, FocusTrend, FocusAnalysis
+from core.camera_focus_service import CameraFocusService, FocusTrend, FocusAnalysis, LightingState
 from core.audio_tone_service import AudioToneService
 from core.autodarts_service import read_cam_config
 from core.systemd_service import SystemdService
@@ -256,6 +256,12 @@ class CameraFocusView(Adw.NavigationPage):
         peak_gesture = Gtk.GestureClick()
         peak_gesture.connect("released", lambda *args: self.focus_service.reset_peak())
         self.peak_lbl.add_controller(peak_gesture)
+        
+        # Lighting Warning Label
+        self.lighting_lbl = Gtk.Label(label="Lighting: Good", xalign=0)
+        self.lighting_lbl.add_css_class("dim-label")
+        self.lighting_lbl.set_margin_top(4)
+        gauge_box.append(self.lighting_lbl)
 
         # Spacer to push finish button to bottom
         spacer = Gtk.Box()
@@ -347,6 +353,7 @@ class CameraFocusView(Adw.NavigationPage):
                 if self.was_autodarts_active:
                     logger.info("Stopping autodarts.service to release V4L2 device locks")
                     SystemdService.stop_unit("autodarts.service")
+                    time.sleep(0.4)  # Allow process to release V4L2 file handles
             except Exception:
                 logger.exception("Error querying/stopping autodarts.service")
 
@@ -382,6 +389,12 @@ class CameraFocusView(Adw.NavigationPage):
         self._stop_capture_thread()
         self.focus_service.stop_camera()
         self.audio_service.stop()
+
+        with self._lock:
+            self._preview_bgra = None
+            self._zoom_bgra = None
+            self._current_frame = None
+            self._current_analysis = None
 
         # Restore Autodarts service asynchronously so UI navigation pops immediately
         if self.was_autodarts_active:
@@ -453,37 +466,21 @@ class CameraFocusView(Adw.NavigationPage):
         def _worker():
             while not self._stop_capture.is_set():
                 ret, frame = self.focus_service.read_frame()
-                if ret and frame is not None:
+                if ret and frame is not None and frame.size > 0:
                     analysis = self.focus_service.analyze_frame(frame)
-
-                    fh, fw = frame.shape[:2]
                     bgra_frame = self.focus_service.frame_to_bgra(frame)
-                    preview_surf = cairo.ImageSurface.create_for_data(
-                        bgra_frame.data, cairo.FORMAT_ARGB32, fw, fh, fw * 4
-                    )
 
-                    # Precompute zoom crop with temporal accumulation and focus peaking
-                    zw = self.zoom_drawing_area.get_width() if hasattr(self, "zoom_drawing_area") else 280
-                    zh = self.zoom_drawing_area.get_height() if hasattr(self, "zoom_drawing_area") else 180
-                    if zw <= 1 or zh <= 1:
-                        zw, zh = 280, 180
-
+                    # Fixed zoom crop preview dimensions (thread-safe, avoids GTK widget calls)
+                    zw, zh = 280, 180
                     bgra_zoom = self.focus_service.process_zoom_crop(
                         frame, analysis.target_roi, zoom_factor=self.zoom_factor, out_size=(zw, zh)
                     )
-                    zoom_surf = None
-                    if bgra_zoom is not None:
-                        zoom_surf = cairo.ImageSurface.create_for_data(
-                            bgra_zoom.data, cairo.FORMAT_ARGB32, zw, zh, zw * 4
-                        )
 
                     with self._lock:
                         self._current_frame = frame
                         self._current_analysis = analysis
-                        self._preview_bgra = bgra_frame
-                        self._preview_surface = preview_surf
-                        self._zoom_bgra = bgra_zoom
-                        self._zoom_surface = zoom_surf
+                        self._preview_bgra = np.ascontiguousarray(bgra_frame, dtype=np.uint8)
+                        self._zoom_bgra = np.ascontiguousarray(bgra_zoom, dtype=np.uint8) if bgra_zoom is not None else None
 
                     # Modulate parking sensor audio guidance
                     self.audio_service.set_score(analysis.score)
@@ -529,6 +526,20 @@ class CameraFocusView(Adw.NavigationPage):
         self.progress_bar.set_fraction(score / 100.0)
         self.peak_lbl.set_label(f"Peak: {peak:.1f}")
 
+        # Update Lighting Label
+        if analysis.lighting_state == LightingState.TOO_DARK:
+            self.lighting_lbl.set_label("Lighting: Too Dark")
+            self.lighting_lbl.remove_css_class("dim-label")
+            self.lighting_lbl.add_css_class("error")
+        elif analysis.lighting_state == LightingState.OVEREXPOSED:
+            self.lighting_lbl.set_label("Lighting: Overexposed")
+            self.lighting_lbl.remove_css_class("dim-label")
+            self.lighting_lbl.add_css_class("error")
+        else:
+            self.lighting_lbl.set_label("Lighting: Good")
+            self.lighting_lbl.remove_css_class("error")
+            self.lighting_lbl.add_css_class("dim-label")
+
         # Update Trend Badge
         self.trend_lbl.remove_css_class("sharpening")
         self.trend_lbl.remove_css_class("stable")
@@ -556,35 +567,29 @@ class CameraFocusView(Adw.NavigationPage):
     def _on_draw_preview(self, drawing_area, cr: cairo.Context, width: int, height: int):
         """Cairo draw function rendering live video frame with Target Box and Dynamic Focal Line."""
         with self._lock:
-            surface = self._preview_surface
+            bgra = self._preview_bgra
             analysis = self._current_analysis
-            frame = self._current_frame
-
-        # Fallback if draw called before background worker runs (e.g. in test fixtures)
-        if surface is None and frame is not None:
-            fh, fw = frame.shape[:2]
-            bgra = self.focus_service.frame_to_bgra(frame)
-            surface = cairo.ImageSurface.create_for_data(
-                bgra.data, cairo.FORMAT_ARGB32, fw, fh, fw * 4
-            )
-            with self._lock:
-                self._preview_bgra = bgra
-                self._preview_surface = surface
 
         # Clear background
         cr.set_source_rgb(0.04, 0.05, 0.06)
         cr.paint()
 
-        if surface is None or analysis is None:
+        if bgra is None or analysis is None:
             cr.set_source_rgb(0.6, 0.6, 0.6)
             cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
             cr.set_font_size(16)
-            cr.move_to(width / 2 - 80, height / 2)
-            cr.show_text("Waiting for camera feed...")
+            msg = "Waiting for camera feed..."
+            if not self.focus_service.current_device:
+                msg = "Camera device not available"
+            cr.move_to(max(10, width / 2 - 100), height / 2)
+            cr.show_text(msg)
             return
 
-        fw = surface.get_width()
-        fh = surface.get_height()
+        fh, fw = bgra.shape[:2]
+        surface = cairo.ImageSurface.create_for_data(
+            bgra.data, cairo.FORMAT_ARGB32, fw, fh, fw * 4
+        )
+
         scale = min(width / fw, height / fh)
         dw = int(fw * scale)
         dh = int(fh * scale)
@@ -647,37 +652,25 @@ class CameraFocusView(Adw.NavigationPage):
     def _on_draw_zoom(self, drawing_area, cr: cairo.Context, width: int, height: int):
         """Cairo draw function rendering digitally magnified target sweet-spot with Focus Peaking."""
         with self._lock:
-            surface = self._zoom_surface
+            bgra = self._zoom_bgra
             analysis = self._current_analysis
-            frame = self._current_frame
-
-        # Fallback if draw called before background worker runs (e.g. in test fixtures)
-        if surface is None and frame is not None and analysis is not None:
-            bgra = self.focus_service.process_zoom_crop(
-                frame, analysis.target_roi, zoom_factor=self.zoom_factor, out_size=(width, height)
-            )
-            if bgra is not None:
-                surface = cairo.ImageSurface.create_for_data(
-                    bgra.data, cairo.FORMAT_ARGB32, width, height, width * 4
-                )
-                with self._lock:
-                    self._zoom_bgra = bgra
-                    self._zoom_surface = surface
 
         # Clear background
         cr.set_source_rgb(0.04, 0.05, 0.06)
         cr.paint()
 
-        if surface is None or analysis is None:
+        if bgra is None or analysis is None:
             cr.set_source_rgb(0.5, 0.5, 0.5)
             cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
             cr.set_font_size(12)
-            cr.move_to(width / 2 - 35, height / 2)
+            cr.move_to(max(10, width / 2 - 35), height / 2)
             cr.show_text("Waiting...")
             return
 
-        sw = surface.get_width()
-        sh = surface.get_height()
+        sh, sw = bgra.shape[:2]
+        surface = cairo.ImageSurface.create_for_data(
+            bgra.data, cairo.FORMAT_ARGB32, sw, sh, sw * 4
+        )
 
         # Center the magnified surface precisely so that (sw/2, sh/2) aligns with (width/2, height/2)
         scale = max(width / sw, height / sh)

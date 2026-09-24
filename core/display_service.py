@@ -241,6 +241,29 @@ class DisplayService:
             return False
 
     @staticmethod
+    def _resolve_touch_device_name(touch_device_name: str) -> str:
+        """Resolve a device name (which might contain vendor prefixes or underscores)
+        to the actual kernel input device name found in sysfs."""
+        if not touch_device_name or touch_device_name == "None":
+            return touch_device_name
+        target_norm = touch_device_name.strip().lower().replace("_", " ")
+        try:
+            for name_file in glob.glob("/sys/class/input/input*/name"):
+                try:
+                    with open(name_file, "r") as f:
+                        candidate = f.read().strip()
+                    if not candidate:
+                        continue
+                    candidate_norm = candidate.lower().replace("_", " ")
+                    if candidate_norm in target_norm or target_norm in candidate_norm:
+                        return candidate
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return touch_device_name
+
+    @staticmethod
     def get_touchscreens() -> list[str]:
         touchscreens = set()
 
@@ -309,9 +332,10 @@ class DisplayService:
                 logger.info("Cleared touch calibration udev rule")
                 return True
 
+            resolved_name = DisplayService._resolve_touch_device_name(touch_device_name)
             udev_rule = (
                 f'ACTION=="add|change", KERNEL=="event*", '
-                f'ATTRS{{name}}=="{touch_device_name}", '
+                f'ATTRS{{name}}=="{resolved_name}", '
                 f'ENV{{LIBINPUT_CALIBRATION_MATRIX}}="{matrix_str}"\n'
             )
             subprocess.run(
@@ -331,7 +355,7 @@ class DisplayService:
                 capture_output=True,
                 check=True,
             )
-            logger.info(f"Wrote touch calibration rule for {touch_device_name}: {matrix_str}")
+            logger.info(f"Wrote touch calibration rule for {resolved_name}: {matrix_str}")
             return True
         except Exception:
             logger.exception("Failed writing udev touch rule")
@@ -352,19 +376,22 @@ class DisplayService:
         if not touch_device_name or touch_device_name == "None":
             return False
         try:
+            resolved_name = DisplayService._resolve_touch_device_name(touch_device_name)
+            target_norm = resolved_name.strip().lower().replace("_", " ")
             bus_id = None
             for name_file in glob.glob("/sys/class/input/input*/name"):
                 try:
                     with open(name_file, "r") as f:
-                        if touch_device_name.strip().lower() in f.read().strip().lower():
-                            cur = Path(name_file).resolve().parent
-                            while cur != Path("/"):
-                                if (cur / "idVendor").exists() and (cur / "busnum").exists():
-                                    bus_id = cur.name
-                                    break
-                                cur = cur.parent
-                            if bus_id:
+                        file_norm = f.read().strip().lower().replace("_", " ")
+                    if target_norm in file_norm or file_norm in target_norm:
+                        cur = Path(name_file).resolve().parent
+                        while cur != Path("/"):
+                            if (cur / "idVendor").exists() and (cur / "busnum").exists():
+                                bus_id = cur.name
                                 break
+                            cur = cur.parent
+                        if bus_id:
+                            break
                 except Exception:
                     continue
 
@@ -374,6 +401,7 @@ class DisplayService:
                     ["sudo", "-n", "tee", "/sys/bus/usb/drivers/usb/unbind"],
                     input=f"{bus_id}\n", text=True, capture_output=True, check=True,
                 )
+                time.sleep(1.0)
                 subprocess.run(
                     ["sudo", "-n", "tee", "/sys/bus/usb/drivers/usb/bind"],
                     input=f"{bus_id}\n", text=True, capture_output=True, check=True,

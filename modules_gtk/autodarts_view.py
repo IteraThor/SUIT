@@ -7,8 +7,8 @@ from pathlib import Path
 from core.logger import get_logger
 from core.systemd_service import SystemdService
 from core.autodarts_service import (
-    DEFAULT_HOST, DEFAULT_PORT,
-    fetch_telemetry,
+    DEFAULT_HOST, DEFAULT_PORT, get_autodarts_port,
+    fetch_telemetry, is_autodarts_installed,
     read_cam_config, save_cam_config, get_available_cameras, get_supported_resolutions,
     control_detection_start, control_detection_stop, control_detection_reset,
     install_autodarts, uninstall_autodarts
@@ -320,12 +320,7 @@ class AutodartsView(Adw.NavigationPage):
         self.grp_usb.add(self.row_usb)
 
         # Initial visibility based on whether Autodarts is installed
-        installed_init = (
-            Path("/etc/systemd/system/autodarts.service").exists()
-            or Path("/usr/lib/systemd/system/autodarts.service").exists()
-            or (Path.home() / ".local" / "opt" / "autodarts" / "autodarts").exists()
-            or Path("/usr/local/bin/autodarts").exists()
-        )
+        installed_init = is_autodarts_installed()
         self.maint_box.set_visible(installed_init)
         self.row_board_section.set_visible(installed_init)
         self.card_cam.set_visible(installed_init)
@@ -383,19 +378,35 @@ class AutodartsView(Adw.NavigationPage):
         board_id = telem.get("board_id", "")
         online = telem.get("online", False)
 
+        # Detect whether engine is online via REST socket even if unit is transient
+        if online and active_state in ("nofile", "inactive"):
+            active_state = "active"
+
+        is_installed = (active_state != "nofile")
+
+        # Check if v1 is present (system unit exists or version starts with v1)
+        is_v1 = (
+            Path("/etc/systemd/system/autodarts.service").exists()
+            or str(telem.get("version", "")).startswith("v1")
+        )
+        if is_v1:
+            self.btn_reinstall.set_label("Update to V2")
+        else:
+            self.btn_reinstall.set_label("Reinstall Autodarts")
+
         if active_state == "active":
             self.btn_action_box.append(self.btn_stop)
             self.btn_action_box.append(self.btn_restart)
             self.btn_action_box.append(self.btn_web)
             self.btn_web.set_sensitive(True)
 
-            ver = telem.get("version", "v1.0.7")
+            ver = telem.get("version", "v2.0.0")
             self.lbl_web_info.set_text(f"Autodarts {ver}")
 
             self.btn_reinstall.set_sensitive(True)
             self.btn_uninstall.set_sensitive(True)
 
-        elif active_state == "nofile":
+        elif not is_installed:
             btn_install = create_button_with_icon("software-update-available-symbolic", "Install Autodarts", "suggested-action", height=50, touch_btn=True)
             btn_install.connect("clicked", self._on_install_clicked)
             self.btn_action_box.append(btn_install)
@@ -405,6 +416,7 @@ class AutodartsView(Adw.NavigationPage):
             self.btn_reinstall.set_sensitive(False)
             self.btn_uninstall.set_sensitive(False)
         else:
+            # Installed (binary or unit present) but inactive
             self.btn_action_box.append(self.btn_start)
             self.btn_action_box.append(self.btn_restart)
             self.btn_action_box.append(self.btn_web)
@@ -416,7 +428,6 @@ class AutodartsView(Adw.NavigationPage):
             self.btn_uninstall.set_sensitive(True)
 
         # Visibility of sections based on whether Autodarts is installed
-        is_installed = (active_state != "nofile")
         self.maint_box.set_visible(is_installed)
         self.row_board_section.set_visible(is_installed)
         self.card_cam.set_visible(is_installed)
@@ -562,7 +573,8 @@ class AutodartsView(Adw.NavigationPage):
         run_async(worker, on_done=on_done)
 
     def _open_web_ui(self, btn):
-        url = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
+        port = get_autodarts_port()
+        url = f"http://{DEFAULT_HOST}:{port}"
         try:
             if not open_browser_url(self.window, url):
                 self.window.show_toast("Failed to open web browser.")

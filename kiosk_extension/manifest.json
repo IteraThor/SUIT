@@ -16,7 +16,9 @@
       "matches": [
         "https://play.autodarts.com/*",
         "http://localhost:3180/*",
-        "http://127.0.0.1:3180/*"
+        "http://127.0.0.1:3180/*",
+        "http://localhost:3182/*",
+        "http://127.0.0.1:3182/*"
       ],
       "js": [
         "content.js"
