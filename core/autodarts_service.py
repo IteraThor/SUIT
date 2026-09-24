@@ -3,6 +3,7 @@ import socket
 import re
 import json
 import shutil
+import time
 import tomllib
 import urllib.request
 from pathlib import Path
@@ -17,16 +18,16 @@ SYSTEM_UNIT_PATH = Path("/etc/systemd/system/autodarts.service")
 DEFAULT_HOST = os.environ.get("AUTODARTS_HOST", "127.0.0.1")
 DEFAULT_V1_PORT = 3180
 DEFAULT_V2_PORT = 3182
-DEFAULT_PORT = int(os.environ.get("AUTODARTS_PORT", "3182"))
+DEFAULT_PORT = int(os.environ.get("AUTODARTS_PORT", "3180"))
 DEFAULT_API_URL = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}/api"
 
 
 def get_autodarts_port(config_path: Path | None = None, host: str = DEFAULT_HOST) -> int:
     """Dynamically resolve the Autodarts API port:
     1. AUTODARTS_PORT environment variable if set.
-    2. config.toml [api] port.
-    3. Active listening socket (probe 3182 first, then 3180).
-    4. Fallback to 3182.
+    2. config.toml [api] port or [host] port.
+    3. Active listening socket (probe 3180 first, then 3182).
+    4. Fallback to 3180.
     """
     if "AUTODARTS_PORT" in os.environ:
         try:
@@ -46,10 +47,10 @@ def get_autodarts_port(config_path: Path | None = None, host: str = DEFAULT_HOST
             pass
 
     # Probe live ports (fast socket check)
-    if is_port_open(host, DEFAULT_V2_PORT, timeout=0.05):
-        return DEFAULT_V2_PORT
     if is_port_open(host, DEFAULT_V1_PORT, timeout=0.05):
         return DEFAULT_V1_PORT
+    if is_port_open(host, DEFAULT_V2_PORT, timeout=0.05):
+        return DEFAULT_V2_PORT
 
     return DEFAULT_PORT
 
@@ -775,6 +776,11 @@ def install_autodarts() -> tuple[bool, str]:
     # 3. Stop any stray foreground or background autodarts processes
     try:
         subprocess.run("pkill -9 -x autodarts 2>/dev/null || true", shell=True, timeout=5)
+        # Allow kernel sockets to clear TIME_WAIT
+        for _ in range(6):
+            if not is_port_open(DEFAULT_HOST, DEFAULT_V1_PORT, timeout=0.05) and not is_port_open(DEFAULT_HOST, DEFAULT_V2_PORT, timeout=0.05):
+                break
+            time.sleep(0.5)
     except Exception:
         pass
 
@@ -875,6 +881,18 @@ def install_autodarts() -> tuple[bool, str]:
             preserved_cam.get("height", 720),
             preserved_cam.get("fps", 30)
         )
+
+    # 10. Verify API listener bound cleanly; retry restart if socket had lingering collision
+    target_port = get_autodarts_port()
+    api_ready = False
+    for _ in range(10):
+        time.sleep(0.5)
+        if is_port_open(DEFAULT_HOST, target_port, timeout=0.1):
+            api_ready = True
+            break
+    if not api_ready:
+        logger.warning("Autodarts API port %s not yet listening, triggering second restart", target_port)
+        subprocess.run("systemctl --user restart autodarts.service 2>/dev/null || true", shell=True, timeout=10)
 
     logger.info("Autodarts installation/upgrade completed successfully")
     return True, "Autodarts v2 installation completed and service started."

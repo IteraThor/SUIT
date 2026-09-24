@@ -293,10 +293,10 @@
         }
       };
 
-      // Try v2 port 3182 first, fallback to v1 3180
-      fetch("http://localhost:3182/api/state", { method: "GET", mode: "no-cors", cache: "no-cache" })
-        .then(() => openConfigUrl("http://localhost:3182/config"))
-        .catch(() => openConfigUrl("http://localhost:3180/config"));
+      // Try default port 3180 first, fallback to 3182
+      fetch("http://localhost:3180/api/state", { method: "GET", mode: "no-cors", cache: "no-cache" })
+        .then(() => openConfigUrl("http://localhost:3180/config"))
+        .catch(() => openConfigUrl("http://localhost:3182/config"));
     });
 
     const lightBtn = document.getElementById("suit-item-light");

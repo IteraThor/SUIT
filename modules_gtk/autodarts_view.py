@@ -400,8 +400,11 @@ class AutodartsView(Adw.NavigationPage):
             self.btn_action_box.append(self.btn_web)
             self.btn_web.set_sensitive(True)
 
-            ver = telem.get("version", "v2.0.0")
-            self.lbl_web_info.set_text(f"Autodarts {ver}")
+            ver = telem.get("version", "")
+            if not online or ver == "Unknown" or not ver:
+                self.lbl_web_info.set_text("Autodarts: Initializing Engine...")
+            else:
+                self.lbl_web_info.set_text(f"Autodarts {ver}")
 
             self.btn_reinstall.set_sensitive(True)
             self.btn_uninstall.set_sensitive(True)

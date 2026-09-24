@@ -27,7 +27,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "open_tab") {
-    const targetUrl = request.url || "http://localhost:3182/config";
+    const targetUrl = request.url || "http://localhost:3180/config";
     chrome.tabs.create({ url: targetUrl }, (tab) => {
       sendResponse({ status: "ok", tabId: tab ? tab.id : null });
     });
