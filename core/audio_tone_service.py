@@ -7,10 +7,9 @@ in tempo as focus sharpens, and playing a soothing harmonic chord (330 Hz + 495 
 at peak focus (>= 95%).
 """
 
-import math
-import struct
 import threading
 import time
+import numpy as np
 from core.logger import get_logger
 
 logger = get_logger("audio_tone")
@@ -48,24 +47,18 @@ class AudioToneService:
     @staticmethod
     def _synth_ping(freq: float, duration: float = 0.12, vol: float = 0.22) -> bytes:
         num_samples = int(duration * SAMPLE_RATE)
-        samples = []
-        for i in range(num_samples):
-            t = i / SAMPLE_RATE
-            decay = math.exp(-t / 0.03)
-            val = math.sin(2.0 * math.pi * freq * t) * vol * decay
-            samples.append(int(max(-32767, min(32767, val * 32767))))
-        return struct.pack(f"<{len(samples)}h", *samples)
+        t = np.arange(num_samples) / SAMPLE_RATE
+        decay = np.exp(-t / 0.03)
+        val = np.sin(2.0 * np.pi * freq * t) * (vol * decay)
+        return np.clip(val * 32767, -32767, 32767).astype("<i2").tobytes()
 
     @staticmethod
     def _synth_chord(duration: float = 1.2, vol: float = 0.20) -> bytes:
         num_samples = int(duration * SAMPLE_RATE)
-        samples = []
-        for i in range(num_samples):
-            t = i / SAMPLE_RATE
-            decay = math.exp(-t / 0.35)
-            val = (math.sin(2.0 * math.pi * 330.0 * t) + 0.6 * math.sin(2.0 * math.pi * 495.0 * t)) * vol * decay
-            samples.append(int(max(-32767, min(32767, val * 32767))))
-        return struct.pack(f"<{len(samples)}h", *samples)
+        t = np.arange(num_samples) / SAMPLE_RATE
+        decay = np.exp(-t / 0.35)
+        val = (np.sin(2.0 * np.pi * 330.0 * t) + 0.6 * np.sin(2.0 * np.pi * 495.0 * t)) * (vol * decay)
+        return np.clip(val * 32767, -32767, 32767).astype("<i2").tobytes()
 
     def score_to_interval(self, score: float) -> float:
         """Convert a 0–100 sharpness score into pulse interval (0.80s down to 0.12s)."""

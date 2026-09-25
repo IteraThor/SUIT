@@ -18,18 +18,6 @@ def run_async(func, on_done=None, on_error=None, *args, **kwargs):
                 GLib.idle_add(on_error, e)
     threading.Thread(target=worker, daemon=True).start()
 
-def run_command_async(cmd, on_done=None, shell=True):
-    """Executes a shell command asynchronously and returns the CompletedProcess to on_done."""
-    def worker():
-        try:
-            res = subprocess.run(cmd, shell=shell, capture_output=True, text=True)
-            if on_done:
-                GLib.idle_add(on_done, res)
-        except Exception as e:
-            logger.exception(f"Async command failed: {cmd}")
-            if on_done:
-                GLib.idle_add(on_done, None)
-    threading.Thread(target=worker, daemon=True).start()
 
 def open_browser_url(parent_window=None, url: str = "") -> bool:
     """Reliably opens a URL in the browser, explicitly configuring Wayland flags on Linux."""

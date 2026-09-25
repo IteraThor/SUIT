@@ -1,4 +1,3 @@
-import os
 import sys
 import glob
 import json
@@ -38,17 +37,6 @@ def get_rotation_matrix(rotation_int: int | str) -> str:
         3: "0 1 0 -1 0 1 0 0 1"       # Left (270)
     }
     return matrices.get(rot_val, matrices[0])
-
-def mult3x3(A: list[float], B: list[float]) -> list[float]:
-    C = [0.0] * 9
-    for i in range(3):
-        for j in range(3):
-            C[i * 3 + j] = (
-                A[i * 3 + 0] * B[0 * 3 + j] +
-                A[i * 3 + 1] * B[1 * 3 + j] +
-                A[i * 3 + 2] * B[2 * 3 + j]
-            )
-    return C
 
 def calculate_affine_matrix(
     logical_monitors: list,
@@ -98,19 +86,19 @@ def calculate_affine_matrix(
     wf, hf = float(w) / float(total_w), float(h) / float(total_h)
     xf, yf = float(x) / float(total_w), float(y) / float(total_h)
 
-    # Libinput rotation matrices (Mutter: 1=90 Right, 2=180, 3=270 Left)
-    if trans == 1:   # screen 90 Right -> touch matrix for Right
-        rot = [0, -1, 1, 1, 0, 0, 0, 0, 1]
-    elif trans == 2: # screen 180 (inverted)   -> 180 (self-inverse)
-        rot = [-1, 0, 1, 0, -1, 1, 0, 0, 1]
-    elif trans == 3: # screen 270 Left -> touch matrix for Left
-        rot = [0, 1, 0, -1, 0, 1, 0, 0, 1]
-    else:            # Normal (0) / default
-        rot = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+    # Libinput affine calibration matrix [c0, c1, c2, c3, c4, c5]
+    # Mutter trans: 1=90 Right, 2=180 Inverted, 3=270 Left
+    if trans == 1:
+        matrix = [0.0, -wf, wf + xf, hf, 0.0, yf]
+    elif trans == 2:
+        matrix = [-wf, 0.0, wf + xf, 0.0, -hf, hf + yf]
+    elif trans == 3:
+        matrix = [0.0, wf, xf, -hf, 0.0, hf + yf]
+    else:
+        matrix = [wf, 0.0, xf, 0.0, hf, yf]
 
-    s = [wf, 0, xf, 0, hf, yf, 0, 0, 1]
-    matrix = mult3x3(s, rot)
-    return " ".join([f"{v:.6f}" for v in matrix[:6]])
+    return " ".join([f"{v:.6f}" for v in matrix])
+
 
 class DisplayService:
     @staticmethod

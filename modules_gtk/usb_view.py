@@ -2,7 +2,6 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw, GLib
-from pathlib import Path
 
 from core.logger import get_logger
 from core.usb_service import UsbService, AutodartsLiveMonitorService
@@ -269,7 +268,7 @@ class UsbView(Adw.NavigationPage):
             self._target_fps = float(fps)
 
             cfg = read_cam_config()
-            cams = cfg.get("cams", ["/dev/video0", "/dev/video2", "/dev/video4"])
+            cams = cfg.get("devices") or cfg.get("cams", ["/dev/video0", "/dev/video2", "/dev/video4"])
             save_cam_config(cams, w, h, fps)
             self.window.show_toast(f"Autodarts set to {w}x{h} @ {fps} FPS")
 

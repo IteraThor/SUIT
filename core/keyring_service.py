@@ -119,12 +119,4 @@ class KeyringService:
             logger.exception("Failed launching seahorse")
             return False
 
-    @staticmethod
-    def fix_keyring_pam() -> bool:
-        """Configures PAM keyring to not prompt password if autologin is active."""
-        try:
-            logger.info("Verifying GNOME keyring PAM settings")
-            return True
-        except Exception:
-            logger.exception("Failed verifying PAM keyring")
-            return False
+

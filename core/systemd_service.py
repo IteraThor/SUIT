@@ -1,4 +1,3 @@
-from pathlib import Path
 import subprocess
 import gi
 gi.require_version("Gio", "2.0")
@@ -34,6 +33,9 @@ class SystemdService:
                 return user_status
             return cls._get_status_scoped(unit_name, scope="system")
         return cls._get_status_scoped(unit_name, scope=scope)
+
+    # Alias for backwards compatibility
+    get_unit_status = get_status
 
     @classmethod
     def _get_status_scoped(cls, unit_name: str, scope: str = "system") -> dict:
@@ -101,6 +103,34 @@ class SystemdService:
         return result
 
     @classmethod
+    def reset_failed(cls, unit_name: str, scope: str = "auto") -> bool:
+        """Reset failed state of a unit to unblock rate-limiting or previous crashes."""
+        target_scope = ("user" if cls._get_status_scoped(unit_name, scope="user").get("active_state") != "nofile" else "system") if scope == "auto" else scope
+
+        proxy = cls._get_manager_proxy(scope=target_scope)
+        if proxy:
+            try:
+                proxy.call_sync(
+                    "ResetFailedUnit",
+                    GLib.Variant("(s)", (unit_name,)),
+                    Gio.DBusCallFlags.ALLOW_INTERACTIVE_AUTHORIZATION,
+                    1500,
+                    None
+                )
+                logger.info(f"Reset failed state for {unit_name} via {target_scope} DBus")
+                return True
+            except Exception:
+                pass
+
+        try:
+            cmd = ["systemctl", "--user", "reset-failed", unit_name] if target_scope == "user" else ["sudo", "systemctl", "reset-failed", unit_name]
+            subprocess.run(cmd, capture_output=True, timeout=5)
+            logger.info(f"Reset failed state for {unit_name} via {target_scope} systemctl")
+            return True
+        except Exception:
+            return False
+
+    @classmethod
     def _execute_unit_action(cls, action: str, unit_name: str, mode: str = "replace", scope: str = "auto") -> bool:
         target_scope = scope
         if scope == "auto":
@@ -109,6 +139,9 @@ class SystemdService:
                 target_scope = "user"
             else:
                 target_scope = "system"
+
+        if action in ("start", "restart"):
+            cls.reset_failed(unit_name, scope=target_scope)
 
         proxy = cls._get_manager_proxy(scope=target_scope)
         dbus_method = {"start": "StartUnit", "stop": "StopUnit", "restart": "RestartUnit"}.get(action)
