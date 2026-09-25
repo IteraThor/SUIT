@@ -13,7 +13,7 @@ import cairo
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw, GLib, Gdk
+from gi.repository import Gtk, Adw, GLib
 
 from core.logger import get_logger
 from core.camera_focus_service import CameraFocusService, FocusTrend, FocusAnalysis, LightingState
@@ -357,9 +357,20 @@ class CameraFocusView(Adw.NavigationPage):
             except Exception:
                 logger.exception("Error querying/stopping autodarts.service")
 
+            # Terminate any stray ad / autodarts processes that may hold camera devices
+            try:
+                import subprocess
+                subprocess.run(["pkill", "-TERM", "-f", r"(^|/)(ad|autodarts)(\s|$)"], timeout=2)
+                time.sleep(0.3)
+            except Exception:
+                pass
+
             # 2. Discover configured cameras and available V4L2 devices
+            from core.autodarts_service import parse_cam_device
             cfg = read_cam_config()
-            self.configured_cams = [c for c in cfg.get("cams", []) if c and c.strip()]
+            raw_cams = cfg.get("cams", [])
+            self.configured_cams = [parse_cam_device(c) for c in raw_cams if c and c.strip()]
+            self.raw_cams = [c for c in cfg.get("devices", []) if c and c.strip()]
             if not self.configured_cams:
                 self.configured_cams = ["/dev/video0", "/dev/video2", "/dev/video4"]
 
@@ -368,7 +379,8 @@ class CameraFocusView(Adw.NavigationPage):
 
             # 4. Open first camera
             dev_path = self.configured_cams[0]
-            self.focus_service.start_camera(dev_path)
+            cam_uri = self.raw_cams[0] if hasattr(self, "raw_cams") and self.raw_cams else None
+            self.focus_service.start_camera(dev_path, uri=cam_uri)
 
             GLib.idle_add(self._on_init_completed, dev_path)
 
@@ -433,6 +445,11 @@ class CameraFocusView(Adw.NavigationPage):
             if idx < len(self.configured_cams)
             else f"/dev/video{idx * 2}"
         )
+        cam_uri = (
+            self.raw_cams[idx]
+            if hasattr(self, "raw_cams") and idx < len(self.raw_cams)
+            else None
+        )
 
         # Show camera switching spinner overlay
         self.loading_lbl.set_label(f"Opening {cam_name} ({dev_path})...")
@@ -442,7 +459,7 @@ class CameraFocusView(Adw.NavigationPage):
         def _bg_switch():
             self._stop_capture_thread()
             self.focus_service.stop_camera()
-            self.focus_service.start_camera(dev_path)
+            self.focus_service.start_camera(dev_path, uri=cam_uri)
             GLib.idle_add(self._on_cam_switch_done)
 
         threading.Thread(target=_bg_switch, daemon=True).start()

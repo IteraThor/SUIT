@@ -1,559 +1,281 @@
+import os
+import shutil
+from pathlib import Path
+
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw, GLib
-from pathlib import Path
+gi.require_version("Vte", "3.91")
+from gi.repository import Gtk, Adw, Vte, Pango, Gdk, GLib
 
 from core.logger import get_logger
 from core.systemd_service import SystemdService
 from core.autodarts_service import (
-    DEFAULT_HOST, DEFAULT_PORT, get_autodarts_port,
-    fetch_telemetry, is_autodarts_installed,
-    read_cam_config, save_cam_config, get_available_cameras, get_supported_resolutions,
-    control_detection_start, control_detection_stop, control_detection_reset,
+    get_autodarts_cli_binary, is_autodarts_installed,
     install_autodarts, uninstall_autodarts
 )
-from modules_gtk.async_utils import run_async, open_browser_url
-from modules_gtk.dialogs.board_setup_dialog import BoardSetupDialog
+from modules_gtk.async_utils import run_async
 from modules_gtk.ui_helpers import create_button_with_icon
 
 logger = get_logger("autodarts_view")
 
 SERVICE_NAME = "autodarts.service"
-FPS_OPTIONS = [15, 20, 25, 30]
 
 
 class AutodartsView(Adw.NavigationPage):
     def __init__(self, window):
-        super().__init__(title="Autodarts Setup", tag="autodarts")
+        super().__init__(title="Autodarts", tag="autodarts")
         self.window = window
         self.poll_source_id = None
         self.is_busy = False
-        self.cam_config_loaded = False
-        self.cam_options = [{"path": "", "label": "Select camera"}]
-        self.res_options = [(1280, 720)]
+        self._child_pid = None
+        self._console_active = False
 
-        scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        scrolled.set_kinetic_scrolling(True)
-        self.set_child(scrolled)
+        # Main layout container
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        main_box.set_margin_top(6)
+        main_box.set_margin_bottom(6)
+        main_box.set_margin_start(12)
+        main_box.set_margin_end(12)
+        main_box.set_vexpand(True)
+        main_box.set_hexpand(True)
+        self.set_child(main_box)
 
-        clamp = Adw.Clamp(maximum_size=880, tightening_threshold=660)
-        clamp.set_margin_top(16)
-        clamp.set_margin_bottom(24)
-        clamp.set_margin_start(16)
-        clamp.set_margin_end(16)
-        scrolled.set_child(clamp)
+        # -------------------------------------------------------------
+        # 1. Main Content: Embedded VTE Terminal (No Scrolling Required)
+        # -------------------------------------------------------------
+        self.terminal_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.terminal_card.add_css_class("terminal-card")
+        self.terminal_card.set_vexpand(True)
+        self.terminal_card.set_hexpand(True)
 
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
-        clamp.set_child(main_box)
+        self.overlay = Gtk.Overlay()
+        self.overlay.set_vexpand(True)
+        self.overlay.set_hexpand(True)
+        self.terminal_card.append(self.overlay)
 
-        # 1. Top Header Banner Card
-        header_card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
-        header_card.set_margin_bottom(2)
+        # VTE Terminal directly inside overlay: full viewport, zero scrolling needed
+        self.terminal = Vte.Terminal()
+        self.terminal.set_font(Pango.FontDescription.from_string("Monospace 8.5"))
+        self.terminal.set_cursor_blink_mode(Vte.CursorBlinkMode.OFF)
+        self.terminal.set_scrollback_lines(3000)
+        self.terminal.set_mouse_autohide(True)
+        self.terminal.set_vexpand(True)
+        self.terminal.set_hexpand(True)
+        self.terminal.set_size_request(780, 660)
 
-        icon_img = Gtk.Image.new_from_icon_name("darts-symbolic")
-        icon_img.set_pixel_size(36)
-        icon_img.set_valign(Gtk.Align.CENTER)
-        header_card.append(icon_img)
+        # Dark theme palette (Catppuccin/Libadwaita dark match)
+        bg = Gdk.RGBA()
+        bg.parse("#181825")
+        fg = Gdk.RGBA()
+        fg.parse("#cdd6f4")
+        self.terminal.set_colors(fg, bg, [])
 
-        lbl_title = Gtk.Label(label="Autodarts Setup", xalign=0)
-        lbl_title.add_css_class("title-1")
-        lbl_title.set_valign(Gtk.Align.CENTER)
-        lbl_title.set_hexpand(True)
-        header_card.append(lbl_title)
+        self.terminal.connect("child-exited", self._on_child_exited)
+        self.overlay.set_child(self.terminal)
 
-        # Activity Spinner
-        self.spinner = Gtk.Spinner()
-        self.spinner.set_valign(Gtk.Align.CENTER)
-        header_card.append(self.spinner)
+        # Overlay banner for when console is stopped / exited
+        self.box_overlay_banner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.box_overlay_banner.add_css_class("terminal-overlay-banner")
+        self.box_overlay_banner.set_halign(Gtk.Align.CENTER)
+        self.box_overlay_banner.set_valign(Gtk.Align.CENTER)
 
-        main_box.append(header_card)
+        self.lbl_overlay_msg = Gtk.Label(label="Console is not running.")
+        self.lbl_overlay_msg.add_css_class("title-3")
+        self.box_overlay_banner.append(self.lbl_overlay_msg)
 
-        # 2. FULL-WIDTH Service Controls Card
-        self.card_ctrl = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        self.card_ctrl.add_css_class("tile-card")
-        main_box.append(self.card_ctrl)
+        self.btn_overlay_start = Gtk.Button(label="Start Console")
+        self.btn_overlay_start.add_css_class("suggested-action")
+        self.btn_overlay_start.connect("clicked", lambda b: self._spawn_console(force=True))
+        self.box_overlay_banner.append(self.btn_overlay_start)
 
-        tc_top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        tc_icon = Gtk.Image.new_from_icon_name("system-run-symbolic")
-        tc_icon.set_pixel_size(28)
-        tc_top.append(tc_icon)
+        self.overlay.add_overlay(self.box_overlay_banner)
+        self.box_overlay_banner.set_visible(False)
 
-        tc_title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        tc_title_box.set_hexpand(True)
-        tc_title = Gtk.Label(label="Service Controls", xalign=0)
-        tc_title.add_css_class("title-2")
-        tc_title_box.append(tc_title)
+        main_box.append(self.terminal_card)
 
-        self.lbl_web_info = Gtk.Label(label="Autodarts Engine: Offline", xalign=0)
-        self.lbl_web_info.add_css_class("dim-label")
-        tc_title_box.append(self.lbl_web_info)
-        tc_top.append(tc_title_box)
+        # -------------------------------------------------------------
+        # 2. Collapsible Maintenance & Tools (Bottom Expander)
+        # -------------------------------------------------------------
+        self.exp_tools = Adw.ExpanderRow(title="Tools and Maintenance")
+        self.exp_tools.set_expanded(False)
 
-        self.card_ctrl.append(tc_top)
-
-        # Primary Service Actions (Start / Stop / Restart / Open Web UI)
-        self.btn_action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        self.btn_action_box.set_margin_top(4)
-        self.btn_action_box.set_homogeneous(True)
-
-        self.btn_start = create_button_with_icon("media-playback-start-symbolic", "Start Service", "suggested-action", height=50, touch_btn=True)
-        self.btn_start.connect("clicked", lambda b: self._do_service_action("start"))
-
-        self.btn_stop = create_button_with_icon("media-playback-stop-symbolic", "Stop", "destructive-action", height=50, touch_btn=True)
-        self.btn_stop.connect("clicked", lambda b: self._do_service_action("stop"))
-
-        self.btn_restart = create_button_with_icon("view-refresh-symbolic", "Restart", height=50, touch_btn=True)
-        self.btn_restart.connect("clicked", lambda b: self._do_service_action("restart"))
-
-        self.btn_web = create_button_with_icon("web-browser-symbolic", "Open Web UI", "suggested-action", height=50, touch_btn=True)
-        self.btn_web.connect("clicked", self._open_web_ui)
-
-        self.card_ctrl.append(self.btn_action_box)
-
-        # Visible Maintenance Actions Row (Reinstall / Uninstall)
-        self.maint_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        self.maint_box.set_margin_top(2)
-        self.maint_box.set_homogeneous(True)
-
-        self.btn_reinstall = create_button_with_icon("software-update-available-symbolic", "Reinstall Autodarts", "secondary-btn", height=44, touch_btn=True)
-        self.btn_reinstall.connect("clicked", self._on_install_clicked)
-        self.maint_box.append(self.btn_reinstall)
-
-        self.btn_uninstall = create_button_with_icon("user-trash-symbolic", "Uninstall Autodarts", "secondary-btn-destructive", height=44, touch_btn=True)
-        self.btn_uninstall.connect("clicked", self._on_uninstall_clicked)
-        self.maint_box.append(self.btn_uninstall)
-
-        self.card_ctrl.append(self.maint_box)
-
-        # 3. Cloud Board & Live Detection Controls Row
-        self.row_board_section = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        main_box.append(self.row_board_section)
-
-        # Left: Cloud Board Status Group
-        self.board_group = Adw.PreferencesGroup()
-        self.board_group.set_hexpand(True)
-        self.row_board_section.append(self.board_group)
-
-        self.row_board = Adw.ActionRow(
-            title="Cloud Board Status",
-            subtitle="Checking board configuration..."
+        # Terminal Console Restart Action
+        row_console = Adw.ActionRow(
+            title="Terminal Console",
+            subtitle="Restart the embedded Autodarts session"
         )
-        self.board_icon = Gtk.Image.new_from_icon_name("network-wired-symbolic")
-        self.board_icon.set_pixel_size(24)
-        self.board_icon.add_css_class("status-icon")
-        self.row_board.add_prefix(self.board_icon)
+        self.btn_restart_console = create_button_with_icon("utilities-terminal-symbolic", "Restart", "secondary-btn", height=36, touch_btn=True)
+        self.btn_restart_console.set_tooltip_text("Restart the embedded Autodarts terminal console")
+        self.btn_restart_console.connect("clicked", lambda b: self._spawn_console(force=True))
+        row_console.add_suffix(self.btn_restart_console)
+        self.exp_tools.add_row(row_console)
 
-        self.btn_board_setup = Gtk.Button(label="Link Board")
-        self.btn_board_setup.add_css_class("suggested-action")
-        self.btn_board_setup.add_css_class("touch-btn")
-        self.btn_board_setup.set_valign(Gtk.Align.CENTER)
-        self.btn_board_setup.set_size_request(110, 44)
-        self.btn_board_setup.connect("clicked", self._open_board_setup_dialog)
-        self.row_board.add_suffix(self.btn_board_setup)
-
-        self.board_group.add(self.row_board)
-
-        # Right: Detection Engine Controls Card (PreferencesGroup matching Board Linked)
-        self.detection_group = Adw.PreferencesGroup()
-        self.detection_group.set_hexpand(True)
-        self.detection_group.set_visible(False)
-        self.row_board_section.append(self.detection_group)
-
-        self.row_detection = Adw.ActionRow(
-            title="Detection",
-            subtitle="Stopped"
-        )
-        self.detection_icon = Gtk.Image.new_from_icon_name("media-playback-stop-symbolic")
-        self.detection_icon.set_pixel_size(24)
-        self.detection_icon.add_css_class("status-icon")
-        self.row_detection.add_prefix(self.detection_icon)
-
-        # Action Buttons (Start/Stop + Reset)
-        det_btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        det_btn_box.set_valign(Gtk.Align.CENTER)
-
-        # Toggle Button (Start / Stop)
-        self.btn_detection_toggle = Gtk.Button()
-        self.btn_detection_toggle.add_css_class("suggested-action")
-        self.btn_detection_toggle.add_css_class("compact-btn")
-        self.btn_detection_toggle.set_size_request(86, 44)
-        box_det_btn = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        box_det_btn.set_halign(Gtk.Align.CENTER)
-        self.img_detection = Gtk.Image.new_from_icon_name("media-playback-start-symbolic")
-        self.img_detection.set_pixel_size(16)
-        box_det_btn.append(self.img_detection)
-        self.lbl_detection = Gtk.Label(label="Start")
-        box_det_btn.append(self.lbl_detection)
-        self.btn_detection_toggle.set_child(box_det_btn)
-        self.btn_detection_toggle.connect("clicked", self._on_detection_toggle_clicked)
-        det_btn_box.append(self.btn_detection_toggle)
-
-        # Reset Button
-        self.btn_detection_reset = create_button_with_icon("view-refresh-symbolic", "Reset", "secondary-btn compact-btn", height=44, touch_btn=True)
-        self.btn_detection_reset.set_size_request(86, 44)
-        self.btn_detection_reset.connect("clicked", self._on_detection_reset_clicked)
-        det_btn_box.append(self.btn_detection_reset)
-
-        self.row_detection.add_suffix(det_btn_box)
-        self.detection_group.add(self.row_detection)
-
-        # 4. Compact Camera & Video Configuration Card
-        self.card_cam = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        self.card_cam.add_css_class("tile-card-compact")
-        main_box.append(self.card_cam)
-
-        # Card Header: Title on Left, Apply & Restart button on Right
-        cam_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        cam_hdr.set_valign(Gtk.Align.CENTER)
-
-        hdr_left = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        hdr_left.set_valign(Gtk.Align.CENTER)
-        hdr_left.set_hexpand(True)
-
-        cam_icon = Gtk.Image.new_from_icon_name("camera-web-symbolic")
-        cam_icon.set_pixel_size(20)
-        hdr_left.append(cam_icon)
-
-        lbl_cam_hdr = Gtk.Label(label="Cameras & Video", xalign=0)
-        lbl_cam_hdr.add_css_class("heading")
-        hdr_left.append(lbl_cam_hdr)
-        cam_hdr.append(hdr_left)
-
-        self.btn_apply_cam = create_button_with_icon("emblem-ok-symbolic", "Apply & Restart", "suggested-action compact-btn", height=42, touch_btn=True)
-        self.btn_apply_cam.connect("clicked", self._on_apply_cam_clicked)
-        self.btn_apply_cam.set_sensitive(False)
-        cam_hdr.append(self.btn_apply_cam)
-        self.card_cam.append(cam_hdr)
-
-        # 5-Column Full-Width Controls Row (Resolution, FPS, Camera 1, Camera 2, Camera 3)
-        row_controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        row_controls.set_homogeneous(True)
-
-        # Col 1: Resolution (only enabled once all 3 cameras are selected)
-        box_res = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        lbl_res = Gtk.Label(label="Resolution", xalign=0)
-        lbl_res.add_css_class("dim-label")
-        box_res.append(lbl_res)
-        self.combo_res = Gtk.DropDown.new_from_strings(["Select all 3 cameras"])
-        self.combo_res.set_size_request(-1, 44)
-        self.combo_res.set_sensitive(False)
-        box_res.append(self.combo_res)
-        row_controls.append(box_res)
-
-        # Col 2: FPS
-        box_fps = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        lbl_fps = Gtk.Label(label="FPS", xalign=0)
-        lbl_fps.add_css_class("dim-label")
-        box_fps.append(lbl_fps)
-        self.combo_fps = Gtk.DropDown.new_from_strings(["15", "20", "25", "30"])
-        self.combo_fps.set_size_request(-1, 44)
-        box_fps.append(self.combo_fps)
-        row_controls.append(box_fps)
-
-        # Col 3: Camera 1
-        box_c1 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        lbl_c1 = Gtk.Label(label="Camera 1", xalign=0)
-        lbl_c1.add_css_class("dim-label")
-        box_c1.append(lbl_c1)
-        self.combo_c1 = Gtk.DropDown.new_from_strings(["Select camera"])
-        self.combo_c1.set_size_request(-1, 44)
-        self.combo_c1.connect("notify::selected", self._on_cam_selection_changed)
-        box_c1.append(self.combo_c1)
-        row_controls.append(box_c1)
-
-        # Col 4: Camera 2
-        box_c2 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        lbl_c2 = Gtk.Label(label="Camera 2", xalign=0)
-        lbl_c2.add_css_class("dim-label")
-        box_c2.append(lbl_c2)
-        self.combo_c2 = Gtk.DropDown.new_from_strings(["Select camera"])
-        self.combo_c2.set_size_request(-1, 44)
-        self.combo_c2.connect("notify::selected", self._on_cam_selection_changed)
-        box_c2.append(self.combo_c2)
-        row_controls.append(box_c2)
-
-        # Col 5: Camera 3
-        box_c3 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        lbl_c3 = Gtk.Label(label="Camera 3", xalign=0)
-        lbl_c3.add_css_class("dim-label")
-        box_c3.append(lbl_c3)
-        self.combo_c3 = Gtk.DropDown.new_from_strings(["Select camera"])
-        self.combo_c3.set_size_request(-1, 44)
-        self.combo_c3.connect("notify::selected", self._on_cam_selection_changed)
-        box_c3.append(self.combo_c3)
-        row_controls.append(box_c3)
-
-        self.card_cam.append(row_controls)
-
-        # 5. USB Bandwidth Optimizer Row
-        self.grp_usb = Adw.PreferencesGroup()
-        self.grp_usb.set_margin_top(6)
-        main_box.append(self.grp_usb)
-
+        # Experimental USB Bandwidth Tester
         self.row_usb = Adw.ActionRow(
-            title="USB Bandwidth Optimizer",
-            subtitle="Benchmark camera frame rates and test USB bus bandwidth under full load."
+            title='USB Bandwidth Tester  <span foreground="#ff9800" weight="bold" size="small">Experimental</span>'
         )
         self.row_usb.set_activatable(True)
         self.row_usb.connect("activated", lambda r: self.window.open_usb_page())
-
-        icon_usb = Gtk.Image.new_from_icon_name("drive-harddisk-usb-symbolic")
-        icon_usb.set_pixel_size(24)
-        self.row_usb.add_prefix(icon_usb)
-
-        self.btn_open_usb = create_button_with_icon(
-            "drive-harddisk-usb-symbolic",
-            "Optimize Bandwidth",
-            "secondary-btn compact-btn",
-            height=40,
-            touch_btn=True,
-        )
-        self.btn_open_usb.connect("clicked", lambda b: self.window.open_usb_page())
-        self.row_usb.add_suffix(self.btn_open_usb)
-
         chevron_usb = Gtk.Image.new_from_icon_name("go-next-symbolic")
         chevron_usb.set_opacity(0.5)
         chevron_usb.set_valign(Gtk.Align.CENTER)
         self.row_usb.add_suffix(chevron_usb)
+        self.exp_tools.add_row(self.row_usb)
 
-        self.grp_usb.add(self.row_usb)
+        # Install / Reinstall & Uninstall Actions
+        row_install = Adw.ActionRow(title="Software Management")
+        box_install_btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box_install_btns.set_valign(Gtk.Align.CENTER)
 
-        # Initial visibility based on whether Autodarts is installed
-        installed_init = is_autodarts_installed()
-        self.maint_box.set_visible(installed_init)
-        self.row_board_section.set_visible(installed_init)
-        self.card_cam.set_visible(installed_init)
-        self.grp_usb.set_visible(installed_init)
+        self.spinner = Gtk.Spinner()
+        self.spinner.set_valign(Gtk.Align.CENTER)
+        box_install_btns.append(self.spinner)
+
+        self.btn_reinstall = create_button_with_icon("software-update-available-symbolic", "Reinstall", "secondary-btn", height=36, touch_btn=True)
+        self.btn_reinstall.connect("clicked", self._on_install_clicked)
+        box_install_btns.append(self.btn_reinstall)
+
+        self.btn_uninstall = create_button_with_icon("user-trash-symbolic", "Uninstall", "secondary-btn-destructive", height=36, touch_btn=True)
+        self.btn_uninstall.connect("clicked", self._on_uninstall_clicked)
+        box_install_btns.append(self.btn_uninstall)
+
+        row_install.add_suffix(box_install_btns)
+        self.exp_tools.add_row(row_install)
+
+        self.list_tools = Gtk.ListBox()
+        self.list_tools.add_css_class("boxed-list")
+        self.list_tools.append(self.exp_tools)
+        self.grp_usb = self.list_tools
+        main_box.append(self.list_tools)
+
+        # Footer version label
+        self.lbl_footer_ver = Gtk.Label(label="Autodarts Console Wrapper", xalign=0)
+        self.lbl_footer_ver.add_css_class("dim-label")
+        self.lbl_footer_ver.set_margin_start(4)
+        main_box.append(self.lbl_footer_ver)
 
         # Connect page lifecycle
         self.connect("map", self._on_page_mapped)
         self.connect("unmap", self._on_page_unmapped)
 
-    def _open_board_setup_dialog(self, btn):
-        dlg = BoardSetupDialog(self.window, on_saved_cb=self.refresh)
-        dlg.present()
-
     def _on_page_mapped(self, widget):
         self.refresh()
-        self._load_cam_config()
-        if not self.poll_source_id:
-            self.poll_source_id = GLib.timeout_add_seconds(3, self._periodic_poll)
+        if not self._console_active:
+            self._spawn_console()
+
+    def on_page_closed(self):
+        """Lifecycle hook when navigating away: terminate embedded console so V4L2 handles are released."""
+        logger.info("AutodartsView closed: terminating child console process if running")
+        if self._child_pid is not None:
+            try:
+                os.kill(self._child_pid, 15)  # SIGTERM
+            except Exception:
+                pass
+            self._child_pid = None
+            self._console_active = False
 
     def _on_page_unmapped(self, widget):
-        if self.poll_source_id:
-            GLib.source_remove(self.poll_source_id)
-            self.poll_source_id = None
-
-    def _periodic_poll(self):
-        self.refresh()
-        return True
+        self.on_page_closed()
 
     def refresh(self):
-        if self.is_busy:
-            return
-        self.spinner.start()
-
         def worker():
-            status = SystemdService.get_status(SERVICE_NAME)
-            telem = fetch_telemetry()
-            return {"status": status, "telem": telem}
+            return is_autodarts_installed()
 
-        def on_done(res):
-            self.spinner.stop()
-            self._apply_state(res)
+        def on_done(installed):
+            self._apply_state(installed)
 
         run_async(worker, on_done=on_done)
 
-    def _apply_state(self, data):
-        status = data["status"]
-        telem = data["telem"]
-
-        active_state = status.get("active_state", "nofile")
-
-        # Reset primary button box children
-        while child := self.btn_action_box.get_first_child():
-            self.btn_action_box.remove(child)
-
-        board_id = telem.get("board_id", "")
-        online = telem.get("online", False)
-
-        # Detect whether engine is online via REST socket even if unit is transient
-        if online and active_state in ("nofile", "inactive"):
-            active_state = "active"
-
-        is_installed = (active_state != "nofile")
-
-        # Check if v1 is present (system unit exists or version starts with v1)
-        is_v1 = (
-            Path("/etc/systemd/system/autodarts.service").exists()
-            or str(telem.get("version", "")).startswith("v1")
-        )
-        if is_v1:
-            self.btn_reinstall.set_label("Update to V2")
+    def _apply_state(self, status=None):
+        if isinstance(status, bool):
+            installed = status
+        elif isinstance(status, dict):
+            installed = is_autodarts_installed()
         else:
-            self.btn_reinstall.set_label("Reinstall Autodarts")
+            installed = is_autodarts_installed()
 
-        if active_state == "active":
-            self.btn_action_box.append(self.btn_stop)
-            self.btn_action_box.append(self.btn_restart)
-            self.btn_action_box.append(self.btn_web)
-            self.btn_web.set_sensitive(True)
-
-            ver = telem.get("version", "")
-            if not online or ver == "Unknown" or not ver:
-                self.lbl_web_info.set_text("Autodarts: Initializing Engine...")
-            else:
-                self.lbl_web_info.set_text(f"Autodarts {ver}")
-
-            self.btn_reinstall.set_sensitive(True)
-            self.btn_uninstall.set_sensitive(True)
-
-        elif not is_installed:
-            btn_install = create_button_with_icon("software-update-available-symbolic", "Install Autodarts", "suggested-action", height=50, touch_btn=True)
-            btn_install.connect("clicked", self._on_install_clicked)
-            self.btn_action_box.append(btn_install)
-
-            self.lbl_web_info.set_text("Autodarts Engine: Not Installed")
-
-            self.btn_reinstall.set_sensitive(False)
-            self.btn_uninstall.set_sensitive(False)
+        if not installed:
+            self.box_overlay_banner.set_visible(True)
+            self.lbl_overlay_msg.set_text("Autodarts is not installed.")
+            self.btn_overlay_start.set_visible(False)
+            if hasattr(self, "btn_restart_console"):
+                self.btn_restart_console.set_sensitive(False)
         else:
-            # Installed (binary or unit present) but inactive
-            self.btn_action_box.append(self.btn_start)
-            self.btn_action_box.append(self.btn_restart)
-            self.btn_action_box.append(self.btn_web)
-            self.btn_web.set_sensitive(False)
+            if hasattr(self, "btn_restart_console"):
+                self.btn_restart_console.set_sensitive(True)
 
-            self.lbl_web_info.set_text("Autodarts Engine: Stopped")
-
-            self.btn_reinstall.set_sensitive(True)
-            self.btn_uninstall.set_sensitive(True)
-
-        # Visibility of sections based on whether Autodarts is installed
-        self.maint_box.set_visible(is_installed)
-        self.row_board_section.set_visible(is_installed)
-        self.card_cam.set_visible(is_installed)
-        self.grp_usb.set_visible(is_installed)
-
-        # Update cloud board row
-        if board_id:
-            self.row_board.set_title("Board Linked")
-            self.row_board.set_subtitle(f"UUID: {board_id[:8]}...{board_id[-4:]}")
-            self.board_icon.set_from_icon_name("emblem-default-symbolic")
-            self.btn_board_setup.set_label("Edit Link")
-            self.btn_board_setup.remove_css_class("suggested-action")
-        else:
-            self.row_board.set_title("No Board Linked")
-            self.row_board.set_subtitle("Link a board to this device.")
-            self.board_icon.set_from_icon_name("dialog-warning-symbolic")
-            self.btn_board_setup.set_label("Link Board")
-            self.btn_board_setup.add_css_class("suggested-action")
-
-        # Dynamic 50/50 split: Show Start/Stop and Reset detection card when linked & active
-        is_detection_available = bool(board_id) and (active_state == "active")
-        if is_detection_available:
-            self.row_board_section.set_homogeneous(True)
-            self.detection_group.set_visible(True)
-            is_running = telem.get("running", False)
-            state_str = telem.get("state", "")
-            event_str = telem.get("event", "")
-            self._update_detection_buttons(is_running, state_str, event_str)
-        else:
-            self.row_board_section.set_homogeneous(False)
-            self.detection_group.set_visible(False)
-
-    def _update_detection_buttons(self, is_running: bool, status: str = "", event: str = ""):
-        self.detection_running = is_running
-
-        # 1. Update Start/Stop Button
-        if is_running:
-            self.img_detection.set_from_icon_name("media-playback-stop-symbolic")
-            self.lbl_detection.set_text("Stop")
-            self.btn_detection_toggle.remove_css_class("suggested-action")
-            self.btn_detection_toggle.add_css_class("destructive-action")
-        else:
-            self.img_detection.set_from_icon_name("media-playback-start-symbolic")
-            self.lbl_detection.set_text("Start")
-            self.btn_detection_toggle.remove_css_class("destructive-action")
-            self.btn_detection_toggle.add_css_class("suggested-action")
-
-        # 2. Update Row Theming, Icon, and Subtitle Status
-        for cls in ("detection-running", "detection-stopped", "detection-fault"):
-            self.row_detection.remove_css_class(cls)
-
-        status_lower = status.lower() if status else ""
-        event_lower = event.lower() if event else ""
-
-        if is_running:
-            self.row_detection.add_css_class("detection-running")
-            self.detection_icon.set_from_icon_name("media-playback-start-symbolic")
-            self.row_detection.set_subtitle("Started")
-            self.row_detection.set_tooltip_text("Detection engine is actively running.")
-        elif "error" in status_lower or "fail" in status_lower or "fault" in status_lower or "error" in event_lower or "fail" in event_lower:
-            self.row_detection.add_css_class("detection-fault")
-            self.detection_icon.set_from_icon_name("dialog-warning-symbolic")
-            err_sub = f"Fault: {event}" if (event and len(event) < 16) else "Faulted"
-            self.row_detection.set_subtitle(err_sub)
-            tip = f"Fault: {event}" if event else f"Status: {status}"
-            self.row_detection.set_tooltip_text(tip)
-        else:
-            self.row_detection.add_css_class("detection-stopped")
-            self.detection_icon.set_from_icon_name("media-playback-stop-symbolic")
-            self.row_detection.set_subtitle("Stopped")
-            self.row_detection.set_tooltip_text("Detection engine is stopped / idle.")
-
-    def _on_detection_toggle_clicked(self, btn):
-        if self.is_busy:
+    def _spawn_console(self, force=False):
+        binary = get_autodarts_cli_binary()
+        if not binary:
+            logger.warning("No autodarts binary found to spawn")
+            self.box_overlay_banner.set_visible(True)
+            self.lbl_overlay_msg.set_text("Autodarts binary not found.")
+            self.btn_overlay_start.set_visible(False)
             return
-        self.is_busy = True
-        self.spinner.start()
-        currently_running = getattr(self, "detection_running", False)
-        action_name = "Stopping" if currently_running else "Starting"
-        self.window.show_toast(f"{action_name} engine...")
 
-        def worker():
-            if currently_running:
-                return control_detection_stop()
-            else:
-                return control_detection_start()
+        if self._child_pid is not None and force:
+            try:
+                os.kill(self._child_pid, 9)
+            except Exception:
+                pass
+            self._child_pid = None
+            self._console_active = False
 
-        def on_done(ok):
-            self.is_busy = False
-            self.spinner.stop()
-            if ok:
-                status_str = "stopped" if currently_running else "started"
-                self.window.show_toast(f"Engine {status_str}.")
-            else:
-                self.window.show_toast("Detection action failed.")
-            self.refresh()
-
-        run_async(worker, on_done=on_done)
-
-    def _on_detection_reset_clicked(self, btn):
-        if self.is_busy:
+        if self._child_pid is not None and not force:
             return
-        self.is_busy = True
-        self.spinner.start()
-        self.window.show_toast("Resetting engine...")
 
-        def worker():
-            return control_detection_reset()
+        self.box_overlay_banner.set_visible(False)
+        self.terminal.reset(True, True)
 
-        def on_done(ok):
-            self.is_busy = False
-            self.spinner.stop()
-            if ok:
-                self.window.show_toast("Engine state reset.")
-            else:
-                self.window.show_toast("Engine reset failed.")
-            self.refresh()
+        try:
+            self.terminal.spawn_async(
+                pty_flags=Vte.PtyFlags.DEFAULT,
+                working_directory=os.path.expanduser("~"),
+                argv=[binary],
+                envv=[],
+                spawn_flags=GLib.SpawnFlags.DEFAULT,
+                child_setup=None,
+                timeout=-1,
+                cancellable=None,
+                callback=self._on_spawn_cb,
+                user_data=None
+            )
+        except Exception as e:
+            logger.exception("Failed to spawn Autodarts terminal: %s", e)
+            self.box_overlay_banner.set_visible(True)
+            self.lbl_overlay_msg.set_text(f"Spawn failed: {e}")
+            self.btn_overlay_start.set_visible(True)
 
-        run_async(worker, on_done=on_done)
+    def _on_spawn_cb(self, terminal, pid, error, user_data):
+        if error:
+            logger.error("VTE spawn error: %s", error)
+            self._console_active = False
+            self._child_pid = None
+            self.box_overlay_banner.set_visible(True)
+            self.lbl_overlay_msg.set_text("Console launch failed.")
+            self.btn_overlay_start.set_visible(True)
+        else:
+            logger.info("VTE spawned Autodarts console (PID %s)", pid)
+            self._child_pid = pid
+            self._console_active = True
+            self.box_overlay_banner.set_visible(False)
+            self.terminal.grab_focus()
+
+    def _on_child_exited(self, terminal, status):
+        logger.info("Autodarts console exited with status %s", status)
+        self._child_pid = None
+        self._console_active = False
+        self.box_overlay_banner.set_visible(True)
+        self.lbl_overlay_msg.set_text("Console exited.")
+        self.btn_overlay_start.set_visible(True)
 
     def _do_service_action(self, action):
+        if self.is_busy:
+            return
         self.is_busy = True
         self.spinner.start()
+
         def worker():
             if action == "start":
                 return SystemdService.start_unit(SERVICE_NAME)
@@ -566,210 +288,59 @@ class AutodartsView(Adw.NavigationPage):
         def on_done(ok):
             self.is_busy = False
             self.spinner.stop()
-            action_name = action.capitalize()
             if ok:
-                self.window.show_toast(f"Autodarts service: {action_name} completed.")
+                self.window.show_toast(f"Service {action}ed.")
+                self.refresh()
+                # If started or restarted, also reconnect/restart console
+                GLib.timeout_add(1000, lambda: self._spawn_console(force=True) or False)
             else:
-                self.window.show_toast(f"Autodarts service {action} failed.")
-            self.refresh()
+                self.window.show_toast(f"Failed to {action} service.")
 
         run_async(worker, on_done=on_done)
-
-    def _open_web_ui(self, btn):
-        port = get_autodarts_port()
-        url = f"http://{DEFAULT_HOST}:{port}"
-        try:
-            if not open_browser_url(self.window, url):
-                self.window.show_toast("Failed to open web browser.")
-        except Exception:
-            logger.exception("Failed opening web browser for Autodarts UI")
-            self.window.show_toast("Failed to open web browser.")
 
     def _on_install_clicked(self, btn):
-        self.window.show_toast("Installing Autodarts official release...")
+        if self.is_busy:
+            return
         self.is_busy = True
         self.spinner.start()
+        self.window.show_toast("Installing Autodarts...")
+
+        def worker():
+            return install_autodarts()
 
         def on_done(res):
             self.is_busy = False
             self.spinner.stop()
-            ok, msg = res
+            ok, msg = res if isinstance(res, tuple) else (False, str(res))
             self.window.show_toast(msg)
             self.refresh()
+            if ok:
+                GLib.timeout_add(1500, lambda: self._spawn_console(force=True) or False)
 
-        run_async(install_autodarts, on_done=on_done)
+        run_async(worker, on_done=on_done)
 
     def _on_uninstall_clicked(self, btn):
-        dialog = Adw.AlertDialog(
-            heading="Uninstall Autodarts?",
-            body="This will stop the service and delete Autodarts binaries and configurations. Are you sure?"
-        )
-        dialog.add_response("cancel", "Cancel")
-        dialog.add_response("uninstall", "Uninstall")
-        dialog.set_response_appearance("uninstall", Adw.ResponseAppearance.DESTRUCTIVE)
-
-        def on_response(d, response):
-            if response == "uninstall":
-                self._run_uninstall()
-
-        dialog.connect("response", on_response)
-        dialog.present(self.window)
-
-    def _run_uninstall(self):
+        if self.is_busy:
+            return
+        self.is_busy = True
+        self.spinner.start()
         self.window.show_toast("Uninstalling Autodarts...")
-        self.is_busy = True
-        self.spinner.start()
+
+        def worker():
+            return uninstall_autodarts()
 
         def on_done(res):
             self.is_busy = False
             self.spinner.stop()
-            ok, msg = res
+            ok, msg = res if isinstance(res, tuple) else (False, str(res))
             self.window.show_toast(msg)
+            if self._child_pid:
+                try:
+                    os.kill(self._child_pid, 9)
+                except Exception:
+                    pass
+                self._child_pid = None
+                self._console_active = False
             self.refresh()
-
-        run_async(uninstall_autodarts, on_done=on_done)
-
-    def _on_cam_selection_changed(self, dropdown, pspec):
-        if getattr(self, "_loading_cam_config", False):
-            return
-        self._update_resolutions_from_cams()
-
-    def _get_selected_cam_paths(self) -> list[str]:
-        paths = []
-        for combo in [self.combo_c1, self.combo_c2, self.combo_c3]:
-            idx = combo.get_selected()
-            if 0 <= idx < len(getattr(self, "cam_options", [])):
-                p = self.cam_options[idx].get("path", "")
-                paths.append(p)
-            else:
-                paths.append("")
-        return paths
-
-    def _update_resolutions_from_cams(self, preferred_res: tuple[int, int] | None = None):
-        cams = self._get_selected_cam_paths()
-        valid_cams = [c for c in cams if c and c.strip()]
-        all_3_selected = (len(valid_cams) == 3 and len(set(valid_cams)) == 3)
-
-        if not all_3_selected:
-            self.res_options = []
-            if len(valid_cams) < 3:
-                placeholder = "Select all 3 cameras"
-            else:
-                placeholder = "Select 3 distinct cameras"
-            self.combo_res.set_model(Gtk.StringList.new([placeholder]))
-            self.combo_res.set_selected(0)
-            self.combo_res.set_sensitive(False)
-            self.btn_apply_cam.set_sensitive(False)
-            return
-
-        # Query common supported resolutions across the 3 selected cameras
-        self.combo_res.set_sensitive(False)
-        self.btn_apply_cam.set_sensitive(False)
-
-        def worker():
-            return get_supported_resolutions(cam_paths=cams)
-
-        def on_done(common_res):
-            self.res_options = common_res
-            if not common_res:
-                self.combo_res.set_model(Gtk.StringList.new(["No common resolution"]))
-                self.combo_res.set_selected(0)
-                self.combo_res.set_sensitive(False)
-                self.btn_apply_cam.set_sensitive(False)
-                return
-
-            res_labels = [f"{w}x{h}" for w, h in common_res]
-            self.combo_res.set_model(Gtk.StringList.new(res_labels))
-            self.combo_res.set_sensitive(True)
-            self.btn_apply_cam.set_sensitive(True)
-
-            target = preferred_res or getattr(self, "current_res", (1280, 720))
-            sel = 0
-            if target in common_res:
-                sel = common_res.index(target)
-            elif (1280, 720) in common_res:
-                sel = common_res.index((1280, 720))
-            self.combo_res.set_selected(sel)
-
-        run_async(worker, on_done=on_done)
-
-    def _load_cam_config(self):
-        def worker():
-            cfg = read_cam_config()
-            available = get_available_cameras()
-            return cfg, available
-
-        def on_done(res):
-            cfg, available = res
-            self.cam_options = available
-            self.current_res = (cfg.get("width", 1280), cfg.get("height", 720))
-
-            self._loading_cam_config = True
-            try:
-                # 1. Update Camera Device dropdowns
-                labels = [c["label"] for c in available]
-                for combo, saved_path in [
-                    (self.combo_c1, cfg["cams"][0]),
-                    (self.combo_c2, cfg["cams"][1]),
-                    (self.combo_c3, cfg["cams"][2]),
-                ]:
-                    model = Gtk.StringList.new(labels)
-                    combo.set_model(model)
-                    sel = 0
-                    for idx, c in enumerate(available):
-                        if c["path"] and c["path"] == saved_path:
-                            sel = idx
-                            break
-                    combo.set_selected(sel)
-                    if sel < len(available) and available[sel].get("full_name"):
-                        combo.set_tooltip_text(available[sel]["full_name"])
-
-                # 2. Update FPS dropdown (15, 20, 25, 30)
-                cur_fps = cfg.get("fps", 30)
-                fps_sel = 3  # default 30
-                if cur_fps in FPS_OPTIONS:
-                    fps_sel = FPS_OPTIONS.index(cur_fps)
-                self.combo_fps.set_selected(fps_sel)
-            finally:
-                self._loading_cam_config = False
-
-            # 3. Dynamically update common resolutions based on whether all 3 cameras are selected
-            self._update_resolutions_from_cams(preferred_res=self.current_res)
-            self.cam_config_loaded = True
-
-        run_async(worker, on_done=on_done)
-
-    def _on_apply_cam_clicked(self, btn):
-        cams = self._get_selected_cam_paths()
-        valid_cams = [c for c in cams if c and c.strip()]
-        if len(valid_cams) < 3 or len(set(valid_cams)) < 3:
-            self.window.show_toast("Please select 3 distinct cameras.")
-            return
-
-        res_idx = self.combo_res.get_selected()
-        fps_idx = self.combo_fps.get_selected()
-
-        if not getattr(self, "res_options", []) or res_idx >= len(self.res_options):
-            self.window.show_toast("Please select a valid resolution.")
-            return
-
-        width, height = self.res_options[res_idx]
-        fps = FPS_OPTIONS[fps_idx] if fps_idx < len(FPS_OPTIONS) else 30
-
-        self.is_busy = True
-        self.spinner.start()
-        self.window.show_toast(f"Applying {width}x{height} @ {fps} FPS and restarting...")
-
-        def worker():
-            save_cam_config(cams, width, height, fps)
-            SystemdService.restart_unit(SERVICE_NAME)
-            return True
-
-        def on_done(ok):
-            self.is_busy = False
-            self.spinner.stop()
-            self.window.show_toast(f"Cameras set to {width}x{height} @ {fps} FPS.")
-            self.refresh()
-            self._load_cam_config()
 
         run_async(worker, on_done=on_done)

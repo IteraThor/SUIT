@@ -1,161 +1,126 @@
+import os
+from pathlib import Path
+
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw, Gdk
+gi.require_version("Vte", "3.91")
+from gi.repository import Gtk, Adw, Vte, Pango, Gdk, GLib
 
-from core.autodarts_service import read_stored_auth, save_stored_auth
-from core.systemd_service import SystemdService
-from modules_gtk.async_utils import open_browser_url
+from core.logger import get_logger
+from core.autodarts_service import get_autodarts_cli_binary
 
-SERVICE_NAME = "autodarts.service"
+logger = get_logger("board_setup_dialog")
 
 
 class BoardSetupDialog(Adw.Window):
+    """Console dialog embedding the official Autodarts terminal UI ('ad')."""
     def __init__(self, parent_window=None, on_saved_cb=None):
-        super().__init__(modal=True, title="Link Cloud Board")
+        super().__init__(modal=True, title="Autodarts Console")
         if isinstance(parent_window, Gtk.Window):
             self.set_transient_for(parent_window)
-        self.set_default_size(720, 680)
-        self.set_size_request(480, 520)
+        self.set_default_size(740, 520)
+        self.set_size_request(600, 420)
         self.on_saved_cb = on_saved_cb
+        self._child_pid = None
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.set_content(box)
+        toolbar_view = Adw.ToolbarView()
+        self.set_content(toolbar_view)
 
         header = Adw.HeaderBar()
         header.set_show_end_title_buttons(True)
-        box.append(header)
 
-        scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        btn_restart = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
+        btn_restart.set_tooltip_text("Restart Console")
+        btn_restart.connect("clicked", lambda b: self._spawn(force=True))
+        header.pack_end(btn_restart)
+
+        toolbar_view.add_top_bar(header)
+
+        # Scrolled container with VTE Terminal
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        box.set_margin_start(8)
+        box.set_margin_end(8)
+        box.add_css_class("terminal-card")
+        box.set_vexpand(True)
+        box.set_hexpand(True)
+
+        self.terminal = Vte.Terminal()
+        self.terminal.set_font(Pango.FontDescription.from_string("Monospace 10.5"))
+        self.terminal.set_cursor_blink_mode(Vte.CursorBlinkMode.OFF)
+        self.terminal.set_scrollback_lines(2000)
+        self.terminal.set_mouse_autohide(True)
+        self.terminal.set_vexpand(True)
+        self.terminal.set_hexpand(True)
+
+        bg = Gdk.RGBA()
+        bg.parse("#181825")
+        fg = Gdk.RGBA()
+        fg.parse("#cdd6f4")
+        self.terminal.set_colors(fg, bg, [])
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scrolled.set_vexpand(True)
+        scrolled.set_hexpand(True)
+        scrolled.set_child(self.terminal)
         box.append(scrolled)
 
-        clamp = Adw.Clamp(maximum_size=640, tightening_threshold=520)
-        clamp.set_margin_top(16)
-        clamp.set_margin_bottom(24)
-        clamp.set_margin_start(20)
-        clamp.set_margin_end(20)
-        scrolled.set_child(clamp)
+        toolbar_view.set_content(box)
 
-        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
-        clamp.set_child(content_box)
+        self.connect("close-request", self._on_close)
+        GLib.idle_add(self._spawn)
 
-        guide_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        guide_card.add_css_class("tile-card")
+    def _spawn(self, force=False):
+        binary = get_autodarts_cli_binary()
+        if not binary:
+            logger.warning("Autodarts CLI binary not found")
+            return
 
-        lbl_h = Gtk.Label(label="How to Link Your Board", xalign=0)
-        lbl_h.add_css_class("title-3")
-        guide_card.append(lbl_h)
-
-        # Step 1: Clickable link
-        step1_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        step1_box.set_valign(Gtk.Align.CENTER)
-
-        lbl_step1 = Gtk.Label(label="1. Open Autodarts boards:", xalign=0)
-        lbl_step1.add_css_class("heading")
-        step1_box.append(lbl_step1)
-
-        link_btn = Gtk.LinkButton(uri="https://play.autodarts.com/boards", label="play.autodarts.com/boards")
-        link_btn.set_tooltip_text("Open https://play.autodarts.com/boards in your browser")
-        link_btn.connect("activate-link", self._on_link_activated)
-        step1_box.append(link_btn)
-        guide_card.append(step1_box)
-
-        # Step 2: Create board instruction
-        lbl_step2 = Gtk.Label(
-            label="2. On the website, click '+ New' (or generate a new API key for an existing board).",
-            xalign=0,
-            wrap=True
-        )
-        lbl_step2.add_css_class("dim-label")
-        guide_card.append(lbl_step2)
-
-        # Step 3: Copy-paste instruction
-        lbl_step3 = Gtk.Label(
-            label="3. Copy your Board ID and API Key, then paste them into the fields below using the paste buttons.",
-            xalign=0,
-            wrap=True
-        )
-        lbl_step3.add_css_class("dim-label")
-        guide_card.append(lbl_step3)
-
-        content_box.append(guide_card)
-
-        grp_form = Adw.PreferencesGroup(title="Board Authorization")
-        content_box.append(grp_form)
-
-        # 1. Board ID Row
-        self.row_bid = Adw.EntryRow(title="Board ID (UUID)")
-        btn_paste_bid = Gtk.Button(icon_name="edit-paste-symbolic")
-        btn_paste_bid.add_css_class("flat")
-        btn_paste_bid.add_css_class("touch-btn")
-        btn_paste_bid.set_size_request(44, 44)
-        btn_paste_bid.set_valign(Gtk.Align.CENTER)
-        btn_paste_bid.set_tooltip_text("Paste from clipboard")
-        btn_paste_bid.connect("clicked", lambda b: self._paste_into(self.row_bid))
-        self.row_bid.add_suffix(btn_paste_bid)
-        grp_form.add(self.row_bid)
-
-        # 2. API Key Row
-        self.row_key = Adw.PasswordEntryRow(title="API Key")
-        btn_paste_key = Gtk.Button(icon_name="edit-paste-symbolic")
-        btn_paste_key.add_css_class("flat")
-        btn_paste_key.add_css_class("touch-btn")
-        btn_paste_key.set_size_request(44, 44)
-        btn_paste_key.set_valign(Gtk.Align.CENTER)
-        btn_paste_key.set_tooltip_text("Paste from clipboard")
-        btn_paste_key.connect("clicked", lambda b: self._paste_into(self.row_key))
-        self.row_key.add_suffix(btn_paste_key)
-        grp_form.add(self.row_key)
-
-        # Pre-fill stored values
-        b_id, a_key = read_stored_auth()
-        if b_id:
-            self.row_bid.set_text(b_id)
-        if a_key:
-            self.row_key.set_text(a_key)
-
-        # Action Buttons: Cancel and Save & Link Board
-        actions_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        actions_box.set_homogeneous(True)
-        actions_box.set_margin_top(6)
-
-        btn_cancel = Gtk.Button(label="Cancel")
-        btn_cancel.add_css_class("secondary-btn")
-        btn_cancel.add_css_class("touch-btn")
-        btn_cancel.set_size_request(-1, 52)
-        btn_cancel.connect("clicked", lambda b: self.close())
-        actions_box.append(btn_cancel)
-
-        btn_save = Gtk.Button(label="Save & Link Board")
-        btn_save.add_css_class("suggested-action")
-        btn_save.add_css_class("touch-btn")
-        btn_save.set_size_request(-1, 52)
-        btn_save.connect("clicked", self._on_save_clicked)
-        actions_box.append(btn_save)
-
-        content_box.append(actions_box)
-
-    def _paste_into(self, row):
-        clipboard = Gdk.Display.get_default().get_clipboard()
-        def on_read(clip, res):
+        if self._child_pid and force:
             try:
-                text = clip.read_text_finish(res)
-                if text:
-                    row.set_text(text.strip())
+                os.kill(self._child_pid, 9)
             except Exception:
                 pass
-        clipboard.read_text_async(None, on_read)
+            self._child_pid = None
 
-    def _on_save_clicked(self, btn):
-        b_id = self.row_bid.get_text().strip()
-        a_key = self.row_key.get_text().strip()
-        save_stored_auth(b_id, a_key)
-        SystemdService.restart_unit(SERVICE_NAME)
-        if self.on_saved_cb:
-            self.on_saved_cb()
-        self.close()
+        if self._child_pid and not force:
+            return
 
-    def _on_link_activated(self, btn):
-        open_browser_url(self, btn.get_uri())
-        return True
+        self.terminal.reset(True, True)
+        try:
+            self.terminal.spawn_async(
+                pty_flags=Vte.PtyFlags.DEFAULT,
+                working_directory=os.path.expanduser("~"),
+                argv=[binary],
+                envv=[],
+                spawn_flags=GLib.SpawnFlags.DEFAULT,
+                child_setup=None,
+                timeout=-1,
+                cancellable=None,
+                callback=self._on_spawn_cb,
+                user_data=None
+            )
+        except Exception as e:
+            logger.exception("Failed to spawn console dialog: %s", e)
+
+    def _on_spawn_cb(self, terminal, pid, error, user_data):
+        if not error:
+            self._child_pid = pid
+            self.terminal.grab_focus()
+
+    def _on_close(self, widget):
+        if self._child_pid:
+            try:
+                os.kill(self._child_pid, 9)
+            except Exception:
+                pass
+            self._child_pid = None
+        if callable(self.on_saved_cb):
+            try:
+                self.on_saved_cb()
+            except Exception:
+                pass
+        return False

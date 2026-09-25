@@ -43,7 +43,7 @@ def check_system_dependencies():
     if missing:
         print(f"\nMissing dependencies: {', '.join(missing)}")
         if Path("/etc/fedora-release").exists():
-            print("Please run: sudo dnf install -y python3-gobject libadwaita python3-pip python3-evdev python3-pyserial git")
+            print("Please run: sudo dnf install -y python3-gobject libadwaita python3-pip python3-evdev git")
         else:
             print("Please install GTK4 and Libadwaita packages for your distribution.")
         return False

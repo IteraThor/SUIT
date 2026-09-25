@@ -1,7 +1,7 @@
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw, Gio, Gdk, GLib
+from gi.repository import Gtk, Adw, Gdk, GLib
 import time
 import threading
 from pathlib import Path
@@ -161,6 +161,44 @@ class SuitWindow(Adw.ApplicationWindow):
             self.btn_back.set_visible(False)
             self.title_widget.set_title("SUIT for Fedora")
             self.title_widget.set_subtitle("")
+
+        self._adapt_window_size_for_page(page)
+
+    def _adapt_window_size_for_page(self, page):
+        """Expands the window when entering the Autodarts menu so all TUI panels
+        fit without scrolling, and restores standard window size when returning."""
+        if self.is_maximized() or self.is_fullscreen():
+            return
+
+        is_autodarts = (hasattr(self, "autodarts_page") and page == self.autodarts_page) or (
+            hasattr(page, "get_tag") and page.get_tag() == "autodarts"
+        )
+
+        if is_autodarts:
+            cur_w, cur_h = self.get_width(), self.get_height()
+            if cur_w > 0 and cur_h > 0 and not getattr(self, "_saved_menu_size", None):
+                self._saved_menu_size = (cur_w, cur_h)
+            elif not getattr(self, "_saved_menu_size", None):
+                self._saved_menu_size = (1020, 820)
+
+            # Target 1200x1040 provides 140+ cols x 38+ rows for the full FTXUI console
+            target_w, target_h = 1200, 1040
+            display = self.get_display() or Gdk.Display.get_default()
+            if display:
+                monitors = display.get_monitors()
+                if monitors.get_n_items() > 0:
+                    geom = monitors.get_item(0).get_geometry()
+                    target_w = min(target_w, max(800, geom.width - 40))
+                    target_h = min(target_h, max(600, geom.height - 70))
+
+            if cur_w < target_w or cur_h < target_h:
+                self.set_default_size(max(cur_w, target_w), max(cur_h, target_h))
+        else:
+            saved_size = getattr(self, "_saved_menu_size", None)
+            if saved_size:
+                prev_w, prev_h = saved_size
+                self._saved_menu_size = None
+                self.set_default_size(prev_w, prev_h)
 
     def show_toast(self, text):
         toast = Adw.Toast(title=text, timeout=3)

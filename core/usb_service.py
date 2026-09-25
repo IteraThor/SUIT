@@ -1,17 +1,13 @@
 import os
 import time
-import json
-import urllib.request
 import threading
 from pathlib import Path
-from typing import Callable, Optional, Dict, List, Any
-
-import psutil
+from typing import Callable, Optional
 
 from core.logger import get_logger
 from core.autodarts_service import (
     DEFAULT_HOST, DEFAULT_PORT, is_port_open,
-    fetch_cams_stats, fetch_engine_config
+    fetch_cams_stats, fetch_engine_config, parse_cam_device
 )
 
 logger = get_logger("usb")
@@ -33,6 +29,24 @@ class UsbService:
         except Exception:
             pass
         return {"model": model, "cores": cores}
+
+    @staticmethod
+    def get_cpu_percent(prev_ticks: tuple[int, int] | None = None) -> tuple[float, tuple[int, int]]:
+        """Calculate system CPU usage percentage from /proc/stat without external dependencies."""
+        try:
+            with open("/proc/stat", encoding="utf-8") as f:
+                fields = [int(x) for x in f.readline().split()[1:]]
+            idle = fields[3] + (fields[4] if len(fields) > 4 else 0)
+            total = sum(fields)
+            if prev_ticks and total > prev_ticks[1]:
+                diff_total = total - prev_ticks[1]
+                diff_idle = idle - prev_ticks[0]
+                usage = max(0.0, min(100.0, (1.0 - (diff_idle / diff_total)) * 100.0))
+                return round(usage, 1), (idle, total)
+            return 0.0, (idle, total)
+        except Exception:
+            return 0.0, prev_ticks or (0, 0)
+
 
     @staticmethod
     def get_camera_devices() -> list[dict]:
@@ -165,6 +179,7 @@ class AutodartsLiveMonitorService:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._callback: Optional[Callable[[dict], None]] = None
+        self._last_cpu_ticks: tuple[int, int] | None = None
 
     @property
     def is_running(self) -> bool:
@@ -194,6 +209,7 @@ class AutodartsLiveMonitorService:
 
         while not self._stop_event.is_set():
             try:
+                cpu_pct, self._last_cpu_ticks = UsbService.get_cpu_percent(self._last_cpu_ticks)
                 if not is_port_open(self.host, self.port):
                     snapshot = {
                         "mode": "autodarts_live",
@@ -203,7 +219,7 @@ class AutodartsLiveMonitorService:
                         "recommendation": "Autodarts service is stopped. Start Autodarts or tap 'Benchmark USB Hardware' to test camera feeds.",
                         "cameras": {},
                         "target_fps": 25.0,
-                        "cpu_percent": psutil.cpu_percent(interval=None)
+                        "cpu_percent": cpu_pct
                     }
                     if self._callback:
                         self._callback(snapshot)
@@ -215,7 +231,8 @@ class AutodartsLiveMonitorService:
                 cfg_data = fetch_engine_config(self.host, self.port)
 
                 cam_cfg = cfg_data.get("cam", {})
-                configured_cams = [c for c in cam_cfg.get("cams", []) if c and c.strip()]
+                raw_cams = cam_cfg.get("cams", [])
+                configured_cams = [parse_cam_device(c) for c in raw_cams if c and c.strip()]
                 if not configured_cams:
                     configured_cams = ["/dev/video0", "/dev/video2", "/dev/video4"]
 
@@ -223,7 +240,6 @@ class AutodartsLiveMonitorService:
                 h = int(stats_data.get("resolution", {}).get("height") or cam_cfg.get("height", 960))
                 target_fps = float(cam_cfg.get("fps", 25.0))
                 fps_list = stats_data.get("fps", [])
-                cpu_pct = psutil.cpu_percent(interval=None)
 
                 topo_cams = {c["dev_path"]: c for c in UsbService.get_camera_devices()}
                 cams_data = {}

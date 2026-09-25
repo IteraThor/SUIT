@@ -7,7 +7,7 @@ Displays scannable QR codes for phone access and direct clickable links for:
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw, GLib
+from gi.repository import Gtk, Adw
 from modules_gtk.async_utils import open_browser_url
 from modules_gtk.ui_helpers import create_button_with_icon, copy_to_clipboard, generate_qr_texture
 from core.logger import get_logger
