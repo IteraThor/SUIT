@@ -55,33 +55,21 @@ class CameraManualView(Adw.NavigationPage):
         scrolled.set_kinetic_scrolling(True)
         self.set_child(scrolled)
 
-        clamp = Adw.Clamp(maximum_size=960, tightening_threshold=720)
-        clamp.set_margin_top(14)
-        clamp.set_margin_bottom(20)
-        clamp.set_margin_start(14)
-        clamp.set_margin_end(14)
+        clamp = Adw.Clamp(maximum_size=980, tightening_threshold=800)
+        clamp.set_margin_top(8)
+        clamp.set_margin_bottom(8)
+        clamp.set_margin_start(10)
+        clamp.set_margin_end(10)
         scrolled.set_child(clamp)
 
-        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         clamp.set_child(self.main_box)
 
-        # Header card
-        self._build_header_card()
+        # 1. Compact Top Bar: Camera Selector + Status
+        self._build_top_bar()
 
-        # Camera selection tabs
-        self._build_camera_tabs()
-
-        # Live Preview Box
-        self._build_preview_canvas()
-
-        # Control sliders group
-        self._build_controls_group()
-
-        # Startup boot group
-        self._build_boot_group()
-
-        # Footer action buttons
-        self._build_footer_actions()
+        # 2. Split Content: Left (Preview + Utilities) / Right (Compact Sliders)
+        self._build_split_content()
 
     def _resolve_configured_cameras(self) -> list[str]:
         cams = []
@@ -101,44 +89,13 @@ class CameraManualView(Adw.NavigationPage):
             cams.append(default_nodes[len(cams)])
         return cams[:3]
 
-    def _build_header_card(self):
-        header_card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
-        header_card.add_css_class("card")
-        header_card.set_margin_bottom(4)
+    def _build_top_bar(self):
+        top_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        top_bar.set_margin_bottom(2)
 
-        inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
-        inner.set_margin_top(12)
-        inner.set_margin_bottom(12)
-        inner.set_margin_start(16)
-        inner.set_margin_end(16)
-        inner.set_hexpand(True)
-
-        icon = Gtk.Image.new_from_icon_name("camera-web-symbolic")
-        icon.set_pixel_size(36)
-        icon.set_valign(Gtk.Align.CENTER)
-        inner.append(icon)
-
-        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        text_box.set_valign(Gtk.Align.CENTER)
-        text_box.set_hexpand(True)
-
-        self.lbl_title = Gtk.Label(label="Camera Manual Mode", xalign=0)
-        self.lbl_title.add_css_class("heading")
-        text_box.append(self.lbl_title)
-
-        self.lbl_status = Gtk.Label(label="Live sensor adjustment", xalign=0)
-        self.lbl_status.add_css_class("dim-label")
-        text_box.append(self.lbl_status)
-        inner.append(text_box)
-
-        header_card.append(inner)
-        self.main_box.append(header_card)
-
-    def _build_camera_tabs(self):
-        tab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        # Camera Switcher Buttons
+        tab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         tab_box.set_homogeneous(True)
-        tab_box.set_margin_bottom(4)
-
         self.cam_buttons = []
         for i, name in enumerate(CAMERA_NAMES):
             btn = Gtk.Button(label=name)
@@ -146,8 +103,18 @@ class CameraManualView(Adw.NavigationPage):
             btn.connect("clicked", lambda b, idx=i: self._on_select_camera(idx))
             tab_box.append(btn)
             self.cam_buttons.append(btn)
+        top_bar.append(tab_box)
 
-        self.main_box.append(tab_box)
+        # Spacer
+        spacer = Gtk.Box(hexpand=True)
+        top_bar.append(spacer)
+
+        # Status badge
+        self.lbl_status = Gtk.Label(label="Live sensor adjustment")
+        self.lbl_status.add_css_class("dim-label")
+        top_bar.append(self.lbl_status)
+
+        self.main_box.append(top_bar)
         self._update_tab_buttons(0)
 
     def _update_tab_buttons(self, active_idx: int):
@@ -157,108 +124,162 @@ class CameraManualView(Adw.NavigationPage):
             else:
                 btn.remove_css_class("suggested-action")
 
-    def _build_preview_canvas(self):
+    def _build_split_content(self):
+        split_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        split_box.set_hexpand(True)
+        split_box.set_vexpand(True)
+        self.main_box.append(split_box)
+
+        # --- LEFT PANE: Preview + Utility Actions ---
+        left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        left_box.set_hexpand(True)
+        left_box.set_vexpand(True)
+        split_box.append(left_box)
+
+        # Live Preview Frame
         preview_frame = Gtk.Frame()
         preview_frame.add_css_class("card")
+        preview_frame.set_hexpand(True)
+        preview_frame.set_vexpand(True)
 
         self.preview_drawing_area = Gtk.DrawingArea()
         self.preview_drawing_area.set_draw_func(self._on_draw_preview)
-        self.preview_drawing_area.set_size_request(-1, 300)
+        self.preview_drawing_area.set_size_request(-1, 230)
         self.preview_drawing_area.set_hexpand(True)
+        self.preview_drawing_area.set_vexpand(True)
         preview_frame.set_child(self.preview_drawing_area)
+        left_box.append(preview_frame)
 
-        self.main_box.append(preview_frame)
+        # Utility bar under preview
+        util_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        util_bar.add_css_class("tile-card-compact")
 
-    def _build_controls_group(self):
-        self.ctrl_group = Adw.PreferencesGroup()
-        self.ctrl_group.set_title("Hardware Sensor Controls")
-        self.main_box.append(self.ctrl_group)
+        # Load on boot toggle
+        boot_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        boot_box.set_valign(Gtk.Align.CENTER)
+        lbl_boot = Gtk.Label(label="Load on boot")
+        lbl_boot.add_css_class("dim-label")
+        boot_box.append(lbl_boot)
 
-        # 1. Exposure Mode Switch
-        self.row_exp_mode = Adw.ActionRow(title="Automatic Exposure")
-        self.row_exp_mode.set_subtitle("Disable for manual shutter speed control")
-        self.switch_exp_auto = Gtk.Switch()
-        self.switch_exp_auto.set_valign(Gtk.Align.CENTER)
-        self.switch_exp_auto.connect("notify::active", self._on_exposure_mode_changed)
-        self.row_exp_mode.add_suffix(self.switch_exp_auto)
-        self.ctrl_group.add(self.row_exp_mode)
-
-        # 2. Exposure Time Scale
-        self.row_exp_val = Adw.ActionRow(title="Exposure Time")
-        self.scale_exp_val = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1, 5000, 10)
-        self.scale_exp_val.set_hexpand(True)
-        self.scale_exp_val.set_draw_value(True)
-        self.scale_exp_val.connect("value-changed", lambda s: self._queue_control_update("exposure_time_absolute", int(s.get_value())))
-        self.row_exp_val.add_suffix(self.scale_exp_val)
-        self.ctrl_group.add(self.row_exp_val)
-
-        # 3. Gain Scale
-        self.row_gain = Adw.ActionRow(title="Sensor Gain")
-        self.scale_gain = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
-        self.scale_gain.set_hexpand(True)
-        self.scale_gain.set_draw_value(True)
-        self.scale_gain.connect("value-changed", lambda s: self._queue_control_update("gain", int(s.get_value())))
-        self.row_gain.add_suffix(self.scale_gain)
-        self.ctrl_group.add(self.row_gain)
-
-        # 4. Brightness Scale
-        self.row_bright = Adw.ActionRow(title="Brightness")
-        self.scale_bright = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, -64, 64, 1)
-        self.scale_bright.set_hexpand(True)
-        self.scale_bright.set_draw_value(True)
-        self.scale_bright.connect("value-changed", lambda s: self._queue_control_update("brightness", int(s.get_value())))
-        self.row_bright.add_suffix(self.scale_bright)
-        self.ctrl_group.add(self.row_bright)
-
-        # 5. Contrast Scale
-        self.row_contrast = Adw.ActionRow(title="Contrast")
-        self.scale_contrast = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 64, 1)
-        self.scale_contrast.set_hexpand(True)
-        self.scale_contrast.set_draw_value(True)
-        self.scale_contrast.connect("value-changed", lambda s: self._queue_control_update("contrast", int(s.get_value())))
-        self.row_contrast.add_suffix(self.scale_contrast)
-        self.ctrl_group.add(self.row_contrast)
-
-        # 6. Auto White Balance Switch
-        self.row_wb_mode = Adw.ActionRow(title="Auto White Balance")
-        self.switch_wb_auto = Gtk.Switch()
-        self.switch_wb_auto.set_valign(Gtk.Align.CENTER)
-        self.switch_wb_auto.connect("notify::active", self._on_wb_mode_changed)
-        self.row_wb_mode.add_suffix(self.switch_wb_auto)
-        self.ctrl_group.add(self.row_wb_mode)
-
-        # 7. White Balance Temperature Scale
-        self.row_wb_temp = Adw.ActionRow(title="Color Temperature (K)")
-        self.scale_wb_temp = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 2800, 6500, 50)
-        self.scale_wb_temp.set_hexpand(True)
-        self.scale_wb_temp.set_draw_value(True)
-        self.scale_wb_temp.connect("value-changed", lambda s: self._queue_control_update("white_balance_temperature", int(s.get_value())))
-        self.row_wb_temp.add_suffix(self.scale_wb_temp)
-        self.ctrl_group.add(self.row_wb_temp)
-
-    def _build_boot_group(self):
-        self.boot_group = Adw.PreferencesGroup()
-        self.row_boot = Adw.ActionRow(title="Load on boot")
-        self.row_boot.set_subtitle("Apply camera values at startup")
         self.switch_boot = Gtk.Switch()
         self.switch_boot.set_valign(Gtk.Align.CENTER)
         self.switch_boot.connect("notify::active", self._on_boot_toggled)
+        boot_box.append(self.switch_boot)
+        util_bar.append(boot_box)
+
+        # Backwards compatibility object for tests
+        self.row_boot = Adw.ActionRow(title="Load on boot")
         self.row_boot.add_suffix(self.switch_boot)
-        self.boot_group.add(self.row_boot)
-        self.main_box.append(self.boot_group)
 
-    def _build_footer_actions(self):
-        action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        action_box.set_margin_top(4)
+        # Spacer
+        spacer = Gtk.Box(hexpand=True)
+        util_bar.append(spacer)
 
+        # Reset Defaults button
         self.btn_reset = Gtk.Button(label="Reset Defaults")
-        self.btn_reset.add_css_class("flat")
-        self.btn_reset.add_css_class("touch-btn")
-        self.btn_reset.set_hexpand(True)
+        self.btn_reset.add_css_class("secondary-btn")
         self.btn_reset.connect("clicked", self._on_reset_clicked)
-        action_box.append(self.btn_reset)
+        util_bar.append(self.btn_reset)
 
-        self.main_box.append(action_box)
+        left_box.append(util_bar)
+
+        # --- RIGHT PANE: Compact Sensor Controls ---
+        ctrl_pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        ctrl_pane.add_css_class("tile-card-compact")
+        ctrl_pane.set_size_request(340, -1)
+        split_box.append(ctrl_pane)
+
+        # 1. Exposure (Auto toggle + Slider)
+        exp_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        exp_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        lbl_exp = Gtk.Label(label="Exposure", xalign=0, hexpand=True)
+        lbl_exp.add_css_class("dim-label")
+        exp_hdr.append(lbl_exp)
+
+        lbl_exp_auto = Gtk.Label(label="Auto")
+        lbl_exp_auto.add_css_class("dim-label")
+        exp_hdr.append(lbl_exp_auto)
+
+        self.switch_exp_auto = Gtk.Switch()
+        self.switch_exp_auto.set_valign(Gtk.Align.CENTER)
+        self.switch_exp_auto.connect("notify::active", self._on_exposure_mode_changed)
+        exp_hdr.append(self.switch_exp_auto)
+        exp_box.append(exp_hdr)
+
+        self.scale_exp_val = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1, 5000, 10)
+        self.scale_exp_val.set_draw_value(True)
+        self.scale_exp_val.set_value_pos(Gtk.PositionType.RIGHT)
+        self.scale_exp_val.set_hexpand(True)
+        self.scale_exp_val.connect("value-changed", lambda s: self._queue_control_update("exposure_time_absolute", int(s.get_value())))
+        exp_box.append(self.scale_exp_val)
+        ctrl_pane.append(exp_box)
+
+        # 2. Gain
+        gain_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        lbl_gain = Gtk.Label(label="Gain", xalign=0, width_chars=8)
+        lbl_gain.add_css_class("dim-label")
+        gain_box.append(lbl_gain)
+
+        self.scale_gain = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.scale_gain.set_draw_value(True)
+        self.scale_gain.set_value_pos(Gtk.PositionType.RIGHT)
+        self.scale_gain.set_hexpand(True)
+        self.scale_gain.connect("value-changed", lambda s: self._queue_control_update("gain", int(s.get_value())))
+        gain_box.append(self.scale_gain)
+        ctrl_pane.append(gain_box)
+
+        # 3. Brightness
+        bright_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        lbl_bright = Gtk.Label(label="Brightness", xalign=0, width_chars=8)
+        lbl_bright.add_css_class("dim-label")
+        bright_box.append(lbl_bright)
+
+        self.scale_bright = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, -64, 64, 1)
+        self.scale_bright.set_draw_value(True)
+        self.scale_bright.set_value_pos(Gtk.PositionType.RIGHT)
+        self.scale_bright.set_hexpand(True)
+        self.scale_bright.connect("value-changed", lambda s: self._queue_control_update("brightness", int(s.get_value())))
+        bright_box.append(self.scale_bright)
+        ctrl_pane.append(bright_box)
+
+        # 4. Contrast
+        contrast_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        lbl_contrast = Gtk.Label(label="Contrast", xalign=0, width_chars=8)
+        lbl_contrast.add_css_class("dim-label")
+        contrast_box.append(lbl_contrast)
+
+        self.scale_contrast = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 64, 1)
+        self.scale_contrast.set_draw_value(True)
+        self.scale_contrast.set_value_pos(Gtk.PositionType.RIGHT)
+        self.scale_contrast.set_hexpand(True)
+        self.scale_contrast.connect("value-changed", lambda s: self._queue_control_update("contrast", int(s.get_value())))
+        contrast_box.append(self.scale_contrast)
+        ctrl_pane.append(contrast_box)
+
+        # 5. White Balance (Auto toggle + Slider)
+        wb_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        wb_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        lbl_wb = Gtk.Label(label="White Balance", xalign=0, hexpand=True)
+        lbl_wb.add_css_class("dim-label")
+        wb_hdr.append(lbl_wb)
+
+        lbl_wb_auto = Gtk.Label(label="Auto")
+        lbl_wb_auto.add_css_class("dim-label")
+        wb_hdr.append(lbl_wb_auto)
+
+        self.switch_wb_auto = Gtk.Switch()
+        self.switch_wb_auto.set_valign(Gtk.Align.CENTER)
+        self.switch_wb_auto.connect("notify::active", self._on_wb_mode_changed)
+        wb_hdr.append(self.switch_wb_auto)
+        wb_box.append(wb_hdr)
+
+        self.scale_wb_temp = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 2800, 6500, 50)
+        self.scale_wb_temp.set_draw_value(True)
+        self.scale_wb_temp.set_value_pos(Gtk.PositionType.RIGHT)
+        self.scale_wb_temp.set_hexpand(True)
+        self.scale_wb_temp.connect("value-changed", lambda s: self._queue_control_update("white_balance_temperature", int(s.get_value())))
+        wb_box.append(self.scale_wb_temp)
+        ctrl_pane.append(wb_box)
 
     @property
     def current_device(self) -> str:
