@@ -135,196 +135,208 @@ class CameraOptimizer:
                 power_line_frequency=initial_ctrls.get("power_line_frequency", type("", (), {"current_val": 1})).current_val,
             )
 
-            # STAGE 1: Sensor Physics Anchor
-            # Strategy: Measure auto-exposure baseline quality first.
-            # If it's already good, preserve the camera's exposure and only tune ISP.
-            # If it's broken, auto-detect the right exposure for this sensor.
-            report("Stage 1 / 3", 0.16, "Analyzing sensor exposure baseline...")
+            # STAGE 1: Sensor Physics Anchor & Auto-Exposure Brightness Replication
+            # The auto-exposure meter gives an accurate target brightness for the current lighting.
+            # We measure this baseline luminance, switch to Manual Mode (auto_exposure=1),
+            # and find the exact manual exposure time that matches the baseline at the lowest
+            # possible analog gain (gain=0). This maximizes signal-to-noise ratio (SNR)
+            # and eliminates sensor noise amplification.
+            report("Stage 1 / 3", 0.16, "Measuring auto-exposure baseline brightness...")
 
-            # Measure baseline auto-exposure quality from initial capture
             gray_baseline = cv2.cvtColor(initial_frame, cv2.COLOR_BGR2GRAY)
             baseline_board = gray_baseline[roi.board_mask > 0]
             baseline_uniform = gray_baseline[roi.uniform_mask > 0]
             if len(baseline_uniform) > 50:
                 baseline_white = float(np.percentile(baseline_uniform, 90))
+            elif len(baseline_board) > 50:
+                baseline_white = float(np.percentile(baseline_board, 90))
             else:
                 baseline_white = float(np.percentile(gray_baseline, 90))
-            baseline_clip = float(np.sum(baseline_board >= 253)) / max(1, len(baseline_board))
 
-            # Decide exposure strategy based on auto-exposure quality
-            auto_exposure_usable = 180.0 <= baseline_white <= 250.0 and baseline_clip < 0.08
+            baseline_clip = float(np.sum(baseline_board >= 253)) / max(1, len(baseline_board)) if len(baseline_board) > 0 else 0.0
+
+            # Target white-bed luminance clamped to safe optical range (140 to 230 DN, nominal ~195 DN)
+            if baseline_clip > 0.08:
+                # If baseline is severely clipping, back off slightly to recover highlight details
+                target_white_lum = max(140.0, min(220.0, baseline_white - 15.0))
+            else:
+                target_white_lum = max(140.0, min(230.0, baseline_white))
+
             logger.info(
-                "Baseline analysis: white=%.1f DN, clip=%.2f%%, auto_usable=%s",
-                baseline_white, baseline_clip * 100, auto_exposure_usable,
+                "Baseline AE: white=%.1f DN, clip=%.2f%% -> Target luminance=%.1f DN",
+                baseline_white, baseline_clip * 100, target_white_lum,
             )
 
-            if auto_exposure_usable:
-                # AUTO-EXPOSURE IS WORKING — preserve it, only optimize ISP params
-                # Lock to manual mode at the camera's CURRENT exposure to prevent drift
-                report("Stage 1 / 3", 0.18, f"Auto-exposure is good (whites={baseline_white:.0f} DN) — preserving...")
-                optimal_exposure = initial_settings.exposure_absolute
-                start_gain = initial_settings.gain
-                target_white_lum = min(235.0, baseline_white + 5.0)  # Small nudge, don't chase
+            # Query hardware exposure & gain limits
+            exp_ctrl = initial_ctrls.get("exposure_time_absolute")
+            exp_min = exp_ctrl.min_val if exp_ctrl else 1
+            exp_max = exp_ctrl.max_val if exp_ctrl else 1000
+            exp_step = getattr(exp_ctrl, "step", 1) or 1
+
+            gain_ctrl = initial_ctrls.get("gain")
+            min_g = gain_ctrl.min_val if gain_ctrl else 0
+            max_g = gain_ctrl.max_val if gain_ctrl else 128
+
+            # Practical shutter limit for ~30 FPS video streaming (typically 333 in 100µs units = 33.3ms)
+            if exp_max >= 333:
+                shutter_ceiling = min(exp_max, 400)
             else:
-                # AUTO-EXPOSURE IS BROKEN — auto-detect correct exposure
-                # Try 50Hz-synchronized harmonics (20ms, 40ms, 60ms) until whites are usable
-                report("Stage 1 / 3", 0.18, "Auto-exposure needs correction — finding optimal exposure...")
-                optimal_exposure = 200  # Default: 20ms = 1/50s
-                start_gain = 0
+                shutter_ceiling = exp_max
 
-                # Set manual mode with minimum gain to measure pure sensor sensitivity
-                self.device.set_control("auto_exposure", 1)
-                self.device.set_control("gain", 0)
-                self.device.set_control("power_line_frequency", 1)
-                time.sleep(0.08)
+            report("Stage 1 / 3", 0.18, f"Switching to Manual Mode & matching target {target_white_lum:.0f} DN at min gain...")
 
-                for try_exp in [200, 400, 600]:
+            # Set manual mode with minimum gain (0) and 50Hz anti-flicker
+            self.device.set_control("auto_exposure", 1)
+            self.device.set_control("gain", min_g)
+            self.device.set_control("power_line_frequency", 1)
+            time.sleep(0.08)
+
+            if check_abort():
+                return None
+
+            # Coarse exposure candidate ladder across [exp_min, shutter_ceiling]
+            # Includes standard 50Hz/60Hz harmonics (100 = 10ms, 166 = 16.6ms, 200 = 20ms, 300 = 30ms, 333 = 33.3ms)
+            coarse_exp_candidates = sorted(list(set([
+                exp_min,
+                max(exp_min, min(shutter_ceiling, 50)),
+                max(exp_min, min(shutter_ceiling, 100)),
+                max(exp_min, min(shutter_ceiling, 166)),
+                max(exp_min, min(shutter_ceiling, 200)),
+                max(exp_min, min(shutter_ceiling, 250)),
+                max(exp_min, min(shutter_ceiling, 300)),
+                max(exp_min, min(shutter_ceiling, 333)),
+                shutter_ceiling,
+            ])))
+            if initial_settings.exposure_absolute in range(exp_min, shutter_ceiling + 1):
+                coarse_exp_candidates.append(initial_settings.exposure_absolute)
+                coarse_exp_candidates = sorted(list(set(coarse_exp_candidates)))
+
+            best_exp = coarse_exp_candidates[0]
+            best_exp_diff = float("inf")
+            best_exp_lum = 0.0
+
+            for idx, exp_val in enumerate(coarse_exp_candidates):
+                if check_abort():
+                    return None
+
+                self.device.set_control("exposure_time_absolute", exp_val)
+                time.sleep(0.06)
+
+                f = get_frame(flush=2)
+                if f is None:
+                    continue
+
+                gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+                u_pix = gray[roi.uniform_mask > 0]
+                lum = float(np.percentile(u_pix, 90)) if len(u_pix) > 50 else float(np.percentile(gray, 90))
+
+                diff = abs(lum - target_white_lum)
+                if diff < best_exp_diff:
+                    best_exp_diff = diff
+                    best_exp = exp_val
+                    best_exp_lum = lum
+
+                pct = 0.18 + (idx / len(coarse_exp_candidates)) * 0.10
+                report("Stage 1 / 3 (Exposure Match)", pct, f"Exposure {exp_val} -> White: {lum:.1f}/{target_white_lum:.0f} DN", frame=f)
+
+                # If luminance matches or exceeds target, we have bracketed the target
+                if lum >= target_white_lum:
+                    break
+
+            # Fine exposure polish around the coarse winner
+            fine_exp_step = max(1, exp_step * 5, int((shutter_ceiling - exp_min) * 0.02))
+            fine_exp_candidates = sorted(list(set([
+                max(exp_min, min(shutter_ceiling, best_exp + offset * fine_exp_step))
+                for offset in [-3, -2, -1, 0, 1, 2, 3]
+            ])))
+
+            for idx, exp_val in enumerate(fine_exp_candidates):
+                if check_abort():
+                    return None
+                if exp_val in coarse_exp_candidates and exp_val != best_exp:
+                    continue
+
+                self.device.set_control("exposure_time_absolute", exp_val)
+                time.sleep(0.04)
+
+                f = get_frame(flush=2)
+                if f is None:
+                    continue
+
+                gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+                u_pix = gray[roi.uniform_mask > 0]
+                lum = float(np.percentile(u_pix, 90)) if len(u_pix) > 50 else float(np.percentile(gray, 90))
+
+                diff = abs(lum - target_white_lum)
+                if diff < best_exp_diff:
+                    best_exp_diff = diff
+                    best_exp = exp_val
+                    best_exp_lum = lum
+
+                pct = 0.28 + (idx / len(fine_exp_candidates)) * 0.06
+                report("Stage 1 / 3 (Fine Exposure)", pct, f"Fine exposure {exp_val} -> White: {lum:.1f}/{target_white_lum:.0f} DN", frame=f)
+
+            optimal_exposure = best_exp
+            self.device.set_control("exposure_time_absolute", optimal_exposure)
+            time.sleep(0.04)
+
+            # Check if gain boost is needed (only if max shutter could not achieve target brightness)
+            best_gain = min_g
+            if best_exp_lum < target_white_lum - 15.0 and optimal_exposure >= shutter_ceiling - 20:
+                report("Stage 1 / 3 (Gain Boost)", 0.35, f"Exposure capped at {optimal_exposure}. Elevating gain minimally to meet target...")
+                gain_step = max(1, (max_g - min_g) // 16)
+                gain_candidates = list(range(min_g, int(min_g + (max_g - min_g) * 0.60), gain_step))
+
+                best_gain_diff = abs(best_exp_lum - target_white_lum)
+                for idx, g in enumerate(gain_candidates):
                     if check_abort():
                         return None
-                    self.device.set_control("exposure_time_absolute", try_exp)
-                    time.sleep(0.10)
-                    f = get_frame(flush=3)
-                    if f is not None:
-                        gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
-                        u_pix = gray[roi.uniform_mask > 0]
-                        wp = float(np.percentile(u_pix, 90)) if len(u_pix) > 50 else float(np.percentile(gray, 90))
-                        report("Stage 1 / 3", 0.20, f"Exposure {try_exp * 0.1:.0f}ms → whites={wp:.0f} DN", frame=f)
-                        if wp >= 120.0:
-                            optimal_exposure = try_exp
-                            break
-                    optimal_exposure = try_exp  # Use longest tried if none reached 120
+                    if g == min_g:
+                        continue
 
-                target_white_lum = 215.0  # Sensor needs help, aim high
+                    self.device.set_control("gain", g)
+                    time.sleep(0.04)
 
-            logger.info("Exposure strategy: exposure=%d (%.1fms), target_white=%.1f DN",
-                        optimal_exposure, optimal_exposure * 0.1, target_white_lum)
+                    f = get_frame(flush=2)
+                    if f is None:
+                        continue
+
+                    gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+                    u_pix = gray[roi.uniform_mask > 0]
+                    lum = float(np.percentile(u_pix, 90)) if len(u_pix) > 50 else float(np.percentile(gray, 90))
+
+                    diff = abs(lum - target_white_lum)
+                    if diff < best_gain_diff:
+                        best_gain_diff = diff
+                        best_gain = g
+
+                    pct = 0.35 + (idx / len(gain_candidates)) * 0.05
+                    report("Stage 1 / 3 (Gain Boost)", pct, f"Gain {g} -> White: {lum:.1f}/{target_white_lum:.0f} DN", frame=f)
+
+                    if lum >= target_white_lum:
+                        break
+
+            self.device.set_control("gain", best_gain)
+            time.sleep(0.04)
+            logger.info("Locked Stage 1 physical anchor: exposure=%d, gain=%d (target=%.1f DN)",
+                        optimal_exposure, best_gain, target_white_lum)
 
             current_settings = CameraSettings(
                 exposure_auto=1,  # Manual Mode (locked)
                 exposure_absolute=optimal_exposure,
-                gain=start_gain,
-                wb_auto=1,  # Auto White Balance during initial convergence
+                gain=best_gain,
+                wb_auto=1,  # Auto White Balance enabled
                 wb_temperature=4600,
                 sharpness=initial_ctrls.get("sharpness", type("", (), {"default_val": 40})).default_val,
                 contrast=initial_ctrls.get("contrast", type("", (), {"default_val": 34})).default_val,
                 brightness=0,
-                gamma=initial_settings.gamma if auto_exposure_usable else 290,
+                gamma=initial_settings.gamma,
                 saturation=64,
                 power_line_frequency=1,  # 50Hz anti-flicker
             )
-            self.device.apply_settings(current_settings)
-            time.sleep(0.12)
-
-            if check_abort():
-                return None
-
-            # Gain search: scope depends on exposure strategy
-            gain_ctrl = initial_ctrls.get("gain")
-            max_g = gain_ctrl.max_val if gain_ctrl else 128
-            min_g = gain_ctrl.min_val if gain_ctrl else 0
-
-            if auto_exposure_usable:
-                # Minimal gain search: only ±12 around current gain
-                report("Stage 1 / 3", 0.22, f"Fine-tuning gain around {start_gain}...")
-                gain_candidates = sorted(list(set([
-                    max(min_g, min(max_g, start_gain + offset))
-                    for offset in [-12, -8, -4, 0, 4, 8, 12]
-                ])))
-            else:
-                # Full gain search from minimum
-                report("Stage 1 / 3", 0.22, f"Searching gain for target {target_white_lum:.0f} DN...")
-                gain_candidates = sorted(list(set([
-                    min_g,
-                    int(min_g + (max_g - min_g) * 0.10),
-                    int(min_g + (max_g - min_g) * 0.22),
-                    int(min_g + (max_g - min_g) * 0.35),
-                    int(min_g + (max_g - min_g) * 0.45),
-                    int(min_g + (max_g - min_g) * 0.55),
-                    int(min_g + (max_g - min_g) * 0.65),
-                ])))
-
-            best_gain = start_gain
-            best_gain_diff = float("inf")
-
-            for idx, g in enumerate(gain_candidates):
-                if check_abort():
-                    return None
-
-                current_settings.gain = g
-                self.device.set_control("gain", g)
-                time.sleep(0.04)
-
-                f = get_frame(flush=2)
-                if f is None:
-                    continue
-
-                gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
-                uniform_pixels = gray[roi.uniform_mask > 0]
-                if len(uniform_pixels) > 50:
-                    white_lum = float(np.percentile(uniform_pixels, 90))
-                else:
-                    white_lum = float(np.percentile(gray, 90))
-
-                diff = abs(white_lum - target_white_lum)
-                if diff < best_gain_diff:
-                    best_gain_diff = diff
-                    best_gain = g
-
-                if white_lum >= target_white_lum:
-                    break
-
-                pct = 0.22 + (idx / len(gain_candidates)) * 0.08
-                report("Stage 1 / 3 (Gain)", pct, f"Gain {g} → White: {white_lum:.1f}/{target_white_lum:.0f} DN", frame=f)
-
-            if check_abort():
-                return None
-
-            # Fine polish around coarse winner
-            if is_deep:
-                fine_gain_candidates = sorted(list(set([
-                    max(min_g, min(max_g, best_gain + offset)) for offset in range(-6, 7)
-                ])))
-            else:
-                fine_gain_candidates = sorted(list(set([
-                    max(min_g, min(max_g, best_gain + offset)) for offset in [-4, -2, 0, 2, 4]
-                ])))
-
-            for idx, g in enumerate(fine_gain_candidates):
-                if check_abort():
-                    return None
-
-                if g in gain_candidates:
-                    continue
-                current_settings.gain = g
-                self.device.set_control("gain", g)
-                time.sleep(0.04)
-
-                f = get_frame(flush=2)
-                if f is None:
-                    continue
-
-                gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
-                uniform_pixels = gray[roi.uniform_mask > 0]
-                white_lum = float(np.percentile(uniform_pixels, 90)) if len(uniform_pixels) > 50 else float(np.percentile(gray, 90))
-
-                diff = abs(white_lum - target_white_lum)
-                if diff < best_gain_diff:
-                    best_gain_diff = diff
-                    best_gain = g
-
-                pct = 0.30 + (idx / len(fine_gain_candidates)) * 0.08
-                report("Stage 1 / 3 (Fine)", pct, f"Fine gain {g} → White: {white_lum:.1f}/{target_white_lum:.0f} DN", frame=f)
-
-            if check_abort():
-                return None
-
-            current_settings.gain = best_gain
-            self.device.set_control("gain", best_gain)
-            time.sleep(0.06)
 
             # Stage 1.5: White Balance Handling
             report("Stage 1.5 / 3", 0.40, "Ensuring Auto White Balance for neutral color balance...")
-            current_settings.wb_auto = 1
             self.device.set_control("white_balance_automatic", 1)
             time.sleep(0.06)
 
@@ -387,9 +399,6 @@ class CameraOptimizer:
                     metrics = self.evaluator.evaluate(burst, roi)
 
                     # Black-floor veto: reject any (S,C) combo that crushes blacks below 8 DN.
-                    # High contrast pushes blacks down, making the image look very dark even
-                    # if white segments are at target. This prevents the optimizer from
-                    # selecting settings that look dark to the human eye.
                     gray_check = cv2.cvtColor(burst[0], cv2.COLOR_BGR2GRAY)
                     board_px = gray_check[roi.board_mask > 0]
                     if len(board_px) > 100:
@@ -481,36 +490,68 @@ class CameraOptimizer:
             else:
                 current_white = target_white_lum
 
-            reanchor_gains = sorted(list(set([
-                max(min_g, min(max_g, best_gain + offset))
-                for offset in [-8, -5, -3, 0, 3, 5, 8]
-            ])))
             reanchor_best_gain = best_gain
+            reanchor_best_exp = optimal_exposure
             reanchor_best_diff = abs(current_white - target_white_lum)
 
-            for idx, g in enumerate(reanchor_gains):
-                if check_abort():
-                    return None
-                if g == best_gain:
-                    continue
-                self.device.set_control("gain", g)
-                time.sleep(0.04)
-                f = get_frame(flush=2)
-                if f is None:
-                    continue
-                gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
-                uniform_pixels = gray[roi.uniform_mask > 0]
-                wl = float(np.percentile(uniform_pixels, 90)) if len(uniform_pixels) > 50 else float(np.percentile(gray, 90))
-                d = abs(wl - target_white_lum)
-                if d < reanchor_best_diff:
-                    reanchor_best_diff = d
-                    reanchor_best_gain = g
+            # Re-anchor with shutter first if at min_g to maintain 0-gain purity
+            if best_gain == min_g:
+                reanchor_exps = sorted(list(set([
+                    max(exp_min, min(shutter_ceiling, optimal_exposure + offset))
+                    for offset in [-25, -15, -8, 0, 8, 15, 25]
+                ])))
+                for idx, exp_v in enumerate(reanchor_exps):
+                    if check_abort():
+                        return None
+                    if exp_v == optimal_exposure:
+                        continue
+                    self.device.set_control("exposure_time_absolute", exp_v)
+                    time.sleep(0.04)
+                    f = get_frame(flush=2)
+                    if f is None:
+                        continue
+                    gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+                    u_pix = gray[roi.uniform_mask > 0]
+                    wl = float(np.percentile(u_pix, 90)) if len(u_pix) > 50 else float(np.percentile(gray, 90))
+                    d = abs(wl - target_white_lum)
+                    if d < reanchor_best_diff:
+                        reanchor_best_diff = d
+                        reanchor_best_exp = exp_v
 
-                pct = 0.88 + (idx / len(reanchor_gains)) * 0.08
-                report("Stage 3 / 3 (Re-Anchor)", pct, f"Tuning Gain {g} -> White: {wl:.1f}/255", frame=f)
+                    pct = 0.88 + (idx / len(reanchor_exps)) * 0.08
+                    report("Stage 3 / 3 (Re-Anchor)", pct, f"Tuning Exposure {exp_v} -> White: {wl:.1f}/{target_white_lum:.0f} DN", frame=f)
 
-            best_gain = reanchor_best_gain
-            self.device.set_control("gain", best_gain)
+                optimal_exposure = reanchor_best_exp
+                self.device.set_control("exposure_time_absolute", optimal_exposure)
+            else:
+                reanchor_gains = sorted(list(set([
+                    max(min_g, min(max_g, best_gain + offset))
+                    for offset in [-8, -5, -3, 0, 3, 5, 8]
+                ])))
+                for idx, g in enumerate(reanchor_gains):
+                    if check_abort():
+                        return None
+                    if g == best_gain:
+                        continue
+                    self.device.set_control("gain", g)
+                    time.sleep(0.04)
+                    f = get_frame(flush=2)
+                    if f is None:
+                        continue
+                    gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+                    uniform_pixels = gray[roi.uniform_mask > 0]
+                    wl = float(np.percentile(uniform_pixels, 90)) if len(uniform_pixels) > 50 else float(np.percentile(gray, 90))
+                    d = abs(wl - target_white_lum)
+                    if d < reanchor_best_diff:
+                        reanchor_best_diff = d
+                        reanchor_best_gain = g
+
+                    pct = 0.88 + (idx / len(reanchor_gains)) * 0.08
+                    report("Stage 3 / 3 (Re-Anchor)", pct, f"Tuning Gain {g} -> White: {wl:.1f}/{target_white_lum:.0f} DN", frame=f)
+
+                best_gain = reanchor_best_gain
+                self.device.set_control("gain", best_gain)
+
             time.sleep(0.06)
 
             # Final multi-frame burst verification
