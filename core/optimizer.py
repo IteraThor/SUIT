@@ -344,16 +344,16 @@ class CameraOptimizer:
             c_base = initial_settings.contrast if initial_settings.contrast is not None else (contrast_ctrl.default_val if contrast_ctrl else 32)
 
             # Bounded window around factory default
-            s_span = max(6, int((s_max - s_min) * 0.15))
-            c_span = max(4, int((c_max - c_min) * 0.12))
+            s_span = max(8, int((s_max - s_min) * 0.20))
+            c_span = max(6, int((c_max - c_min) * 0.18))
 
             coarse_s_levels = sorted(list(set([
                 max(s_min, min(s_max, s_base + offset))
-                for offset in [-s_span, -s_span // 2, 0, s_span // 2, s_span, int(s_span * 1.5)]
+                for offset in [-s_span, -s_span // 2, 0, s_span // 2, s_span]
             ])))
             coarse_c_levels = sorted(list(set([
                 max(c_min, min(c_max, c_base + offset))
-                for offset in [-c_span, -c_span // 2, 0, c_span // 2, c_span]
+                for offset in [-c_span // 2, 0, c_span // 2, c_span, int(c_span * 1.5)]
             ])))
 
             total_pairs = len(coarse_s_levels) * len(coarse_c_levels)
@@ -402,7 +402,7 @@ class CameraOptimizer:
                             continue
 
                     halo_val = self.evaluator.calculate_halo_overshoot(burst[0], roi.wire_mask, roi.uniform_mask)
-                    if halo_val > 0.08:
+                    if halo_val > 0.22:
                         pct = 0.45 + (pair_idx / total_pairs) * 0.35
                         report("Stage 2 / 3", pct, f"Skipped S={s}, C={c} (halo ringing detected: {halo_val*100:.1f}%)", frame=burst[0])
                         continue

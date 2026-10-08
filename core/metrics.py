@@ -164,24 +164,24 @@ class QualityEvaluator:
         # Shadow clipping penalty (crushed dart shadow triangulation)
         sh_penalty = max(0.0, 1.0 - (sh_clipping_ratio * 14.0))
 
-        # Halo ringing penalty
-        halo_penalty = max(0.30, 1.0 - (halo_overshoot / 0.12))
+        # Halo ringing penalty (scaled for metallic wire specular highlights)
+        halo_penalty = max(0.30, 1.0 - (halo_overshoot / 0.25))
 
         # Black Floor Factor:
-        if 10.0 <= p_black_floor <= 45.0:
+        if 12.0 <= p_black_floor <= 45.0:
             black_floor_factor = 1.0
-        elif p_black_floor < 10.0:
-            black_floor_factor = max(0.30, (p_black_floor / 10.0) ** 2)
+        elif p_black_floor < 12.0:
+            black_floor_factor = max(0.20, (p_black_floor / 12.0) ** 2)
         else:
             black_floor_factor = max(0.40, 1.0 - (p_black_floor - 45.0) / 40.0)
 
-        # White bed peak target: optimal 165-235 DN
-        if 165.0 <= p_white_peak <= 235.0:
+        # White bed peak target: optimal 185-252 DN
+        if 185.0 <= p_white_peak <= 252.0:
             white_peak_factor = 1.0
-        elif p_white_peak > 235.0:
-            white_peak_factor = max(0.30, 1.0 - (p_white_peak - 235.0) / 20.0)
+        elif p_white_peak > 252.0:
+            white_peak_factor = max(0.20, 1.0 - (p_white_peak - 252.0) / 3.0)
         else:
-            white_peak_factor = max(0.30, (p_white_peak / 165.0) ** 2)
+            white_peak_factor = max(0.30, (p_white_peak / 185.0) ** 2)
 
         penalties = [
             max(0.30, hl_penalty),
@@ -192,12 +192,12 @@ class QualityEvaluator:
         ]
         clip_penalty = float(np.prod(penalties) ** (1.0 / len(penalties)))
 
-        # Normalized Components:
-        steep_norm = min(1.0, steepness / 70.0)
-        dr_norm = min(1.0, dynamic_range / 140.0)
-        noise_norm = max(0.0, 1.0 - min(1.0, (t_noise - 0.2) / 2.0))
+        # Normalized Components (scaled to real-world CMOS dartboard optics):
+        steep_norm = float(np.clip((steepness - 180.0) / (420.0 - 180.0), 0.0, 1.0))
+        dr_norm = float(np.clip((dynamic_range - 130.0) / (235.0 - 130.0), 0.0, 1.0))
+        noise_norm = max(0.0, 1.0 - min(1.0, (t_noise - 0.5) / 3.0))
 
-        raw_score = (steep_norm * 35.0 + dr_norm * 25.0 + noise_norm * 25.0 + lum_penalty * 15.0) * clip_penalty
+        raw_score = (steep_norm * 45.0 + dr_norm * 30.0 + noise_norm * 25.0) * clip_penalty
         composite_score = round(max(0.0, min(100.0, raw_score)), 1)
 
         return QualityMetrics(
