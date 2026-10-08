@@ -479,3 +479,171 @@ button.compact-btn,
     padding: 12px 20px;
     border: 1px solid alpha(@window_fg_color, 0.16);
 }
+
+/* CAM-librator GTK4 Theme Styles */
+.status-pill-active {
+    background-color: alpha(@accent_color, 0.18);
+    color: @accent_color;
+    border-radius: 9999px;
+    padding: 3px 12px;
+    font-weight: bold;
+}
+
+.status-pill-ok, .score-good {
+    background-color: alpha(#2ec27e, 0.20);
+    color: #2ec27e;
+    border-radius: 9999px;
+    padding: 3px 12px;
+    font-weight: bold;
+    font-size: 0.85em;
+}
+
+.status-pill-warn, .score-fair {
+    background-color: alpha(#e5a50a, 0.22);
+    color: #e5a50a;
+    border-radius: 9999px;
+    padding: 3px 12px;
+    font-weight: bold;
+    font-size: 0.85em;
+}
+
+.status-pill-bad, .score-poor {
+    background-color: alpha(#e01b24, 0.22);
+    color: #e01b24;
+    border-radius: 9999px;
+    padding: 3px 12px;
+    font-weight: bold;
+    font-size: 0.85em;
+}
+
+.pill-sharp {
+    background-color: alpha(#2ec27e, 0.20);
+    color: #2ec27e;
+    border-radius: 9999px;
+    padding: 3px 12px;
+    font-weight: bold;
+    font-size: 0.85em;
+}
+
+.pill-soft {
+    background-color: alpha(#e5a50a, 0.22);
+    color: #e5a50a;
+    border-radius: 9999px;
+    padding: 3px 12px;
+    font-weight: bold;
+    font-size: 0.85em;
+}
+
+.pill-blurry {
+    background-color: alpha(#e01b24, 0.22);
+    color: #e01b24;
+    border-radius: 9999px;
+    padding: 3px 12px;
+    font-weight: bold;
+    font-size: 0.85em;
+}
+
+.focus-gauge-score {
+    font-size: 1.8em;
+    font-weight: 900;
+    letter-spacing: -0.5px;
+}
+
+.focus-gauge-score.score-good {
+    color: #2ec27e;
+    background-color: transparent;
+    padding: 0;
+}
+
+.focus-gauge-score.score-fair {
+    color: #e5a50a;
+    background-color: transparent;
+    padding: 0;
+}
+
+.focus-gauge-score.score-poor {
+    color: #e01b24;
+    background-color: transparent;
+    padding: 0;
+}
+
+.focus-trend-badge {
+    border-radius: 9999px;
+    padding: 2px 10px;
+    font-size: 0.82em;
+    font-weight: 700;
+}
+
+.trend-sharpening {
+    background-color: alpha(#3584e4, 0.22);
+    color: #3584e4;
+}
+
+.trend-infocus {
+    background-color: alpha(#2ec27e, 0.25);
+    color: #2ec27e;
+}
+
+.trend-overshot {
+    background-color: alpha(#e01b24, 0.28);
+    color: #e01b24;
+    font-weight: 800;
+}
+
+.trend-tuning {
+    background-color: alpha(@theme_fg_color, 0.08);
+    color: @theme_fg_color;
+}
+
+.peak-badge {
+    background-color: alpha(@theme_fg_color, 0.07);
+    border-radius: 9999px;
+    padding: 2px 10px;
+    font-size: 0.82em;
+    font-weight: 600;
+    opacity: 0.85;
+}
+
+.cam-column-card {
+    background-color: alpha(@theme_fg_color, 0.035);
+    border: 1px solid alpha(@theme_fg_color, 0.09);
+    border-radius: 14px;
+    padding: 14px;
+}
+
+.cam-column-card.active-calibrating {
+    border: 2px solid @accent_color;
+    background-color: alpha(@accent_color, 0.05);
+}
+
+.wizard-title {
+    font-size: 1.4em;
+    font-weight: 800;
+}
+
+.wizard-subtitle {
+    font-size: 0.95em;
+    opacity: 0.75;
+}
+
+.metric-badge {
+    background-color: alpha(@theme_fg_color, 0.06);
+    border-radius: 8px;
+    padding: 6px 10px;
+}
+
+.metric-val {
+    font-weight: bold;
+    font-size: 1.05em;
+}
+
+.metric-lbl {
+    font-size: 0.8em;
+    opacity: 0.7;
+}
+
+.big-cta-button {
+    font-weight: 700;
+    font-size: 1.1em;
+    padding: 12px 32px;
+}

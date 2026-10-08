@@ -80,6 +80,7 @@ class SuitWindow(Adw.ApplicationWindow):
         self.focus_page = None
         self.camera_tools_page = None
         self.camera_manual_page = None
+        self.cam_calibration_page = None
         self.rotation_page = None
         self.kiosk_page = None
         self.system_page = None
@@ -241,6 +242,31 @@ class SuitWindow(Adw.ApplicationWindow):
             dialog = Adw.AlertDialog(
                 heading="Camera Error",
                 body="Unable to open Camera Manual Mode. Check system log for details."
+            )
+            dialog.add_response("ok", "OK")
+            dialog.present(self)
+
+    def open_cam_calibration_page(self):
+        try:
+            if not self.cam_calibration_page:
+                from modules_gtk.cam_calibration_view import CamCalibrationPage
+                self.cam_calibration_page = CamCalibrationPage(self)
+            self.nav_view.push(self.cam_calibration_page)
+            if hasattr(self.cam_calibration_page, "on_page_opened"):
+                self.cam_calibration_page.on_page_opened()
+        except ImportError as e:
+            logger.exception("Camera Optimizer unavailable due to missing dependency: %s", e)
+            dialog = Adw.AlertDialog(
+                heading="OpenCV Required",
+                body="Camera Optimizer requires OpenCV.\n\nInstall with: sudo dnf install python3-opencv"
+            )
+            dialog.add_response("ok", "OK")
+            dialog.present(self)
+        except Exception as e:
+            logger.exception("Failed to open Camera Optimizer: %s", e)
+            dialog = Adw.AlertDialog(
+                heading="Camera Optimizer Error",
+                body="Unable to open Camera Optimizer. Check system log for details."
             )
             dialog.add_response("ok", "OK")
             dialog.present(self)

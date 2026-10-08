@@ -99,22 +99,23 @@ class CameraToolsView(Adw.NavigationPage):
         self.row_manual.add_suffix(chevron_manual)
         self.pref_group.add(self.row_manual)
 
-        # 3. Future Placeholder: Diagnostics & Alignment
-        self.row_diag = Adw.ActionRow()
-        self.row_diag.set_title(GLib.markup_escape_text("Camera Alignment & Diagnostics"))
-        self.row_diag.set_subtitle(GLib.markup_escape_text("Board triangulation and sensor alignment diagnostics."))
-        icon_diag = Gtk.Image.new_from_icon_name("applications-science-symbolic")
-        icon_diag.set_pixel_size(28)
-        icon_diag.set_margin_end(12)
-        icon_diag.set_valign(Gtk.Align.CENTER)
-        self.row_diag.add_prefix(icon_diag)
-        self.row_diag.set_activatable(False)
-        self.row_diag.set_opacity(0.55)
-        lbl_badge = Gtk.Label(label="Coming Soon")
-        lbl_badge.add_css_class("status-pill-coming-soon")
-        lbl_badge.set_valign(Gtk.Align.CENTER)
-        self.row_diag.add_suffix(lbl_badge)
-        self.pref_group.add(self.row_diag)
+        # 3. Camera Optimizer (CAM-librator)
+        self.row_optimizer = Adw.ActionRow()
+        self.row_optimizer.set_title(GLib.markup_escape_text("Camera Optimizer (CAM-librator)"))
+        self.row_optimizer.set_subtitle(GLib.markup_escape_text("Automated multi-camera exposure, gain, and ISP calibration wizard."))
+        icon_optimizer = Gtk.Image.new_from_icon_name("applications-science-symbolic")
+        icon_optimizer.set_pixel_size(28)
+        icon_optimizer.set_margin_end(12)
+        icon_optimizer.set_valign(Gtk.Align.CENTER)
+        self.row_optimizer.add_prefix(icon_optimizer)
+        self.row_optimizer.set_activatable(True)
+        self.row_optimizer.connect("activated", lambda *args: self._open_optimizer())
+        chevron_optimizer = Gtk.Image.new_from_icon_name("go-next-symbolic")
+        chevron_optimizer.set_opacity(0.5)
+        chevron_optimizer.set_valign(Gtk.Align.CENTER)
+        self.row_optimizer.add_suffix(chevron_optimizer)
+        self.pref_group.add(self.row_optimizer)
+        self.row_diag = self.row_optimizer
 
     def _open_focus(self):
         logger.debug("Opening Focus Calibration tool from Camera Tools hub")
@@ -125,3 +126,8 @@ class CameraToolsView(Adw.NavigationPage):
         logger.debug("Opening Manual Controls tool from Camera Tools hub")
         if hasattr(self.window, "open_camera_manual_page"):
             self.window.open_camera_manual_page()
+
+    def _open_optimizer(self):
+        logger.debug("Opening Camera Optimizer (CAM-librator) from Camera Tools hub")
+        if hasattr(self.window, "open_cam_calibration_page"):
+            self.window.open_cam_calibration_page()

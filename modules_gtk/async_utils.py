@@ -1,30 +1,49 @@
-import threading
-from gi.repository import GLib
+"""GLib safe thread dispatcher and URL launcher for SUIT."""
+
+from __future__ import annotations
+import logging
+import os
+import shutil
 import subprocess
+import threading
+from typing import Any, Callable
+from gi.repository import GLib
+
 from core.logger import get_logger
 
 logger = get_logger("async")
 
-def run_async(func, on_done=None, on_error=None, *args, **kwargs):
-    """Runs a Python function in a background thread and invokes on_done(result) on GTK main loop."""
+
+def run_async(
+    func: Callable[..., Any],
+    on_done: Callable[[Any], None] | None = None,
+    on_error: Callable[[Exception], None] | None = None,
+    *args: Any,
+    on_success: Callable[[Any], None] | None = None,
+    **kwargs: Any,
+) -> threading.Thread:
+    """Run `func` in a background thread and safely dispatch results on the GTK main loop."""
+    callback = on_done or on_success
+
     def worker():
         try:
             res = func(*args, **kwargs)
-            if on_done:
-                GLib.idle_add(on_done, res)
+            if callback:
+                GLib.idle_add(callback, res)
         except Exception as e:
-            logger.exception("Async background worker failed")
+            logger.exception("Async background worker failed: %s", e)
             if on_error:
                 GLib.idle_add(on_error, e)
-    threading.Thread(target=worker, daemon=True).start()
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    return t
 
 
 def open_browser_url(parent_window=None, url: str = "") -> bool:
     """Reliably opens a URL in the browser, explicitly configuring Wayland flags on Linux."""
     if not url:
         return False
-    import shutil
-    import os
 
     # 1. Direct browser binary execution with Wayland ozone flags
     try:
@@ -89,4 +108,3 @@ def open_browser_url(parent_window=None, url: str = "") -> bool:
         logger.debug("xdg-open failed: %s", e)
 
     return False
-

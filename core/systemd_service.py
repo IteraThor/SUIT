@@ -200,3 +200,90 @@ class SystemdService:
     start_service = start_unit
     restart_service = restart_unit
 
+
+class SystemdManager:
+    """Controls system services to release camera locks (CAM-librator interface)."""
+
+    @staticmethod
+    def is_autodarts_active() -> bool:
+        """Check if autodarts.service is currently running."""
+        try:
+            res_user = subprocess.run(
+                ["systemctl", "--user", "is-active", "autodarts.service"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if res_user.stdout.strip() == "active":
+                return True
+            res_sys = subprocess.run(
+                ["systemctl", "is-active", "autodarts.service"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            return res_sys.stdout.strip() == "active"
+        except Exception:
+            return False
+
+    @staticmethod
+    def stop_autodarts() -> bool:
+        """Stop autodarts.service to release V4L2 video locks."""
+        logger.info("Stopping autodarts.service to release V4L2 camera locks...")
+        try:
+            stopped = False
+            res_user = subprocess.run(
+                ["systemctl", "--user", "stop", "autodarts.service"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if res_user.returncode == 0:
+                stopped = True
+
+            cmd = ["sudo", "-n", "systemctl", "stop", "autodarts.service"]
+            res_sys = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if res_sys.returncode == 0:
+                stopped = True
+            else:
+                cmd2 = ["systemctl", "stop", "autodarts.service"]
+                res2 = subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if res2.returncode == 0:
+                    stopped = True
+
+            time.sleep(0.3)
+            logger.info("Successfully stopped autodarts.service.")
+            return stopped
+        except Exception as e:
+            logger.exception("Failed to stop autodarts.service: %s", e)
+            return False
+
+    @staticmethod
+    def start_autodarts() -> bool:
+        """Start autodarts.service after calibration completes."""
+        logger.info("Restarting autodarts.service...")
+        try:
+            res_user = subprocess.run(
+                ["systemctl", "--user", "start", "autodarts.service"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if res_user.returncode == 0:
+                logger.info("Successfully restarted user autodarts.service.")
+                return True
+
+            cmd = ["sudo", "-n", "systemctl", "start", "autodarts.service"]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if res.returncode == 0:
+                logger.info("Successfully restarted autodarts.service.")
+                return True
+            else:
+                cmd2 = ["systemctl", "start", "autodarts.service"]
+                res2 = subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                return res2.returncode == 0
+        except Exception as e:
+            logger.exception("Failed to start autodarts.service: %s", e)
+            return False
+
+
