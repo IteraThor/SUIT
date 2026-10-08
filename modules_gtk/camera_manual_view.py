@@ -272,8 +272,10 @@ class CameraManualView(Adw.NavigationPage):
             return
 
         # Block signals temporarily to prevent circular callbacks
-        if "exposure_auto" in ctrls:
-            val = ctrls["exposure_auto"].get("value", 3)
+        exp_auto_key = "auto_exposure" if "auto_exposure" in ctrls else "exposure_auto"
+        if exp_auto_key in ctrls:
+            self._exp_auto_key = exp_auto_key
+            val = ctrls[exp_auto_key].get("value", 3)
             is_auto = (val != 1)
             self.switch_exp_auto.set_active(is_auto)
             self.scale_exp_val.set_sensitive(not is_auto)
@@ -298,8 +300,10 @@ class CameraManualView(Adw.NavigationPage):
             self.scale_contrast.set_range(data.get("min", 0), data.get("max", 64))
             self.scale_contrast.set_value(data.get("value", 32))
 
-        if "white_balance_temperature_auto" in ctrls:
-            val = ctrls["white_balance_temperature_auto"].get("value", 1)
+        wb_auto_key = "white_balance_automatic" if "white_balance_automatic" in ctrls else "white_balance_temperature_auto"
+        if wb_auto_key in ctrls:
+            self._wb_auto_key = wb_auto_key
+            val = ctrls[wb_auto_key].get("value", 1)
             is_auto = bool(val)
             self.switch_wb_auto.set_active(is_auto)
             self.scale_wb_temp.set_sensitive(not is_auto)
@@ -313,13 +317,15 @@ class CameraManualView(Adw.NavigationPage):
         is_auto = switch.get_active()
         self.scale_exp_val.set_sensitive(not is_auto)
         val = 3 if is_auto else 1
-        self._queue_control_update("exposure_auto", val)
+        key = getattr(self, "_exp_auto_key", "auto_exposure")
+        self._queue_control_update(key, val)
 
     def _on_wb_mode_changed(self, switch, gparam):
         is_auto = switch.get_active()
         self.scale_wb_temp.set_sensitive(not is_auto)
         val = 1 if is_auto else 0
-        self._queue_control_update("white_balance_temperature_auto", val)
+        key = getattr(self, "_wb_auto_key", "white_balance_automatic")
+        self._queue_control_update(key, val)
 
     def _queue_control_update(self, ctrl_name: str, value: int | bool):
         self._pending_updates[ctrl_name] = value
@@ -349,13 +355,15 @@ class CameraManualView(Adw.NavigationPage):
 
     def _on_save_clicked(self, btn):
         dev = self.current_device
+        exp_key = getattr(self, "_exp_auto_key", "auto_exposure")
+        wb_key = getattr(self, "_wb_auto_key", "white_balance_automatic")
         settings = {
-            "exposure_auto": 3 if self.switch_exp_auto.get_active() else 1,
+            exp_key: 3 if self.switch_exp_auto.get_active() else 1,
             "exposure_time_absolute": int(self.scale_exp_val.get_value()),
             "gain": int(self.scale_gain.get_value()),
             "brightness": int(self.scale_bright.get_value()),
             "contrast": int(self.scale_contrast.get_value()),
-            "white_balance_temperature_auto": 1 if self.switch_wb_auto.get_active() else 0,
+            wb_key: 1 if self.switch_wb_auto.get_active() else 0,
             "white_balance_temperature": int(self.scale_wb_temp.get_value()),
         }
         ok = CameraManualService.save_preset(dev, settings)
