@@ -2047,8 +2047,219 @@ class CamCalibrationView(Adw.Bin):
         if self.review_zoom_zone == "center" and factor > 1.05:
             self.review_zoom_zone = "sweet_spot"
             self._update_zone_button_styles()
-        self._update_zoom_button_styles()
+    def _update_zoom_button_styles(self):
+        for z_f, btn in self.rev_zoom_buttons.items():
+            if abs(z_f - self.review_zoom_factor) < 0.1:
+                btn.add_css_class("suggested-action")
+            else:
+                btn.remove_css_class("suggested-action")
+
+    def _on_detail_picture_clicked(self, gesture, n_press, x, y, frame_key: str):
+        widget = gesture.get_widget()
+        ww = widget.get_width()
+        wh = widget.get_height()
+        if ww <= 0 or wh <= 0:
+            return
+        crop_box = self._magnifier_crop_coords.get(frame_key)
+        if not crop_box:
+            return
+        x1, y1, cw, ch = crop_box
+        if cw <= 0 or ch <= 0:
+            return
+        rel_x = max(0.0, min(1.0, x / ww))
+        rel_y = max(0.0, min(1.0, y / wh))
+        target_x = int(x1 + rel_x * cw)
+        target_y = int(y1 + rel_y * ch)
+        self.review_custom_coord = (target_x, target_y)
+        self.review_zoom_zone = "custom"
+        self._update_zone_button_styles()
         self._refresh_review_pictures()
+
+    def _set_review_mode(self, mode: str):
+        self.active_review_mode = mode
+        if mode == "after":
+            self.rev_btn_after.add_css_class("suggested-action")
+            self.rev_btn_before.remove_css_class("suggested-action")
+        else:
+            self.rev_btn_before.add_css_class("suggested-action")
+            self.rev_btn_after.remove_css_class("suggested-action")
+        self._refresh_review_pictures()
+
+    def _make_filter_handler(self, f_val: str):
+        return lambda _: self._set_review_filter(f_val)
+
+    def _set_review_filter(self, f_val: str):
+        self.active_review_filter = f_val
+        for k, b in self.ov_filt_buttons.items():
+            if k == f_val:
+                b.add_css_class("suggested-action")
+            else:
+                b.remove_css_class("suggested-action")
+        for k, b in self.det_filt_buttons.items():
+            if k == f_val:
+                b.add_css_class("suggested-action")
+            else:
+                b.remove_css_class("suggested-action")
+        self._refresh_review_pictures()
+
+    def _refresh_review_pictures(self):
+        """Render and display frames according to active view (overview vs detail)."""
+        # 1. Update Overview Columns
+        for cam in self.cameras:
+            if cam.dev_node not in self.review_cam_widgets:
+                continue
+
+            res = self.results.get(cam.dev_node)
+            base_frame = self.baseline_frames.get(cam.dev_node)
+
+            if self.review_source_mode == "dart":
+                frame = (
+                    self.dart_frames_after.get(cam.dev_node)
+                    if self.active_review_mode == "after"
+                    else self.dart_frames_before.get(cam.dev_node)
+                )
+                if frame is None:
+                    frame = res.optimized_frame if (self.active_review_mode == "after" and res) else (res.initial_frame if res else base_frame)
+                badge_txt = "Dart Snapshot"
+                badge_cls = "status-pill-ok" if self.active_review_mode == "after" else "status-pill-warn"
+                empty_ref = self.baseline_frames.get(cam.dev_node) or (res.initial_frame if res else None)
+            else:
+                if self.active_review_mode == "after" and res:
+                    frame = res.optimized_frame
+                    badge_sign = "+" if res.improvement_percentage >= 0 else ""
+                    badge_txt = f"{badge_sign}{res.improvement_percentage:.0f}% Sharper"
+                    badge_cls = "status-pill-ok" if res.improvement_percentage >= 0 else "status-pill-warn"
+                else:
+                    frame = res.initial_frame if res else base_frame
+                    badge_txt = "Default"
+                    badge_cls = "status-pill-warn"
+                empty_ref = None
+
+            if frame is None:
+                continue
+
+            if self.active_review_filter == "diff" and empty_ref is not None:
+                filtered = apply_difference_filter(empty_ref, frame)
+            elif self.active_review_filter == "edge":
+                filtered = apply_edge_contrast_filter(frame)
+            elif self.active_review_filter == "noise":
+                filtered = apply_noise_inspector_filter(frame)
+            else:
+                filtered = frame
+
+            pix = frame_to_pixbuf(filtered, max_w=480, max_h=300)
+            w = self.review_cam_widgets[cam.dev_node]
+            if pix:
+                w["picture"].set_pixbuf(pix)
+            w["badge"].set_text(badge_txt)
+            w["badge"].set_css_classes([badge_cls])
+
+        # 2. Update Detail Side-by-Side View if active
+        if self.review_selected_cam:
+            dev_node = self.review_selected_cam
+            res = self.results.get(dev_node)
+            base_frame = self.baseline_frames.get(dev_node)
+
+            if self.review_source_mode == "dart":
+                before_frame = self.dart_frames_before.get(dev_node)
+                after_frame = self.dart_frames_after.get(dev_node)
+                empty_ref = self.baseline_frames.get(dev_node) or (res.initial_frame if res else None)
+            else:
+                before_frame = res.initial_frame if (res and res.initial_frame is not None) else base_frame
+                after_frame = res.optimized_frame if (res and res.optimized_frame is not None) else base_frame
+                empty_ref = None
+
+            ref_frame = after_frame if after_frame is not None else before_frame
+            if ref_frame is not None and ref_frame.size > 0:
+                fh, fw = ref_frame.shape[:2]
+
+                # Determine center coordinate
+                if self.review_zoom_zone == "dart_tip":
+                    if dev_node in self.dart_tips:
+                        center = self.dart_tips[dev_node]
+                    elif res and res.roi and res.roi.target_roi:
+                        tx, ty, tw, th = res.roi.target_roi
+                        center = (tx + tw // 2, ty + th // 2)
+                    else:
+                        center = (fw // 2, int(fh * 0.25))
+                elif self.review_zoom_zone == "custom" and self.review_custom_coord:
+                    center = self.review_custom_coord
+                elif self.review_zoom_zone == "bullseye":
+                    if res and res.roi and res.roi.center:
+                        center = res.roi.center
+                    else:
+                        center = (fw // 2, fh // 2)
+                elif self.review_zoom_zone == "treble":
+                    if res and res.roi and res.roi.center:
+                        center = (res.roi.center[0], max(0, res.roi.center[1] - int(res.roi.radius * 0.55)))
+                    else:
+                        center = (fw // 2, int(fh * 0.35))
+                elif self.review_zoom_zone == "center":
+                    center = (fw // 2, fh // 2)
+                else:  # "sweet_spot"
+                    if res and res.roi and res.roi.target_roi:
+                        tx, ty, tw, th = res.roi.target_roi
+                        center = (tx + tw // 2, ty + th // 2)
+                    else:
+                        center = (fw // 2, int(fh * 0.25))
+
+                # Render Before
+                if before_frame is not None:
+                    pix_b, box_b = extract_magnified_pixbuf(
+                        before_frame,
+                        center=center,
+                        zoom_factor=self.review_zoom_factor,
+                        max_w=580,
+                        max_h=380,
+                        filter_mode=self.active_review_filter,
+                        show_reticle=True,
+                        diff_reference_frame=empty_ref,
+                    )
+                    if pix_b:
+                        self.rev_detail_pic_before.set_pixbuf(pix_b)
+                    self._magnifier_crop_coords["before"] = box_b
+
+                # Render After
+                if after_frame is not None:
+                    pix_a, box_a = extract_magnified_pixbuf(
+                        after_frame,
+                        center=center,
+                        zoom_factor=self.review_zoom_factor,
+                        max_w=580,
+                        max_h=380,
+                        filter_mode=self.active_review_filter,
+                        show_reticle=True,
+                        diff_reference_frame=empty_ref,
+                    )
+                    if pix_a:
+                        self.rev_detail_pic_after.set_pixbuf(pix_a)
+                    self._magnifier_crop_coords["after"] = box_a
+
+                # Update Labels and Badges
+                if res:
+                    s_init = res.initial_settings
+                    s_opt = res.optimized_settings
+                    m_init = res.initial_metrics
+                    m_opt = res.optimized_metrics
+                    sign = "+" if res.improvement_percentage >= 0 else ""
+
+                    noise_delta = ((m_init.temporal_noise - m_opt.temporal_noise) / max(0.01, m_init.temporal_noise)) * 100.0 if m_init else 0.0
+                    noise_sign = "-" if noise_delta >= 0 else "+"
+
+                    self.rev_detail_badge_before.set_text("Default")
+                    self.rev_detail_badge_before.set_css_classes(["status-pill-warn"])
+                    self.rev_detail_lbl_before.set_text(
+                        f"Exposure: {s_init.exposure_absolute * 0.1:.1f}ms | Gain: {s_init.gain} | Contrast: {s_init.contrast} | Sharpness: {s_init.sharpness}"
+                    )
+
+                    self.rev_detail_badge_after.set_text(f"{sign}{res.improvement_percentage:.0f}% Sharper")
+                    self.rev_detail_badge_after.set_css_classes(["status-pill-ok" if res.improvement_percentage >= 0 else "status-pill-warn"])
+                    self.rev_detail_lbl_after.set_text(
+                        f"Exposure: {s_opt.exposure_absolute * 0.1:.1f}ms | Gain: {s_opt.gain} | Contrast: {s_opt.contrast} | Sharpness: {s_opt.sharpness} | Noise: {noise_sign}{abs(noise_delta):.0f}%"
+                    )
+                else:
+                    self.rev_detail_lbl_before.set_text("Default values unchanged")
+                    self.rev_detail_lbl_after.set_text("Calibrated values pending")
 
     def _apply_and_finish(self):
         """Save calibrated values to persistence, apply to cameras, and return to dashboard."""
