@@ -1604,7 +1604,7 @@ class CamCalibrationPage(Adw.NavigationPage):
     """Navigation page wrapper for CAM-librator inside SUIT."""
 
     def __init__(self, window):
-        super().__init__(title="Camera Optimizer", tag="cam_calibration")
+        super().__init__(title="Camera Optimizer (Experimental)", tag="cam_calibration")
         self.window = window
         self.view = CamCalibrationView(on_back_callback=self._on_back)
         self.set_child(self.view)

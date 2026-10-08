@@ -99,7 +99,7 @@ class CameraToolsView(Adw.NavigationPage):
         self.row_manual.add_suffix(chevron_manual)
         self.pref_group.add(self.row_manual)
 
-        # 3. Camera Optimizer (CAM-librator)
+        # 3. Camera Optimizer (CAM-librator) [Experimental]
         self.row_optimizer = Adw.ActionRow()
         self.row_optimizer.set_title(GLib.markup_escape_text("Camera Optimizer (CAM-librator)"))
         self.row_optimizer.set_subtitle(GLib.markup_escape_text("Automated multi-camera exposure, gain, and ISP calibration wizard."))
@@ -110,6 +110,12 @@ class CameraToolsView(Adw.NavigationPage):
         self.row_optimizer.add_prefix(icon_optimizer)
         self.row_optimizer.set_activatable(True)
         self.row_optimizer.connect("activated", lambda *args: self._open_optimizer())
+
+        lbl_badge = Gtk.Label(label="Experimental")
+        lbl_badge.add_css_class("status-pill-experimental")
+        lbl_badge.set_valign(Gtk.Align.CENTER)
+        self.row_optimizer.add_suffix(lbl_badge)
+
         chevron_optimizer = Gtk.Image.new_from_icon_name("go-next-symbolic")
         chevron_optimizer.set_opacity(0.5)
         chevron_optimizer.set_valign(Gtk.Align.CENTER)
