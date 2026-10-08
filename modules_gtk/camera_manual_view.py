@@ -169,7 +169,6 @@ class CameraManualView(Adw.NavigationPage):
 
         # Backwards compatibility object for tests
         self.row_boot = Adw.ActionRow(title="Load on boot")
-        self.row_boot.add_suffix(self.switch_boot)
 
         # Spacer
         spacer = Gtk.Box(hexpand=True)
