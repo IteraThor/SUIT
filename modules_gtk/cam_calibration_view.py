@@ -1682,13 +1682,18 @@ class CamCalibrationView(Adw.Bin):
             res = self.results.get(cam.dev_node)
             if res:
                 s_opt = res.optimized_settings
+                m_init = res.initial_metrics
                 m_opt = res.optimized_metrics
                 exp_lbl = Gtk.Label(label=f"Exposure: {s_opt.exposure_absolute * 0.1:.1f}ms", xalign=0.0)
                 exp_lbl.add_css_class("caption")
                 gain_lbl = Gtk.Label(label=f"Gain: {s_opt.gain}", xalign=0.0)
                 gain_lbl.add_css_class("caption")
-                noise_lbl = Gtk.Label(label=f"Noise: -{abs(m_opt.temporal_noise * 100):.1f}%", xalign=0.0)
+
+                noise_delta = ((m_init.temporal_noise - m_opt.temporal_noise) / max(0.01, m_init.temporal_noise)) * 100.0 if m_init else 0.0
+                noise_sign = "-" if noise_delta >= 0 else "+"
+                noise_lbl = Gtk.Label(label=f"Noise: {noise_sign}{abs(noise_delta):.0f}%", xalign=0.0)
                 noise_lbl.add_css_class("caption")
+
                 contrast_sign = "+" if res.improvement_percentage >= 0 else ""
                 contrast_lbl = Gtk.Label(label=f"Wire Contrast: {contrast_sign}{res.improvement_percentage:.0f}%", xalign=0.0)
                 contrast_lbl.add_css_class("caption")
@@ -1946,19 +1951,23 @@ class CamCalibrationView(Adw.Bin):
                 if res:
                     s_init = res.initial_settings
                     s_opt = res.optimized_settings
+                    m_init = res.initial_metrics
                     m_opt = res.optimized_metrics
                     sign = "+" if res.improvement_percentage >= 0 else ""
+
+                    noise_delta = ((m_init.temporal_noise - m_opt.temporal_noise) / max(0.01, m_init.temporal_noise)) * 100.0 if m_init else 0.0
+                    noise_sign = "-" if noise_delta >= 0 else "+"
 
                     self.rev_detail_badge_before.set_text("Default")
                     self.rev_detail_badge_before.set_css_classes(["status-pill-warn"])
                     self.rev_detail_lbl_before.set_text(
-                        f"Exposure: {s_init.exposure_absolute * 0.1:.1f}ms | Gain: {s_init.gain} | Contrast: {s_init.contrast}"
+                        f"Exposure: {s_init.exposure_absolute * 0.1:.1f}ms | Gain: {s_init.gain} | Contrast: {s_init.contrast} | Sharpness: {s_init.sharpness}"
                     )
 
                     self.rev_detail_badge_after.set_text(f"{sign}{res.improvement_percentage:.0f}% Sharper")
                     self.rev_detail_badge_after.set_css_classes(["status-pill-ok" if res.improvement_percentage >= 0 else "status-pill-warn"])
                     self.rev_detail_lbl_after.set_text(
-                        f"Exposure: {s_opt.exposure_absolute * 0.1:.1f}ms | Gain: {s_opt.gain} | Noise: -{abs(m_opt.temporal_noise * 100):.1f}% | Contrast: {s_opt.contrast}"
+                        f"Exposure: {s_opt.exposure_absolute * 0.1:.1f}ms | Gain: {s_opt.gain} | Contrast: {s_opt.contrast} | Sharpness: {s_opt.sharpness} | Noise: {noise_sign}{abs(noise_delta):.0f}%"
                     )
                 else:
                     self.rev_detail_lbl_before.set_text("Default values unchanged")
