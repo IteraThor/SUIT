@@ -78,6 +78,8 @@ class SuitWindow(Adw.ApplicationWindow):
         # Cached Pages
         self.autodarts_page = None
         self.focus_page = None
+        self.camera_tools_page = None
+        self.camera_manual_page = None
         self.rotation_page = None
         self.kiosk_page = None
         self.system_page = None
@@ -211,6 +213,37 @@ class SuitWindow(Adw.ApplicationWindow):
         self.nav_view.push(self.autodarts_page)
         if hasattr(self.autodarts_page, "refresh"):
             self.autodarts_page.refresh()
+
+    def open_camera_tools_page(self):
+        if not self.camera_tools_page:
+            from modules_gtk.camera_tools_view import CameraToolsView
+            self.camera_tools_page = CameraToolsView(self)
+        self.nav_view.push(self.camera_tools_page)
+
+    def open_camera_manual_page(self):
+        try:
+            if not self.camera_manual_page:
+                from modules_gtk.camera_manual_view import CameraManualView
+                self.camera_manual_page = CameraManualView(self)
+            self.nav_view.push(self.camera_manual_page)
+            if hasattr(self.camera_manual_page, "on_page_opened"):
+                self.camera_manual_page.on_page_opened()
+        except ImportError as e:
+            logger.exception("Camera Manual Tool unavailable due to missing dependency: %s", e)
+            dialog = Adw.AlertDialog(
+                heading="OpenCV Required",
+                body="Camera Manual Mode requires OpenCV.\n\nInstall with: sudo dnf install python3-opencv"
+            )
+            dialog.add_response("ok", "OK")
+            dialog.present(self)
+        except Exception as e:
+            logger.exception("Failed to open Camera Manual Tool: %s", e)
+            dialog = Adw.AlertDialog(
+                heading="Camera Error",
+                body="Unable to open Camera Manual Mode. Check system log for details."
+            )
+            dialog.add_response("ok", "OK")
+            dialog.present(self)
 
     def open_focus_page(self):
         try:

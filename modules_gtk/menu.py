@@ -99,7 +99,7 @@ class MainMenuView(Adw.NavigationPage):
             ("btn_system", "preferences-system-symbolic", "System Utilities & Tweaks", "Performance, power, and touch tweaks.", self._open_system, True),
             ("btn_autodarts", "darts-symbolic", "Autodarts Setup", "Board pairing, service, and camera telemetry.", self._open_autodarts, True),
             ("btn_autoglow", "display-brightness-symbolic", "AutoGlow 2 Manager", "WLED dartboard automation and lighting effects.", None, False),
-            ("btn_focus", "camera-photo-symbolic", "Camera Focus Tool", "Adjust lens sharpness and alignment.", self._open_focus, True),
+            ("btn_camera_tools", "camera-photo-symbolic", "Camera Tools", "Focus calibration, manual controls, and diagnostics.", self._open_camera_tools, True),
             ("btn_touch", "screen-touch-symbolic", "Screen & Touch Manager", "Display rotation and touch calibration.", self._open_rotation, True),
             ("btn_kiosk", "view-fullscreen-symbolic", "Kiosk Mode", "Fullscreen browser autostart and controls.", self._open_kiosk, True),
         ]
@@ -168,6 +168,10 @@ class MainMenuView(Adw.NavigationPage):
     def _open_autodarts(self):
         logger.debug("Navigating to Autodarts view")
         self.window.open_autodarts_page()
+
+    def _open_camera_tools(self):
+        logger.debug("Navigating to Camera Tools view")
+        self.window.open_camera_tools_page()
 
     def _open_focus(self):
         logger.debug("Navigating to Camera Focus view")
