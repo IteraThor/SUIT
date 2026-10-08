@@ -150,6 +150,16 @@ button.compact-btn,
     letter-spacing: 0.3px;
 }
 
+.status-pill-experimental {
+    background-color: alpha(#e5a50a, 0.16);
+    color: #f6d32d;
+    border: 1px solid alpha(#e5a50a, 0.35);
+    border-radius: 20px;
+    padding: 4px 12px;
+    font-weight: 700;
+    font-size: 12px;
+}
+
 
 /* Detection Engine Status Row Themes */
 .detection-running image.status-icon {
