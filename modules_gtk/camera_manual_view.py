@@ -109,10 +109,24 @@ class CameraManualView(Adw.NavigationPage):
         spacer = Gtk.Box(hexpand=True)
         top_bar.append(spacer)
 
-        # Status badge
+        # Load on boot toggle in the top right
+        boot_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        boot_box.set_valign(Gtk.Align.CENTER)
+        lbl_boot = Gtk.Label(label="Load on boot")
+        lbl_boot.add_css_class("dim-label")
+        boot_box.append(lbl_boot)
+
+        self.switch_boot = Gtk.Switch()
+        self.switch_boot.set_valign(Gtk.Align.CENTER)
+        self.switch_boot.connect("notify::active", self._on_boot_toggled)
+        boot_box.append(self.switch_boot)
+        top_bar.append(boot_box)
+
+        # Status label reference
         self.lbl_status = Gtk.Label(label="Live sensor adjustment")
-        self.lbl_status.add_css_class("dim-label")
-        top_bar.append(self.lbl_status)
+
+        # Backwards compatibility object for tests
+        self.row_boot = Adw.ActionRow(title="Load on boot")
 
         self.main_box.append(top_bar)
         self._update_tab_buttons(0)
@@ -130,7 +144,7 @@ class CameraManualView(Adw.NavigationPage):
         split_box.set_vexpand(True)
         self.main_box.append(split_box)
 
-        # --- LEFT PANE: Preview + Utility Actions ---
+        # --- LEFT PANE: Preview + Action ---
         left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         left_box.set_hexpand(True)
         left_box.set_vexpand(True)
@@ -150,37 +164,11 @@ class CameraManualView(Adw.NavigationPage):
         preview_frame.set_child(self.preview_drawing_area)
         left_box.append(preview_frame)
 
-        # Utility bar under preview
-        util_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        util_bar.add_css_class("tile-card-compact")
-
-        # Load on boot toggle
-        boot_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        boot_box.set_valign(Gtk.Align.CENTER)
-        lbl_boot = Gtk.Label(label="Load on boot")
-        lbl_boot.add_css_class("dim-label")
-        boot_box.append(lbl_boot)
-
-        self.switch_boot = Gtk.Switch()
-        self.switch_boot.set_valign(Gtk.Align.CENTER)
-        self.switch_boot.connect("notify::active", self._on_boot_toggled)
-        boot_box.append(self.switch_boot)
-        util_bar.append(boot_box)
-
-        # Backwards compatibility object for tests
-        self.row_boot = Adw.ActionRow(title="Load on boot")
-
-        # Spacer
-        spacer = Gtk.Box(hexpand=True)
-        util_bar.append(spacer)
-
-        # Reset Defaults button
+        # Reset Defaults button directly under preview
         self.btn_reset = Gtk.Button(label="Reset Defaults")
         self.btn_reset.add_css_class("secondary-btn")
         self.btn_reset.connect("clicked", self._on_reset_clicked)
-        util_bar.append(self.btn_reset)
-
-        left_box.append(util_bar)
+        left_box.append(self.btn_reset)
 
         # --- RIGHT PANE: Compact Sensor Controls ---
         ctrl_pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
