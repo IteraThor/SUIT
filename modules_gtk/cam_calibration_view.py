@@ -76,6 +76,67 @@ def frame_to_pixbuf(
     )
 
 
+def extract_magnified_pixbuf(
+    frame: np.ndarray,
+    center: Optional[Tuple[int, int]] = None,
+    zoom_factor: float = 2.5,
+    max_w: int = 560,
+    max_h: int = 380,
+    filter_mode: str = "normal",
+    show_reticle: bool = True,
+) -> Tuple[Optional[GdkPixbuf.Pixbuf], Tuple[int, int, int, int]]:
+    """Extract a magnified ROI crop, apply optional filter, and convert to Pixbuf.
+    
+    Returns:
+        (pixbuf, (crop_x1, crop_y1, crop_w, crop_h)) in original frame coordinates.
+    """
+    if frame is None or frame.size == 0:
+        return None, (0, 0, 0, 0)
+    fh, fw = frame.shape[:2]
+
+    if zoom_factor > 1.05 and center is not None:
+        crop_w = max(20, int(fw / zoom_factor))
+        crop_h = max(20, int(fh / zoom_factor))
+        cx, cy = center
+        x1 = max(0, min(fw - crop_w, int(cx - crop_w / 2)))
+        y1 = max(0, min(fh - crop_h, int(cy - crop_h / 2)))
+        x2 = min(fw, x1 + crop_w)
+        y2 = min(fh, y1 + crop_h)
+        cropped = frame[y1:y2, x1:x2].copy()
+    else:
+        x1, y1, crop_w, crop_h = 0, 0, fw, fh
+        cropped = frame.copy()
+
+    if filter_mode == "edge":
+        filtered = apply_edge_contrast_filter(cropped)
+    elif filter_mode == "noise":
+        filtered = apply_noise_inspector_filter(cropped)
+    else:
+        filtered = cropped
+
+    ch, cw = filtered.shape[:2]
+    scale = min(max_w / cw, max_h / ch)
+    nw, nh = max(1, int(cw * scale)), max(1, int(ch * scale))
+    resized = cv2.resize(filtered, (nw, nh), interpolation=cv2.INTER_LINEAR if zoom_factor > 1.05 else cv2.INTER_AREA)
+
+    if show_reticle and zoom_factor > 1.05:
+        rcx, rcy = nw // 2, nh // 2
+        cv2.drawMarker(resized, (rcx, rcy), (18, 20, 24), markerType=cv2.MARKER_CROSS, markerSize=20, thickness=3, line_type=cv2.LINE_AA)
+        cv2.drawMarker(resized, (rcx, rcy), (0, 255, 200), markerType=cv2.MARKER_CROSS, markerSize=18, thickness=1, line_type=cv2.LINE_AA)
+
+    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+    pix = GdkPixbuf.Pixbuf.new_from_data(
+        rgb.tobytes(),
+        GdkPixbuf.Colorspace.RGB,
+        False,
+        8,
+        nw,
+        nh,
+        nw * 3,
+    )
+    return pix, (x1, y1, crop_w, crop_h)
+
+
 def apply_edge_contrast_filter(frame: np.ndarray) -> np.ndarray:
     """Generate colorized Sobel edge gradient map highlighting wire steepness."""
     if frame is None or frame.size == 0:
@@ -273,8 +334,15 @@ class CamCalibrationView(Adw.Bin):
         self.focus_zoom_all: bool = False
         self.focus_per_cam_zoom: Dict[str, bool] = {}
         self.accum_crops: Dict[str, np.ndarray] = {}
-        self.active_review_mode: str = "after"  # "before" or "after"
-        self.active_review_filter: str = "normal"  # "normal", "edge", "contrast"
+
+        # Review & Comparison state
+        self.review_selected_cam: Optional[str] = None  # None for Overview, or dev_node for Magnified Single Cam
+        self.review_zoom_zone: str = "sweet_spot"  # "sweet_spot", "bullseye", "treble", "center", "custom"
+        self.review_custom_coord: Optional[Tuple[int, int]] = None
+        self.review_zoom_factor: float = 2.5
+        self.active_review_mode: str = "after"  # "before" or "after" for overview
+        self.active_review_filter: str = "normal"  # "normal", "edge", "noise"
+        self._magnifier_crop_coords: Dict[str, Tuple[int, int, int, int]] = {}
 
         # Background worker state
         self.focus_running: bool = False
@@ -1330,51 +1398,211 @@ class CamCalibrationView(Adw.Bin):
         title = Gtk.Label(label="Step 5 of 5: Review & Comparison", xalign=0.0)
         title.add_css_class("wizard-title")
         top_txt.append(title)
-        sub = Gtk.Label(
-            label="Direct A/B comparison across all cameras with filter inspection.",
+        self.review_sub_lbl = Gtk.Label(
+            label="Direct A/B comparison and magnified inspection.",
             xalign=0.0,
         )
-        sub.add_css_class("wizard-subtitle")
-        top_txt.append(sub)
+        self.review_sub_lbl.add_css_class("wizard-subtitle")
+        top_txt.append(self.review_sub_lbl)
         top_bar.append(top_txt)
 
-        # Controls Container (A/B Toggle + Filters)
-        ctrls_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        ctrls_box.set_hexpand(True)
-        ctrls_box.set_halign(Gtk.Align.END)
-        ctrls_box.set_valign(Gtk.Align.CENTER)
+        # Top Right: Camera Selector Buttons (Overview vs Cam 1 vs Cam 2 vs Cam 3)
+        self.rev_cam_selector_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.rev_cam_selector_box.set_hexpand(True)
+        self.rev_cam_selector_box.set_halign(Gtk.Align.END)
+        self.rev_cam_selector_box.set_valign(Gtk.Align.CENTER)
+        top_bar.append(self.rev_cam_selector_box)
+        box.append(top_bar)
 
-        # A/B Toggle Buttons
-        ab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        # View Stack: Switch between "overview" (3 columns) and "detail" (side-by-side magnified)
+        self.review_view_stack = Gtk.Stack()
+        self.review_view_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.review_view_stack.set_vexpand(True)
+
+        # -------------------------------------------------------------
+        # 1. OVERVIEW VIEW (3 Columns)
+        # -------------------------------------------------------------
+        self.review_overview_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        
+        # Overview Top Controls (A/B Toggle + Filters)
+        ov_ctrls_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        ov_ctrls_box.set_halign(Gtk.Align.END)
+        
+        ov_ab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         self.rev_btn_after = Gtk.Button(label="After (Calibrated)")
         self.rev_btn_after.add_css_class("pill")
         self.rev_btn_after.connect("clicked", lambda _: self._set_review_mode("after"))
-        ab_box.append(self.rev_btn_after)
+        ov_ab_box.append(self.rev_btn_after)
 
         self.rev_btn_before = Gtk.Button(label="Before (Default)")
         self.rev_btn_before.add_css_class("pill")
         self.rev_btn_before.connect("clicked", lambda _: self._set_review_mode("before"))
-        ab_box.append(self.rev_btn_before)
-        ctrls_box.append(ab_box)
+        ov_ab_box.append(self.rev_btn_before)
+        ov_ctrls_box.append(ov_ab_box)
 
-        # Filter Buttons
-        filt_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        self.filt_buttons = {}
+        # Filter Buttons in Overview
+        ov_filt_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.ov_filt_buttons = {}
         for f_val, f_lbl in [("normal", "Normal"), ("edge", "Edges & Wire"), ("noise", "Noise Analysis")]:
             btn = Gtk.Button(label=f_lbl)
             btn.add_css_class("pill")
             btn.connect("clicked", self._make_filter_handler(f_val))
-            filt_box.append(btn)
-            self.filt_buttons[f_val] = btn
-        ctrls_box.append(filt_box)
+            ov_filt_box.append(btn)
+            self.ov_filt_buttons[f_val] = btn
+        ov_ctrls_box.append(ov_filt_box)
+        self.review_overview_box.append(ov_ctrls_box)
 
-        top_bar.append(ctrls_box)
-        box.append(top_bar)
-
-        # 3 Columns Side-by-Side
+        # 3 Columns Container
         self.review_columns_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14, homogeneous=True)
         self.review_columns_box.set_vexpand(True)
-        box.append(self.review_columns_box)
+        self.review_overview_box.append(self.review_columns_box)
+        self.review_view_stack.add_named(self.review_overview_box, "overview")
+
+        # -------------------------------------------------------------
+        # 2. DETAIL VIEW (Side-by-Side Magnifier Before vs After)
+        # -------------------------------------------------------------
+        self.review_detail_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.review_detail_box.set_vexpand(True)
+
+        # Detail Toolbar (Zones, Zoom Level, Filters)
+        detail_tb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        detail_tb.set_valign(Gtk.Align.CENTER)
+
+        # Target Zone Group
+        zone_lbl = Gtk.Label(label="Target:")
+        zone_lbl.add_css_class("caption")
+        detail_tb.append(zone_lbl)
+
+        zone_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.rev_zone_buttons = {}
+        for z_val, z_lbl in [
+            ("sweet_spot", "Sweet Spot"),
+            ("bullseye", "Bullseye"),
+            ("treble", "Treble Ring"),
+            ("center", "Full Board"),
+        ]:
+            z_btn = Gtk.Button(label=z_lbl)
+            z_btn.add_css_class("pill")
+            z_btn.connect("clicked", self._make_zone_handler(z_val))
+            zone_box.append(z_btn)
+            self.rev_zone_buttons[z_val] = z_btn
+        detail_tb.append(zone_box)
+
+        sep1 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        detail_tb.append(sep1)
+
+        # Zoom Factor Group
+        zoom_lbl = Gtk.Label(label="Zoom:")
+        zoom_lbl.add_css_class("caption")
+        detail_tb.append(zoom_lbl)
+
+        zoom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.rev_zoom_buttons = {}
+        for zoom_f, z_lbl in [(1.5, "1.5x"), (2.5, "2.5x"), (4.0, "4.0x")]:
+            zf_btn = Gtk.Button(label=z_lbl)
+            zf_btn.add_css_class("pill")
+            zf_btn.connect("clicked", self._make_zoom_factor_handler(zoom_f))
+            zoom_box.append(zf_btn)
+            self.rev_zoom_buttons[zoom_f] = zf_btn
+        detail_tb.append(zoom_box)
+
+        sep2 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        detail_tb.append(sep2)
+
+        # Filter Group in Detail Mode
+        det_filt_lbl = Gtk.Label(label="Filter:")
+        det_filt_lbl.add_css_class("caption")
+        detail_tb.append(det_filt_lbl)
+
+        det_filt_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.det_filt_buttons = {}
+        for f_val, f_lbl in [("normal", "Normal"), ("edge", "Edges & Wire"), ("noise", "Noise Analysis")]:
+            btn = Gtk.Button(label=f_lbl)
+            btn.add_css_class("pill")
+            btn.connect("clicked", self._make_filter_handler(f_val))
+            det_filt_box.append(btn)
+            self.det_filt_buttons[f_val] = btn
+        detail_tb.append(det_filt_box)
+
+        self.review_detail_box.append(detail_tb)
+
+        # Side-by-Side Dual Column Box
+        side_by_side_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16, homogeneous=True)
+        side_by_side_box.set_vexpand(True)
+
+        # Left Column: Before (Default) Card
+        self.rev_detail_card_before = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.rev_detail_card_before.add_css_class("cam-column-card")
+
+        hdr_before = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        title_before = Gtk.Label(label="Before (Default)", xalign=0.0)
+        title_before.add_css_class("heading")
+        hdr_before.append(title_before)
+
+        self.rev_detail_badge_before = Gtk.Label(label="Default")
+        self.rev_detail_badge_before.set_css_classes(["status-pill-warn"])
+        self.rev_detail_badge_before.set_hexpand(True)
+        self.rev_detail_badge_before.set_xalign(1.0)
+        hdr_before.append(self.rev_detail_badge_before)
+        self.rev_detail_card_before.append(hdr_before)
+
+        self.rev_detail_pic_before = Gtk.Picture()
+        self.rev_detail_pic_before.set_can_shrink(True)
+        self.rev_detail_pic_before.set_size_request(440, 290)
+        self.rev_detail_pic_before.set_hexpand(True)
+        self.rev_detail_pic_before.set_vexpand(True)
+        click_before = Gtk.GestureClick()
+        click_before.connect("pressed", lambda g, n, x, y: self._on_detail_picture_clicked(g, n, x, y, "before"))
+        self.rev_detail_pic_before.add_controller(click_before)
+        self.rev_detail_card_before.append(self.rev_detail_pic_before)
+
+        self.rev_detail_lbl_before = Gtk.Label(label="Default values", xalign=0.0)
+        self.rev_detail_lbl_before.add_css_class("caption")
+        self.rev_detail_card_before.append(self.rev_detail_lbl_before)
+        side_by_side_box.append(self.rev_detail_card_before)
+
+        # Right Column: After (Calibrated) Card
+        self.rev_detail_card_after = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.rev_detail_card_after.add_css_class("cam-column-card")
+
+        hdr_after = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.rev_detail_title_after = Gtk.Label(label="After (Calibrated)", xalign=0.0)
+        self.rev_detail_title_after.add_css_class("heading")
+        hdr_after.append(self.rev_detail_title_after)
+
+        self.rev_detail_badge_after = Gtk.Label(label="Calibrated")
+        self.rev_detail_badge_after.set_css_classes(["status-pill-ok"])
+        self.rev_detail_badge_after.set_hexpand(True)
+        self.rev_detail_badge_after.set_xalign(1.0)
+        hdr_after.append(self.rev_detail_badge_after)
+        self.rev_detail_card_after.append(hdr_after)
+
+        self.rev_detail_pic_after = Gtk.Picture()
+        self.rev_detail_pic_after.set_can_shrink(True)
+        self.rev_detail_pic_after.set_size_request(440, 290)
+        self.rev_detail_pic_after.set_hexpand(True)
+        self.rev_detail_pic_after.set_vexpand(True)
+        click_after = Gtk.GestureClick()
+        click_after.connect("pressed", lambda g, n, x, y: self._on_detail_picture_clicked(g, n, x, y, "after"))
+        self.rev_detail_pic_after.add_controller(click_after)
+        self.rev_detail_card_after.append(self.rev_detail_pic_after)
+
+        self.rev_detail_lbl_after = Gtk.Label(label="Calibrated parameters", xalign=0.0)
+        self.rev_detail_lbl_after.add_css_class("caption")
+        self.rev_detail_lbl_after.add_css_class("accent")
+        self.rev_detail_card_after.append(self.rev_detail_lbl_after)
+        side_by_side_box.append(self.rev_detail_card_after)
+
+        self.review_detail_box.append(side_by_side_box)
+
+        # Helper note
+        hint_lbl = Gtk.Label(label="Click anywhere on the image to pan the magnifying glass.", xalign=0.5)
+        hint_lbl.add_css_class("caption")
+        hint_lbl.set_opacity(0.7)
+        self.review_detail_box.append(hint_lbl)
+
+        self.review_view_stack.add_named(self.review_detail_box, "detail")
+        box.append(self.review_view_stack)
 
         # Bottom Bar: Discard vs Apply
         bottom_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
@@ -1398,11 +1626,30 @@ class CamCalibrationView(Adw.Bin):
         return box
 
     def _setup_review_columns(self):
+        # 1. Rebuild Top Camera Selector
+        while child := self.rev_cam_selector_box.get_first_child():
+            self.rev_cam_selector_box.remove(child)
+
+        self.rev_cam_nav_buttons = {}
+
+        btn_all = Gtk.Button(label="All Cameras")
+        btn_all.add_css_class("pill")
+        btn_all.connect("clicked", lambda _: self._select_review_camera(None))
+        self.rev_cam_selector_box.append(btn_all)
+        self.rev_cam_nav_buttons[None] = btn_all
+
+        for cam in self.cameras:
+            c_btn = Gtk.Button(label=f"Camera {cam.index}")
+            c_btn.add_css_class("pill")
+            c_btn.connect("clicked", self._make_cam_select_handler(cam.dev_node))
+            self.rev_cam_selector_box.append(c_btn)
+            self.rev_cam_nav_buttons[cam.dev_node] = c_btn
+
+        # 2. Rebuild 3 Overview Column Cards
         while child := self.review_columns_box.get_first_child():
             self.review_columns_box.remove(child)
 
         self.review_cam_widgets = {}
-        self._review_frame_cache = {}
 
         for cam in self.cameras:
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1422,7 +1669,7 @@ class CamCalibrationView(Adw.Bin):
 
             pic = Gtk.Picture()
             pic.set_can_shrink(True)
-            pic.set_size_request(400, 260)
+            pic.set_size_request(380, 240)
             pic.set_hexpand(True)
             pic.set_vexpand(True)
             card.append(pic)
@@ -1458,14 +1705,113 @@ class CamCalibrationView(Adw.Bin):
 
             card.append(metric_grid)
 
+            inspect_btn = Gtk.Button(label="Inspect Magnified")
+            inspect_btn.add_css_class("pill")
+            inspect_btn.add_css_class("suggested-action")
+            inspect_btn.connect("clicked", self._make_cam_select_handler(cam.dev_node))
+            card.append(inspect_btn)
+
             self.review_cam_widgets[cam.dev_node] = {
                 "badge": badge,
                 "picture": pic,
             }
             self.review_columns_box.append(card)
 
-        self._set_review_mode("after")
-        self._set_review_filter("normal")
+        # Default to overview or previously selected
+        if self.review_selected_cam is None:
+            self._select_review_camera(None)
+        else:
+            self._select_review_camera(self.review_selected_cam)
+
+        self._update_zone_button_styles()
+        self._update_zoom_button_styles()
+        self._set_review_filter(self.active_review_filter)
+
+    def _make_cam_select_handler(self, dev_node: Optional[str]):
+        return lambda _: self._select_review_camera(dev_node)
+
+    def _select_review_camera(self, dev_node: Optional[str]):
+        self.review_selected_cam = dev_node
+        self.review_custom_coord = None
+        self.review_zoom_zone = "sweet_spot"
+
+        for node, btn in self.rev_cam_nav_buttons.items():
+            if node == dev_node:
+                btn.add_css_class("suggested-action")
+            else:
+                btn.remove_css_class("suggested-action")
+
+        if dev_node is None:
+            self.review_view_stack.set_visible_child_name("overview")
+            self.review_sub_lbl.set_text("Direct A/B comparison across all cameras.")
+        else:
+            self.review_view_stack.set_visible_child_name("detail")
+            cam = next((c for c in self.cameras if c.dev_node == dev_node), None)
+            cam_title = f"Camera {cam.index}" if cam else dev_node
+            self.review_sub_lbl.set_text(f"Magnified Side-by-Side Inspection ({cam_title}).")
+
+        self._update_zone_button_styles()
+        self._refresh_review_pictures()
+
+    def _make_zone_handler(self, zone: str):
+        return lambda _: self._set_zoom_zone(zone)
+
+    def _set_zoom_zone(self, zone: str):
+        self.review_zoom_zone = zone
+        self.review_custom_coord = None
+        if zone == "center":
+            self.review_zoom_factor = 1.0
+        elif self.review_zoom_factor < 1.1:
+            self.review_zoom_factor = 2.5
+        self._update_zone_button_styles()
+        self._update_zoom_button_styles()
+        self._refresh_review_pictures()
+
+    def _update_zone_button_styles(self):
+        for z_val, btn in self.rev_zone_buttons.items():
+            if z_val == self.review_zoom_zone:
+                btn.add_css_class("suggested-action")
+            else:
+                btn.remove_css_class("suggested-action")
+
+    def _make_zoom_factor_handler(self, factor: float):
+        return lambda _: self._set_zoom_factor(factor)
+
+    def _set_zoom_factor(self, factor: float):
+        self.review_zoom_factor = factor
+        if self.review_zoom_zone == "center" and factor > 1.05:
+            self.review_zoom_zone = "sweet_spot"
+            self._update_zone_button_styles()
+        self._update_zoom_button_styles()
+        self._refresh_review_pictures()
+
+    def _update_zoom_button_styles(self):
+        for z_f, btn in self.rev_zoom_buttons.items():
+            if abs(z_f - self.review_zoom_factor) < 0.1:
+                btn.add_css_class("suggested-action")
+            else:
+                btn.remove_css_class("suggested-action")
+
+    def _on_detail_picture_clicked(self, gesture, n_press, x, y, frame_key: str):
+        widget = gesture.get_widget()
+        ww = widget.get_width()
+        wh = widget.get_height()
+        if ww <= 0 or wh <= 0:
+            return
+        crop_box = self._magnifier_crop_coords.get(frame_key)
+        if not crop_box:
+            return
+        x1, y1, cw, ch = crop_box
+        if cw <= 0 or ch <= 0:
+            return
+        rel_x = max(0.0, min(1.0, x / ww))
+        rel_y = max(0.0, min(1.0, y / wh))
+        target_x = int(x1 + rel_x * cw)
+        target_y = int(y1 + rel_y * ch)
+        self.review_custom_coord = (target_x, target_y)
+        self.review_zoom_zone = "custom"
+        self._update_zone_button_styles()
+        self._refresh_review_pictures()
 
     def _set_review_mode(self, mode: str):
         self.active_review_mode = mode
@@ -1482,7 +1828,12 @@ class CamCalibrationView(Adw.Bin):
 
     def _set_review_filter(self, f_val: str):
         self.active_review_filter = f_val
-        for k, b in self.filt_buttons.items():
+        for k, b in self.ov_filt_buttons.items():
+            if k == f_val:
+                b.add_css_class("suggested-action")
+            else:
+                b.remove_css_class("suggested-action")
+        for k, b in self.det_filt_buttons.items():
             if k == f_val:
                 b.add_css_class("suggested-action")
             else:
@@ -1490,7 +1841,8 @@ class CamCalibrationView(Adw.Bin):
         self._refresh_review_pictures()
 
     def _refresh_review_pictures(self):
-        """Render and display frames according to active mode (after/before) and active filter."""
+        """Render and display frames according to active view (overview vs detail)."""
+        # 1. Update Overview Columns
         for cam in self.cameras:
             if cam.dev_node not in self.review_cam_widgets:
                 continue
@@ -1511,7 +1863,6 @@ class CamCalibrationView(Adw.Bin):
             if frame is None:
                 continue
 
-            # Apply filter
             if self.active_review_filter == "edge":
                 filtered = apply_edge_contrast_filter(frame)
             elif self.active_review_filter == "noise":
@@ -1525,6 +1876,93 @@ class CamCalibrationView(Adw.Bin):
                 w["picture"].set_pixbuf(pix)
             w["badge"].set_text(badge_txt)
             w["badge"].set_css_classes([badge_cls])
+
+        # 2. Update Detail Side-by-Side View if active
+        if self.review_selected_cam:
+            dev_node = self.review_selected_cam
+            res = self.results.get(dev_node)
+            base_frame = self.baseline_frames.get(dev_node)
+
+            before_frame = res.initial_frame if (res and res.initial_frame is not None) else base_frame
+            after_frame = res.optimized_frame if (res and res.optimized_frame is not None) else base_frame
+
+            ref_frame = after_frame if after_frame is not None else before_frame
+            if ref_frame is not None and ref_frame.size > 0:
+                fh, fw = ref_frame.shape[:2]
+
+                # Determine center coordinate
+                if self.review_zoom_zone == "custom" and self.review_custom_coord:
+                    center = self.review_custom_coord
+                elif self.review_zoom_zone == "bullseye":
+                    if res and res.roi and res.roi.center:
+                        center = res.roi.center
+                    else:
+                        center = (fw // 2, fh // 2)
+                elif self.review_zoom_zone == "treble":
+                    if res and res.roi and res.roi.center:
+                        center = (res.roi.center[0], max(0, res.roi.center[1] - int(res.roi.radius * 0.55)))
+                    else:
+                        center = (fw // 2, int(fh * 0.35))
+                elif self.review_zoom_zone == "center":
+                    center = (fw // 2, fh // 2)
+                else:  # "sweet_spot"
+                    if res and res.roi and res.roi.target_roi:
+                        tx, ty, tw, th = res.roi.target_roi
+                        center = (tx + tw // 2, ty + th // 2)
+                    else:
+                        center = (fw // 2, int(fh * 0.25))
+
+                # Render Before
+                if before_frame is not None:
+                    pix_b, box_b = extract_magnified_pixbuf(
+                        before_frame,
+                        center=center,
+                        zoom_factor=self.review_zoom_factor,
+                        max_w=580,
+                        max_h=380,
+                        filter_mode=self.active_review_filter,
+                        show_reticle=True,
+                    )
+                    if pix_b:
+                        self.rev_detail_pic_before.set_pixbuf(pix_b)
+                    self._magnifier_crop_coords["before"] = box_b
+
+                # Render After
+                if after_frame is not None:
+                    pix_a, box_a = extract_magnified_pixbuf(
+                        after_frame,
+                        center=center,
+                        zoom_factor=self.review_zoom_factor,
+                        max_w=580,
+                        max_h=380,
+                        filter_mode=self.active_review_filter,
+                        show_reticle=True,
+                    )
+                    if pix_a:
+                        self.rev_detail_pic_after.set_pixbuf(pix_a)
+                    self._magnifier_crop_coords["after"] = box_a
+
+                # Update Labels and Badges
+                if res:
+                    s_init = res.initial_settings
+                    s_opt = res.optimized_settings
+                    m_opt = res.optimized_metrics
+                    sign = "+" if res.improvement_percentage >= 0 else ""
+
+                    self.rev_detail_badge_before.set_text("Default")
+                    self.rev_detail_badge_before.set_css_classes(["status-pill-warn"])
+                    self.rev_detail_lbl_before.set_text(
+                        f"Exposure: {s_init.exposure_absolute * 0.1:.1f}ms | Gain: {s_init.gain} | Contrast: {s_init.contrast}"
+                    )
+
+                    self.rev_detail_badge_after.set_text(f"{sign}{res.improvement_percentage:.0f}% Sharper")
+                    self.rev_detail_badge_after.set_css_classes(["status-pill-ok" if res.improvement_percentage >= 0 else "status-pill-warn"])
+                    self.rev_detail_lbl_after.set_text(
+                        f"Exposure: {s_opt.exposure_absolute * 0.1:.1f}ms | Gain: {s_opt.gain} | Noise: -{abs(m_opt.temporal_noise * 100):.1f}% | Contrast: {s_opt.contrast}"
+                    )
+                else:
+                    self.rev_detail_lbl_before.set_text("Default values unchanged")
+                    self.rev_detail_lbl_after.set_text("Calibrated values pending")
 
     def _apply_and_finish(self):
         """Save calibrated values to persistence, apply to cameras, and return to dashboard."""
