@@ -50,6 +50,7 @@ class CameraFocusService:
         self.last_score: float = 0.0
         self.last_bullseye: tuple[int, int] | None = None
         self.last_target_roi: tuple[int, int, int, int] | None = None
+        self.locked_target_roi: tuple[int, int, int, int] | None = None
         self.smoothed_focal_y: float | None = None
         self._accum_zoom_crop: np.ndarray | None = None
         self._cam_lock = threading.Lock()
@@ -59,8 +60,8 @@ class CameraFocusService:
         with self._cam_lock:
             self._stop_camera_unlocked()
             self.reset_peak()
+            self.unlock_target()
             self.last_bullseye = None
-            self.last_target_roi = None
 
             import os, time
             from core.autodarts_service import parse_cam_device
@@ -145,6 +146,12 @@ class CameraFocusService:
         self.peak_score = 0.0
         self.last_score = 0.0
         self.smoothed_focal_y = None
+        self._accum_zoom_crop = None
+
+    def unlock_target(self) -> None:
+        """Reset locked target ROI so furthest double can be re-detected."""
+        self.locked_target_roi = None
+        self.last_target_roi = None
         self._accum_zoom_crop = None
 
     @staticmethod
@@ -341,7 +348,14 @@ class CameraFocusService:
     def get_target_roi(
         self, image: np.ndarray, bullseye: tuple[int, int], existing_calib: dict | None = None
     ) -> tuple[int, int, int, int]:
-        """Calculate bounding box centered directly on the furthest double field."""
+        """Calculate bounding box centered directly on the furthest double field.
+
+        Once a target is identified via calibration or CV contour detection,
+        the ROI is locked to remain static so the digital zoom magnifier does not wiggle.
+        """
+        if self.locked_target_roi is not None:
+            return self.locked_target_roi
+
         h, w = image.shape[:2]
         bx, by = bullseye
 
@@ -436,8 +450,15 @@ class CameraFocusService:
         roi_h = 46
         x = max(0, min(w - roi_w, int(target_x - roi_w // 2)))
         y = max(0, min(h - roi_h, int(target_y - roi_h // 2)))
-        self.last_target_roi = (x, y, roi_w, roi_h)
-        return self.last_target_roi
+        roi = (x, y, roi_w, roi_h)
+        self.last_target_roi = roi
+
+        # Lock the ROI if it was identified by calibration or dynamic CV detection
+        # to ensure the zoom window and HUD reticle stay completely static.
+        if (cv_target is not None) or (calib_target is not None):
+            self.locked_target_roi = roi
+
+        return roi
 
     def compute_sharpness(self, roi: np.ndarray) -> float:
         """Compute normalized sharpness score (0–100) tuned for 2170 CMOS sensors on dartboard wires."""

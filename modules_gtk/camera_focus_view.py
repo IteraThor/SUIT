@@ -218,6 +218,10 @@ class CameraFocusView(Adw.NavigationPage):
         self.zoom_drawing_area.set_draw_func(self._on_draw_zoom)
         self.zoom_drawing_area.set_size_request(280, 180)
         self.zoom_drawing_area.set_hexpand(True)
+        self.zoom_drawing_area.set_tooltip_text("Tap to re-align target sweet spot")
+        zoom_gesture = Gtk.GestureClick()
+        zoom_gesture.connect("released", lambda *args: self._on_realign_target())
+        self.zoom_drawing_area.add_controller(zoom_gesture)
         zoom_frame.set_child(self.zoom_drawing_area)
 
         # 2. Gauges & Controls Card
@@ -435,6 +439,7 @@ class CameraFocusView(Adw.NavigationPage):
         self.current_step = idx
         self._update_tab_buttons(idx)
         self.focus_service.reset_peak()
+        self.focus_service.unlock_target()
         self._accum_zoom_crop = None
 
         cam_name = CAMERA_NAMES[idx]
@@ -660,6 +665,13 @@ class CameraFocusView(Adw.NavigationPage):
             cr.show_text("SWEET SPOT")
 
         cr.restore()
+
+    def _on_realign_target(self):
+        """Unlocks target ROI so camera can re-lock onto sweet spot if nudged."""
+        self.focus_service.unlock_target()
+        self.focus_service.reset_peak()
+        if hasattr(self, "window") and hasattr(self.window, "show_toast"):
+            self.window.show_toast("Re-aligning furthest double target...")
 
     def _on_toggle_zoom(self, button=None):
         """Maintained for backwards-compatibility; zoom locked to 2.5x."""
