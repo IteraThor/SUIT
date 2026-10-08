@@ -194,3 +194,9 @@ class SystemdService:
         status = cls.get_status(unit_name, scope=scope)
         return status.get("active_state") == "active"
 
+    # Convenience aliases
+    is_active = is_unit_active
+    stop_service = stop_unit
+    start_service = start_unit
+    restart_service = restart_unit
+

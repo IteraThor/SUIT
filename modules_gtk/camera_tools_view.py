@@ -67,8 +67,8 @@ class CameraToolsView(Adw.NavigationPage):
 
         # 1. Focus Calibration Row
         self.row_focus = Adw.ActionRow()
-        self.row_focus.set_title("Focus Calibration")
-        self.row_focus.set_subtitle("Tune optical sharpness, target sweet spots, and audio tone guidance.")
+        self.row_focus.set_title(GLib.markup_escape_text("Focus Calibration"))
+        self.row_focus.set_subtitle(GLib.markup_escape_text("Tune optical sharpness, target sweet spots, and audio tone guidance."))
         icon_focus = Gtk.Image.new_from_icon_name("camera-photo-symbolic")
         icon_focus.set_pixel_size(28)
         icon_focus.set_margin_end(12)
@@ -84,8 +84,8 @@ class CameraToolsView(Adw.NavigationPage):
 
         # 2. Manual Controls Row
         self.row_manual = Adw.ActionRow()
-        self.row_manual.set_title("Manual Controls")
-        self.row_manual.set_subtitle("Adjust exposure, gain, brightness, and sensor parameters.")
+        self.row_manual.set_title(GLib.markup_escape_text("Manual Controls"))
+        self.row_manual.set_subtitle(GLib.markup_escape_text("Adjust exposure, gain, brightness, and sensor parameters."))
         icon_manual = Gtk.Image.new_from_icon_name("preferences-system-symbolic")
         icon_manual.set_pixel_size(28)
         icon_manual.set_margin_end(12)
@@ -101,8 +101,8 @@ class CameraToolsView(Adw.NavigationPage):
 
         # 3. Future Placeholder: Diagnostics & Alignment
         self.row_diag = Adw.ActionRow()
-        self.row_diag.set_title("Camera Alignment & Diagnostics")
-        self.row_diag.set_subtitle("Board triangulation and sensor alignment diagnostics.")
+        self.row_diag.set_title(GLib.markup_escape_text("Camera Alignment & Diagnostics"))
+        self.row_diag.set_subtitle(GLib.markup_escape_text("Board triangulation and sensor alignment diagnostics."))
         icon_diag = Gtk.Image.new_from_icon_name("applications-science-symbolic")
         icon_diag.set_pixel_size(28)
         icon_diag.set_margin_end(12)
