@@ -273,61 +273,29 @@ class CameraFocusService:
         return None
 
     def locate_bullseye(self, image: np.ndarray, existing_calib: dict | None = None) -> tuple[int, int]:
-        """Locate Bullseye coordinates using concentric red/green geometry or calibration."""
+        """Locate Bullseye coordinates using robust concentric geometry, color-agnostic clustering, or calibration."""
         h, w = image.shape[:2]
-        
-        # Check existing Autodarts calibration first if valid
+
+        # 1. Check existing Autodarts calibration first if valid
         if existing_calib and "bull" in existing_calib:
             bx, by = existing_calib["bull"]
             if 0 < bx < w and 0 < by < h:
                 self.last_bullseye = (int(bx), int(by))
                 return self.last_bullseye
 
-        # Search central region for concentric red/green bullseye
-        roi_y1, roi_y2 = int(0.25 * h), int(0.58 * h)
-        roi_x1, roi_x2 = int(0.32 * w), int(0.68 * w)
-        crop = image[roi_y1:roi_y2, roi_x1:roi_x2]
-        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        # Check homography from calibration
+        if existing_calib and "homography" in existing_calib:
+            try:
+                h_mat = np.array(existing_calib["homography"]).reshape(3, 3)
+                h_inv = np.linalg.inv(h_mat)
+                b = h_inv @ np.array([500.0, 500.0, 1.0])
+                calib_bull = (int(b[0] / b[2]), int(b[1] / b[2]))
+                if 0 < calib_bull[0] < w and 0 < calib_bull[1] < h:
+                    self.last_bullseye = calib_bull
+                    return calib_bull
+            except Exception:
+                pass
 
-        # Red mask for inner bull
-        mask_red1 = cv2.inRange(hsv, (0, 70, 70), (14, 255, 255))
-        mask_red2 = cv2.inRange(hsv, (166, 70, 70), (180, 255, 255))
-        mask_red = mask_red1 | mask_red2
-
-        # Green mask for outer bull ring
-        mask_green = cv2.inRange(hsv, (35, 55, 55), (88, 255, 255))
-
-        cnts_red, _ = cv2.findContours(mask_red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cnts_green, _ = cv2.findContours(mask_green, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        red_centers = []
-        for c in cnts_red:
-            if 30 < cv2.contourArea(c) < 1500:
-                M = cv2.moments(c)
-                if M["m00"] > 0:
-                    red_centers.append((M["m10"] / M["m00"], M["m01"] / M["m00"]))
-
-        green_centers = []
-        for c in cnts_green:
-            if 70 < cv2.contourArea(c) < 3500:
-                M = cv2.moments(c)
-                if M["m00"] > 0:
-                    green_centers.append((M["m10"] / M["m00"], M["m01"] / M["m00"]))
-
-        best_bull = None
-        min_dist = 999.0
-        for rx, ry in red_centers:
-            for gx, gy in green_centers:
-                d = math.hypot(rx - gx, ry - gy)
-                if d < 15.0 and d < min_dist:
-                    min_dist = d
-                    best_bull = (int(rx + roi_x1), int(ry + roi_y1))
-
-        if best_bull:
-            self.last_bullseye = best_bull
-            return best_bull
-
-        # Try Autodarts v2 homography calibration for bullseye (canonical 500, 500)
         h_mat = self.load_calibration_homography(w, h)
         if h_mat is not None:
             try:
@@ -340,6 +308,93 @@ class CameraFocusService:
             except Exception:
                 pass
 
+        # 2. Concentric Multi-Channel & Color-Agnostic Contour Clustering
+        roi_y1, roi_y2 = int(0.15 * h), int(0.85 * h)
+        roi_x1, roi_x2 = int(0.15 * w), int(0.85 * w)
+        crop = image[roi_y1:roi_y2, roi_x1:roi_x2]
+        ch, cw = crop.shape[:2]
+
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+
+        accum = np.zeros((ch, cw), dtype=np.float32)
+
+        # A. Red/Green Concentric Detector (Standard dartboard color bonus)
+        mask_red = cv2.inRange(hsv, (0, 55, 55), (14, 255, 255)) | cv2.inRange(hsv, (166, 55, 55), (180, 255, 255))
+        mask_green = cv2.inRange(hsv, (35, 40, 40), (88, 255, 255))
+        cnts_r, _ = cv2.findContours(mask_red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cnts_g, _ = cv2.findContours(mask_green, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        red_pts = []
+        for c in cnts_r:
+            area = cv2.contourArea(c)
+            if 20 < area < 2500:
+                M = cv2.moments(c)
+                if M["m00"] > 0:
+                    red_pts.append((M["m10"] / M["m00"], M["m01"] / M["m00"], area))
+        green_pts = []
+        for c in cnts_g:
+            area = cv2.contourArea(c)
+            if 50 < area < 4500:
+                M = cv2.moments(c)
+                if M["m00"] > 0:
+                    green_pts.append((M["m10"] / M["m00"], M["m01"] / M["m00"], area))
+
+        for rx, ry, ra in red_pts:
+            for gx, gy, ga in green_pts:
+                d = math.hypot(rx - gx, ry - gy)
+                ratio = ga / (ra + 1e-5)
+                if d < 12.0 and 1.5 < ratio < 15.0:
+                    bx_c = int((rx + gx) / 2)
+                    by_c = int((ry + gy) / 2)
+                    if 0 <= bx_c < cw and 0 <= by_c < ch:
+                        accum[by_c, bx_c] += 5000.0 / (1.0 + d * 2.0)
+
+        # B. Color-Agnostic Concentric Edge / Grayscale Ring Detector
+        blurred = cv2.GaussianBlur(gray, (5, 5), 1.0)
+        thresh_adapt = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 4)
+        edges = cv2.Canny(blurred, 30, 100)
+
+        for bin_img in [thresh_adapt, edges]:
+            cnts, _ = cv2.findContours(bin_img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            valid_cnts = []
+            for c in cnts:
+                area = cv2.contourArea(c)
+                if 80 < area < 4000:
+                    peri = cv2.arcLength(c, True)
+                    if peri > 0:
+                        circularity = 4 * math.pi * area / (peri * peri)
+                        if circularity > 0.35:
+                            M = cv2.moments(c)
+                            if M["m00"] > 0:
+                                cx = M["m10"] / M["m00"]
+                                cy = M["m01"] / M["m00"]
+                                valid_cnts.append((cx, cy, area, circularity))
+
+            for i in range(len(valid_cnts)):
+                for j in range(i + 1, len(valid_cnts)):
+                    c1, c2 = valid_cnts[i], valid_cnts[j]
+                    d = math.hypot(c1[0] - c2[0], c1[1] - c2[1])
+                    inner_area = min(c1[2], c2[2])
+                    outer_area = max(c1[2], c2[2])
+                    ratio = outer_area / (inner_area + 1e-5)
+                    if d < 4.5 and 1.8 < ratio < 9.0 and (80 < inner_area < 700) and (450 < outer_area < 3500):
+                        bx_c = int((c1[0] + c2[0]) / 2)
+                        by_c = int((c1[1] + c2[1]) / 2)
+                        if 0 <= bx_c < cw and 0 <= by_c < ch:
+                            accum[by_c, bx_c] += 1500.0 / (1.0 + d * 2.0)
+
+        accum_smooth = cv2.GaussianBlur(accum, (21, 21), 0)
+        y_g, x_g = np.ogrid[:ch, :cw]
+        prior = 1.0 - 0.25 * ((x_g - cw / 2) ** 2 + (y_g - ch / 2) ** 2) / ((cw / 2) ** 2 + (ch / 2) ** 2)
+        accum_smooth *= np.clip(prior, 0.5, 1.0)
+
+        _, max_v, _, max_loc = cv2.minMaxLoc(accum_smooth)
+        if max_v > 0:
+            best_bull = (int(max_loc[0] + roi_x1), int(max_loc[1] + roi_y1))
+            self.last_bullseye = best_bull
+            return best_bull
+
         # Fallback to cached or standard center
         if self.last_bullseye:
             return self.last_bullseye
@@ -350,7 +405,7 @@ class CameraFocusService:
     ) -> tuple[int, int, int, int]:
         """Calculate bounding box centered directly on the furthest double field.
 
-        Once a target is identified via calibration or CV contour detection,
+        Once a target is identified via calibration or dynamic CV detection,
         the ROI is locked to remain static so the digital zoom magnifier does not wiggle.
         """
         if self.locked_target_roi is not None:
@@ -370,14 +425,20 @@ class CameraFocusService:
             try:
                 h_mat = np.array(existing_calib["homography"]).reshape(3, 3)
                 h_inv = np.linalg.inv(h_mat)
-                pts = [
-                    (h_inv @ np.array([500.0 + 323.0 * math.cos(math.radians(deg)),
-                                      500.0 + 323.0 * math.sin(math.radians(deg)), 1.0]))
-                    for deg in range(0, 360, 2)
-                ]
-                norm_pts = [(p[0] / p[2], p[1] / p[2]) for p in pts]
-                top_pt = min(norm_pts, key=lambda p: p[1])
-                calib_target = (int(top_pt[0]), int(top_pt[1]))
+                angles = np.linspace(0, 2 * np.pi, 180, endpoint=False)
+                canonical_pts = np.stack([
+                    500.0 + 323.0 * np.cos(angles),
+                    500.0 + 323.0 * np.sin(angles),
+                    np.ones_like(angles)
+                ], axis=0)
+                proj_pts = h_inv @ canonical_pts
+                u = proj_pts[0] / proj_pts[2]
+                v = proj_pts[1] / proj_pts[2]
+                w_depth = proj_pts[2]
+                furthest_idx = np.argmax(w_depth)
+                fx, fy = int(u[furthest_idx]), int(v[furthest_idx])
+                if 0 < fx < w and 0 < fy < h:
+                    calib_target = (fx, fy)
             except Exception:
                 pass
 
@@ -386,62 +447,69 @@ class CameraFocusService:
             if h_mat is not None:
                 try:
                     h_inv = np.linalg.inv(h_mat)
-                    pts = [
-                        (h_inv @ np.array([500.0 + 323.0 * math.cos(math.radians(deg)),
-                                          500.0 + 323.0 * math.sin(math.radians(deg)), 1.0]))
-                        for deg in range(0, 360, 2)
-                    ]
-                    norm_pts = [(p[0] / p[2], p[1] / p[2]) for p in pts]
-                    top_pt = min(norm_pts, key=lambda p: p[1])
-                    calib_target = (int(top_pt[0]), int(top_pt[1]))
+                    angles = np.linspace(0, 2 * np.pi, 180, endpoint=False)
+                    canonical_pts = np.stack([
+                        500.0 + 323.0 * np.cos(angles),
+                        500.0 + 323.0 * np.sin(angles),
+                        np.ones_like(angles)
+                    ], axis=0)
+                    proj_pts = h_inv @ canonical_pts
+                    u = proj_pts[0] / proj_pts[2]
+                    v = proj_pts[1] / proj_pts[2]
+                    w_depth = proj_pts[2]
+                    furthest_idx = np.argmax(w_depth)
+                    fx, fy = int(u[furthest_idx]), int(v[furthest_idx])
+                    if 0 < fx < w and 0 < fy < h:
+                        calib_target = (fx, fy)
                 except Exception:
                     pass
 
-        # 2. Dynamic CV contour detection on actual colored double field wire/segment
+        # 2. Dynamic Color-Agnostic & Color-Enhanced CV Double Wire Detection
         cv_target = None
         try:
+            min_dist = int(0.155 * h)
+            max_dist = int(0.195 * h)
+
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-            mask_r = cv2.inRange(hsv, (0, 70, 70), (14, 255, 255)) | cv2.inRange(hsv, (166, 70, 70), (180, 255, 255))
-            mask_g = cv2.inRange(hsv, (35, 60, 60), (88, 255, 255))
 
-            mask_upper = np.zeros_like(mask_r)
-            mask_upper[:by, :] = 255
-            search_mask = cv2.bitwise_and(mask_r | mask_g, mask_upper)
+            mask_r = cv2.inRange(hsv, (0, 60, 60), (14, 255, 255)) | cv2.inRange(hsv, (166, 60, 60), (180, 255, 255))
+            mask_g = cv2.inRange(hsv, (35, 45, 45), (88, 255, 255))
+            color_mask = mask_r | mask_g
 
-            cnts, _ = cv2.findContours(search_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            min_dist = 0.150 * h
-            max_dist = 0.210 * h
+            blurred = cv2.GaussianBlur(gray, (5, 5), 1.0)
+            edges = cv2.Canny(blurred, 35, 100)
 
             candidates = []
-            for c in cnts:
-                area = cv2.contourArea(c)
-                if 80 < area < 3500:
-                    M = cv2.moments(c)
-                    if M["m00"] > 0:
-                        cx = M["m10"] / M["m00"]
-                        cy = M["m01"] / M["m00"]
-                        dist = math.hypot(cx - bx, cy - by)
-                        if min_dist <= dist <= max_dist and cy < (by - 50):
-                            candidates.append((cy, cx, dist, area))
+            for bin_mask, is_color in [(color_mask, True), (edges, False)]:
+                cnts, _ = cv2.findContours(bin_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                for c in cnts:
+                    area = cv2.contourArea(c)
+                    if (is_color and 50 < area < 4000) or (not is_color and 20 < area < 5000):
+                        M = cv2.moments(c)
+                        if M["m00"] > 0:
+                            cx = M["m10"] / M["m00"]
+                            cy = M["m01"] / M["m00"]
+                            dist = math.hypot(cx - bx, cy - by)
+                            if min_dist <= dist <= max_dist and cy < by:
+                                dist_diff = abs(dist - 0.175 * h)
+                                bonus = 300.0 if is_color else 0.0
+                                score = bonus - dist_diff * 3.0 - abs(cx - bx) * 0.5 + (by - cy) * 0.2
+                                candidates.append((score, (int(cx), int(cy))))
 
             if candidates:
-                if calib_target:
-                    # Choose contour closest to calibration prediction
-                    candidates.sort(key=lambda item: math.hypot(item[1] - calib_target[0], item[0] - calib_target[1]))
-                else:
-                    # Topmost candidate in camera image
-                    candidates.sort(key=lambda item: item[0])
-                cv_target = (int(candidates[0][1]), int(candidates[0][0]))
+                candidates.sort(key=lambda item: item[0], reverse=True)
+                cv_target = candidates[0][1]
         except Exception:
             pass
 
-        # 3. Target selection with priority: CV detected contour > Calibration target > Geometric fallback
-        if cv_target:
-            target_x, target_y = cv_target
-        elif calib_target:
+        # 3. Target selection priority: Calibration > CV Contour > Geometry Fallback
+        if calib_target:
             target_x, target_y = calib_target
+        elif cv_target:
+            target_x, target_y = cv_target
         else:
-            exp_dist = int(0.187 * h)
+            exp_dist = int(0.175 * h)
             target_x = bx
             target_y = max(25, by - exp_dist)
 
