@@ -79,7 +79,35 @@ class QualityEvaluator:
         noise = max(0.1, temporal_noise)
         return float(contrast / noise)
 
-    def evaluate(self, frames: List[np.ndarray], roi: BoardROI) -> QualityMetrics:
+    @staticmethod
+    def calculate_halo_overshoot(frame: np.ndarray, wire_mask: np.ndarray, uniform_mask: np.ndarray) -> float:
+        """Calculate digital unsharp-mask ringing overshoot along wire borders."""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        dilated_wire = cv2.dilate(wire_mask, kernel, iterations=2)
+        halo_zone = cv2.bitwise_and(dilated_wire, cv2.bitwise_not(wire_mask))
+        halo_zone = cv2.bitwise_and(halo_zone, uniform_mask)  # Only inspect in uniform sisal
+        
+        halo_pixels = gray[halo_zone > 0]
+        sisal_pixels = gray[uniform_mask > 0]
+        if len(halo_pixels) < 50 or len(sisal_pixels) < 50:
+            return 0.0
+            
+        p95_halo = float(np.percentile(halo_pixels, 95))
+        p90_sisal = float(np.percentile(sisal_pixels, 90))
+        if p90_sisal <= 0:
+            return 0.0
+            
+        overshoot = max(0.0, (p95_halo - p90_sisal) / p90_sisal)
+        return float(overshoot)
+
+    def evaluate(
+        self,
+        frames: List[np.ndarray],
+        roi: BoardROI,
+        target_white_lum: Optional[float] = None,
+        target_mean_lum: Optional[float] = None,
+    ) -> QualityMetrics:
         """Perform comprehensive evaluation of single or multi-frame capture."""
         if not frames:
             return QualityMetrics(0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0)
@@ -98,17 +126,15 @@ class QualityEvaluator:
         # 2. Temporal Noise
         t_noise = self.calculate_temporal_noise(frames, roi.uniform_mask)
 
-        # 3. CNR
+        # 3. CNR & Halo Ringing
         cnr = self.calculate_cnr(main_frame, roi, t_noise)
+        halo_overshoot = self.calculate_halo_overshoot(main_frame, roi.wire_mask, roi.uniform_mask)
 
         # 4. Luminance, Highlights, Dynamic Range, and Shadow Clipping
         board_pixels = gray[roi.board_mask > 0]
         if len(board_pixels) == 0:
             board_pixels = gray.flatten()
 
-        # Use uniform mask (sisal segments) for luminance scoring — the white-bed
-        # brightness is what matters for dart detection, not the mean of the whole
-        # board which is dragged down by dark segments and misleads the optimizer.
         uniform_pixels_lum = gray[roi.uniform_mask > 0]
         if len(uniform_pixels_lum) > 50:
             white_bed_lum = float(np.percentile(uniform_pixels_lum, 90))
@@ -127,58 +153,51 @@ class QualityEvaluator:
         dynamic_range = max(0.0, p_white_peak - p_black_floor)
 
         # 5. Penalties and Composite Score Calculation (0 - 100)
-        # Optimal white-bed luminance between 170 and 220 DN (target 195)
-        # Using white-bed percentile instead of whole-board mean prevents the
-        # optimizer from chasing extreme brightness to compensate for dark blacks.
-        lum_penalty = max(0.0, 1.0 - abs(white_bed_lum - 195.0) / 60.0)
-        
-        # Highlight clipping penalty (overexposed wires and specular reflections > 250 DN)
-        # Strict penalty: even 1% clipping on board wires significantly degrades CV tip detection
+        if target_white_lum is not None:
+            lum_penalty = max(0.0, 1.0 - abs(white_bed_lum - target_white_lum) / 35.0)
+        else:
+            lum_penalty = max(0.0, 1.0 - abs(white_bed_lum - 195.0) / 60.0)
+
+        # Highlight clipping penalty (specular wire burnout)
         hl_penalty = max(0.0, 1.0 - (hl_clipping_ratio * 18.0))
 
-        # Shadow clipping penalty (crushed blacks destroy dart shadow triangulation)
-        sh_penalty = max(0.0, 1.0 - (sh_clipping_ratio * 12.0))
+        # Shadow clipping penalty (crushed dart shadow triangulation)
+        sh_penalty = max(0.0, 1.0 - (sh_clipping_ratio * 14.0))
 
-        # Two-sided Black Floor Factor:
-        # - Target: 10 to 45 DN (relaxed: accommodates weaker sensors with higher noise floors)
-        # - < 10 DN: Penalizes crushing / clipping
-        # - > 45 DN: Penalizes washed-out / bleached / milky blacks
+        # Halo ringing penalty
+        halo_penalty = max(0.30, 1.0 - (halo_overshoot / 0.12))
+
+        # Black Floor Factor:
         if 10.0 <= p_black_floor <= 45.0:
             black_floor_factor = 1.0
         elif p_black_floor < 10.0:
-            black_floor_factor = max(0.40, (p_black_floor / 10.0) ** 2)
+            black_floor_factor = max(0.30, (p_black_floor / 10.0) ** 2)
         else:
             black_floor_factor = max(0.40, 1.0 - (p_black_floor - 45.0) / 40.0)
 
-        # White bed peak target: optimal 170-235 DN (widened lower bound for weaker sensors)
-        if 170.0 <= p_white_peak <= 235.0:
+        # White bed peak target: optimal 165-235 DN
+        if 165.0 <= p_white_peak <= 235.0:
             white_peak_factor = 1.0
         elif p_white_peak > 235.0:
-            white_peak_factor = max(0.40, 1.0 - (p_white_peak - 235.0) / 20.0)
+            white_peak_factor = max(0.30, 1.0 - (p_white_peak - 235.0) / 20.0)
         else:
-            white_peak_factor = max(0.40, (p_white_peak / 170.0) ** 2)
+            white_peak_factor = max(0.30, (p_white_peak / 165.0) ** 2)
 
-        # Soft combination: geometric mean with individual floors prevents
-        # a single moderate miss from collapsing the entire composite score.
-        # Floor of 0.4 per factor ensures even a camera with one bad metric
-        # still gets fairly evaluated on sharpness / noise / DR.
         penalties = [
-            max(0.40, hl_penalty),
-            max(0.40, sh_penalty),
+            max(0.30, hl_penalty),
+            max(0.30, sh_penalty),
+            halo_penalty,
             black_floor_factor,
             white_peak_factor,
         ]
         clip_penalty = float(np.prod(penalties) ** (1.0 / len(penalties)))
 
         # Normalized Components:
-        # - Wire edge steepness (typical good values ~35-85)
-        steep_norm = min(1.0, steepness / 75.0)
-        # - Dynamic range separation between white and black sisal (target >= 130 DN)
-        dr_norm = min(1.0, dynamic_range / 145.0)
-        # - Temporal noise (typical good values ~0.4 - 2.0, lower is better)
-        noise_norm = max(0.0, 1.0 - min(1.0, (t_noise - 0.3) / 2.2))
+        steep_norm = min(1.0, steepness / 70.0)
+        dr_norm = min(1.0, dynamic_range / 140.0)
+        noise_norm = max(0.0, 1.0 - min(1.0, (t_noise - 0.2) / 2.0))
 
-        raw_score = (steep_norm * 40.0 + dr_norm * 25.0 + noise_norm * 25.0 + lum_penalty * 10.0) * clip_penalty
+        raw_score = (steep_norm * 35.0 + dr_norm * 25.0 + noise_norm * 25.0 + lum_penalty * 15.0) * clip_penalty
         composite_score = round(max(0.0, min(100.0, raw_score)), 1)
 
         return QualityMetrics(

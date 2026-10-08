@@ -389,19 +389,27 @@ class CameraOptimizer:
                         p10 = float(np.percentile(board_px, 10))
                         curr_mean = float(np.mean(board_px))
 
-                        # Veto 1: Shadows crushed below 8 DN
-                        if p10 < 8.0:
+                        # Veto 1: Shadows crushed below 10 DN
+                        if p10 < 10.0:
                             pct = 0.45 + (pair_idx / total_pairs) * 0.35
                             report("Stage 2 / 3", pct, f"Skipped S={s}, C={c} (shadows crushed: {p10:.0f} DN)", frame=burst[0])
                             continue
 
-                        # Veto 2: Overall board luminance dimmed by more than 7% from baseline
-                        if curr_mean < baseline_mean_lum * 0.93:
+                        # Veto 2: Overall board luminance dimmed by more than 5% from baseline
+                        if curr_mean < baseline_mean_lum * 0.95:
                             pct = 0.45 + (pair_idx / total_pairs) * 0.35
                             report("Stage 2 / 3", pct, f"Skipped S={s}, C={c} (image darkened: {curr_mean:.0f}/{baseline_mean_lum:.0f} DN)", frame=burst[0])
                             continue
 
-                    metrics = self.evaluator.evaluate(burst, roi)
+                    halo_val = self.evaluator.calculate_halo_overshoot(burst[0], roi.wire_mask, roi.uniform_mask)
+                    if halo_val > 0.08:
+                        pct = 0.45 + (pair_idx / total_pairs) * 0.35
+                        report("Stage 2 / 3", pct, f"Skipped S={s}, C={c} (halo ringing detected: {halo_val*100:.1f}%)", frame=burst[0])
+                        continue
+
+                    metrics = self.evaluator.evaluate(
+                        burst, roi, target_white_lum=target_white_lum, target_mean_lum=target_mean_lum
+                    )
 
                     if metrics.composite_score > best_score:
                         best_score = metrics.composite_score
@@ -427,7 +435,9 @@ class CameraOptimizer:
 
             final_burst = get_burst(count=burst_count, flush=3)
             if final_burst:
-                verif_metrics = self.evaluator.evaluate(final_burst, roi)
+                verif_metrics = self.evaluator.evaluate(
+                    final_burst, roi, target_white_lum=target_white_lum, target_mean_lum=target_mean_lum
+                )
                 if verif_metrics.composite_score >= best_score * 0.85:
                     best_burst = final_burst
                     best_metrics = verif_metrics
