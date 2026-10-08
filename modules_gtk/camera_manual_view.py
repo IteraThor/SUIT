@@ -47,6 +47,8 @@ class CameraManualView(Adw.NavigationPage):
         # Debounce timer for slider adjustments
         self._pending_updates: dict[str, int | bool] = {}
         self._update_timer_id: int | None = None
+        self._loading_controls = False
+        self._updating_boot_switch = False
 
         # Container
         scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
@@ -74,6 +76,9 @@ class CameraManualView(Adw.NavigationPage):
 
         # Control sliders group
         self._build_controls_group()
+
+        # Startup boot group
+        self._build_boot_group()
 
         # Footer action buttons
         self._build_footer_actions()
@@ -231,9 +236,20 @@ class CameraManualView(Adw.NavigationPage):
         self.row_wb_temp.add_suffix(self.scale_wb_temp)
         self.ctrl_group.add(self.row_wb_temp)
 
+    def _build_boot_group(self):
+        self.boot_group = Adw.PreferencesGroup()
+        self.row_boot = Adw.ActionRow(title="Load on boot")
+        self.row_boot.set_subtitle("Apply camera values at startup")
+        self.switch_boot = Gtk.Switch()
+        self.switch_boot.set_valign(Gtk.Align.CENTER)
+        self.switch_boot.connect("notify::active", self._on_boot_toggled)
+        self.row_boot.add_suffix(self.switch_boot)
+        self.boot_group.add(self.row_boot)
+        self.main_box.append(self.boot_group)
+
     def _build_footer_actions(self):
         action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        action_box.set_margin_top(8)
+        action_box.set_margin_top(4)
 
         self.btn_reset = Gtk.Button(label="Reset Defaults")
         self.btn_reset.add_css_class("flat")
@@ -241,13 +257,6 @@ class CameraManualView(Adw.NavigationPage):
         self.btn_reset.set_hexpand(True)
         self.btn_reset.connect("clicked", self._on_reset_clicked)
         action_box.append(self.btn_reset)
-
-        self.btn_save = Gtk.Button(label="Save Preset")
-        self.btn_save.add_css_class("suggested-action")
-        self.btn_save.add_css_class("touch-btn")
-        self.btn_save.set_hexpand(True)
-        self.btn_save.connect("clicked", self._on_save_clicked)
-        action_box.append(self.btn_save)
 
         self.main_box.append(action_box)
 
@@ -271,49 +280,54 @@ class CameraManualView(Adw.NavigationPage):
         if not ctrls:
             return
 
-        # Block signals temporarily to prevent circular callbacks
-        exp_auto_key = "auto_exposure" if "auto_exposure" in ctrls else "exposure_auto"
-        if exp_auto_key in ctrls:
-            self._exp_auto_key = exp_auto_key
-            val = ctrls[exp_auto_key].get("value", 3)
-            is_auto = (val != 1)
-            self.switch_exp_auto.set_active(is_auto)
-            self.scale_exp_val.set_sensitive(not is_auto)
+        self._loading_controls = True
+        try:
+            exp_auto_key = "auto_exposure" if "auto_exposure" in ctrls else "exposure_auto"
+            if exp_auto_key in ctrls:
+                self._exp_auto_key = exp_auto_key
+                val = ctrls[exp_auto_key].get("value", 3)
+                is_auto = (val != 1)
+                self.switch_exp_auto.set_active(is_auto)
+                self.scale_exp_val.set_sensitive(not is_auto)
 
-        if "exposure_time_absolute" in ctrls:
-            data = ctrls["exposure_time_absolute"]
-            self.scale_exp_val.set_range(data.get("min", 1), data.get("max", 5000))
-            self.scale_exp_val.set_value(data.get("value", 156))
+            if "exposure_time_absolute" in ctrls:
+                data = ctrls["exposure_time_absolute"]
+                self.scale_exp_val.set_range(data.get("min", 1), data.get("max", 5000))
+                self.scale_exp_val.set_value(data.get("value", 156))
 
-        if "gain" in ctrls:
-            data = ctrls["gain"]
-            self.scale_gain.set_range(data.get("min", 0), data.get("max", 100))
-            self.scale_gain.set_value(data.get("value", 0))
+            if "gain" in ctrls:
+                data = ctrls["gain"]
+                self.scale_gain.set_range(data.get("min", 0), data.get("max", 100))
+                self.scale_gain.set_value(data.get("value", 0))
 
-        if "brightness" in ctrls:
-            data = ctrls["brightness"]
-            self.scale_bright.set_range(data.get("min", -64), data.get("max", 64))
-            self.scale_bright.set_value(data.get("value", 0))
+            if "brightness" in ctrls:
+                data = ctrls["brightness"]
+                self.scale_bright.set_range(data.get("min", -64), data.get("max", 64))
+                self.scale_bright.set_value(data.get("value", 0))
 
-        if "contrast" in ctrls:
-            data = ctrls["contrast"]
-            self.scale_contrast.set_range(data.get("min", 0), data.get("max", 64))
-            self.scale_contrast.set_value(data.get("value", 32))
+            if "contrast" in ctrls:
+                data = ctrls["contrast"]
+                self.scale_contrast.set_range(data.get("min", 0), data.get("max", 64))
+                self.scale_contrast.set_value(data.get("value", 32))
 
-        wb_auto_key = "white_balance_automatic" if "white_balance_automatic" in ctrls else "white_balance_temperature_auto"
-        if wb_auto_key in ctrls:
-            self._wb_auto_key = wb_auto_key
-            val = ctrls[wb_auto_key].get("value", 1)
-            is_auto = bool(val)
-            self.switch_wb_auto.set_active(is_auto)
-            self.scale_wb_temp.set_sensitive(not is_auto)
+            wb_auto_key = "white_balance_automatic" if "white_balance_automatic" in ctrls else "white_balance_temperature_auto"
+            if wb_auto_key in ctrls:
+                self._wb_auto_key = wb_auto_key
+                val = ctrls[wb_auto_key].get("value", 1)
+                is_auto = bool(val)
+                self.switch_wb_auto.set_active(is_auto)
+                self.scale_wb_temp.set_sensitive(not is_auto)
 
-        if "white_balance_temperature" in ctrls:
-            data = ctrls["white_balance_temperature"]
-            self.scale_wb_temp.set_range(data.get("min", 2800), data.get("max", 6500))
-            self.scale_wb_temp.set_value(data.get("value", 4600))
+            if "white_balance_temperature" in ctrls:
+                data = ctrls["white_balance_temperature"]
+                self.scale_wb_temp.set_range(data.get("min", 2800), data.get("max", 6500))
+                self.scale_wb_temp.set_value(data.get("value", 4600))
+        finally:
+            self._loading_controls = False
 
     def _on_exposure_mode_changed(self, switch, gparam):
+        if getattr(self, "_loading_controls", False):
+            return
         is_auto = switch.get_active()
         self.scale_exp_val.set_sensitive(not is_auto)
         val = 3 if is_auto else 1
@@ -321,6 +335,8 @@ class CameraManualView(Adw.NavigationPage):
         self._queue_control_update(key, val)
 
     def _on_wb_mode_changed(self, switch, gparam):
+        if getattr(self, "_loading_controls", False):
+            return
         is_auto = switch.get_active()
         self.scale_wb_temp.set_sensitive(not is_auto)
         val = 1 if is_auto else 0
@@ -328,6 +344,8 @@ class CameraManualView(Adw.NavigationPage):
         self._queue_control_update(key, val)
 
     def _queue_control_update(self, ctrl_name: str, value: int | bool):
+        if getattr(self, "_loading_controls", False):
+            return
         self._pending_updates[ctrl_name] = value
         if self._update_timer_id is None:
             self._update_timer_id = GLib.timeout_add(75, self._flush_pending_updates)
@@ -341,6 +359,8 @@ class CameraManualView(Adw.NavigationPage):
         def worker():
             for k, v in updates.items():
                 CameraManualService.set_control(dev, k, v)
+            if getattr(self, "switch_boot", None) and self.switch_boot.get_active():
+                CameraManualService.update_boot_service_if_enabled(self.configured_cams)
 
         threading.Thread(target=worker, daemon=True).start()
         return False
@@ -350,25 +370,34 @@ class CameraManualView(Adw.NavigationPage):
         ok = CameraManualService.reset_defaults(dev)
         if ok:
             self._load_current_camera_controls()
+            if getattr(self, "switch_boot", None) and self.switch_boot.get_active():
+                CameraManualService.update_boot_service_if_enabled(self.configured_cams)
+            if hasattr(self.window, "show_toast"):
+                self.window.show_toast("Defaults restored.")
+        else:
+            self._load_current_camera_controls()
             if hasattr(self.window, "show_toast"):
                 self.window.show_toast("Defaults restored.")
 
-    def _on_save_clicked(self, btn):
-        dev = self.current_device
-        exp_key = getattr(self, "_exp_auto_key", "auto_exposure")
-        wb_key = getattr(self, "_wb_auto_key", "white_balance_automatic")
-        settings = {
-            exp_key: 3 if self.switch_exp_auto.get_active() else 1,
-            "exposure_time_absolute": int(self.scale_exp_val.get_value()),
-            "gain": int(self.scale_gain.get_value()),
-            "brightness": int(self.scale_bright.get_value()),
-            "contrast": int(self.scale_contrast.get_value()),
-            wb_key: 1 if self.switch_wb_auto.get_active() else 0,
-            "white_balance_temperature": int(self.scale_wb_temp.get_value()),
-        }
-        ok = CameraManualService.save_preset(dev, settings)
-        if ok and hasattr(self.window, "show_toast"):
-            self.window.show_toast("Camera preset saved.")
+    def _on_boot_toggled(self, switch, gparam):
+        if getattr(self, "_updating_boot_switch", False):
+            return
+        active = switch.get_active()
+        if active:
+            ok = CameraManualService.enable_boot_service(self.configured_cams)
+            if ok:
+                if hasattr(self.window, "show_toast"):
+                    self.window.show_toast("Settings will load on boot.")
+            else:
+                self._updating_boot_switch = True
+                switch.set_active(False)
+                self._updating_boot_switch = False
+                if hasattr(self.window, "show_toast"):
+                    self.window.show_toast("Failed enabling service.")
+        else:
+            ok = CameraManualService.disable_boot_service()
+            if ok and hasattr(self.window, "show_toast"):
+                self.window.show_toast("Load on boot disabled.")
 
     # --- Live Preview Capture & Draw ---
 
@@ -470,6 +499,14 @@ class CameraManualView(Adw.NavigationPage):
 
         self._start_capture()
         self._load_current_camera_controls()
+
+        # Sync boot switch state
+        is_boot = CameraManualService.is_boot_service_enabled()
+        self._updating_boot_switch = True
+        try:
+            self.switch_boot.set_active(is_boot)
+        finally:
+            self._updating_boot_switch = False
 
     def on_page_closed(self):
         logger.info("CameraManualView closed: releasing camera")

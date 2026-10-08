@@ -77,24 +77,179 @@ class CameraManualService:
             logger.exception("Failed setting %s=%s on %s", control_name, value, device_path)
             return False
 
+    SERVICE_NAME = "suit-camera-settings.service"
+    USER_UNIT_PATH = Path.home() / ".config" / "systemd" / "user" / SERVICE_NAME
+
     @classmethod
     def reset_defaults(cls, device_path: str) -> bool:
-        """Reset all supported controls for the device to their factory defaults."""
+        """Reset all supported controls for the device to their factory defaults,
+        skipping inactive dependent controls (e.g. shutter speed during auto exposure)."""
         ctrls = cls.get_camera_controls(device_path)
         if not ctrls:
             return False
 
-        all_ok = True
+        # Determine auto/manual modes first
+        exp_auto_name = "auto_exposure" if "auto_exposure" in ctrls else ("exposure_auto" if "exposure_auto" in ctrls else None)
+        wb_auto_name = "white_balance_automatic" if "white_balance_automatic" in ctrls else ("white_balance_temperature_auto" if "white_balance_temperature_auto" in ctrls else None)
+
+        exp_default_auto = True
+        if exp_auto_name and "default" in ctrls[exp_auto_name]:
+            exp_default_auto = (ctrls[exp_auto_name]["default"] != 1)
+
+        wb_default_auto = True
+        if wb_auto_name and "default" in ctrls[wb_auto_name]:
+            wb_default_auto = bool(ctrls[wb_auto_name]["default"])
+
+        to_set: dict[str, int | bool] = {}
+
+        # 1. Add mode controls first
+        if exp_auto_name and "default" in ctrls[exp_auto_name]:
+            to_set[exp_auto_name] = ctrls[exp_auto_name]["default"]
+        if wb_auto_name and "default" in ctrls[wb_auto_name]:
+            to_set[wb_auto_name] = ctrls[wb_auto_name]["default"]
+
+        # 2. Add other controls
         for name, data in ctrls.items():
-            if "default" in data:
-                ok = cls.set_control(device_path, name, data["default"])
-                if not ok:
-                    all_ok = False
-        return all_ok
+            if "default" not in data:
+                continue
+            if name in (exp_auto_name, wb_auto_name):
+                continue
+            if name == "exposure_time_absolute" and exp_default_auto:
+                continue
+            if name == "white_balance_temperature" and wb_default_auto:
+                continue
+            to_set[name] = data["default"]
+
+        # Apply settings
+        success_count = 0
+        for name, val in to_set.items():
+            if cls.set_control(device_path, name, val):
+                success_count += 1
+            else:
+                logger.warning("Failed resetting control %s to %s on %s", name, val, device_path)
+
+        return success_count > 0
+
+    @classmethod
+    def get_camera_control_settings_string(cls, device_path: str) -> str:
+        """Format current camera controls into a v4l2-ctl --set-ctrl string."""
+        ctrls = cls.get_camera_controls(device_path)
+        if not ctrls:
+            return ""
+
+        parts = []
+        # Exposure
+        exp_key = "auto_exposure" if "auto_exposure" in ctrls else ("exposure_auto" if "exposure_auto" in ctrls else None)
+        if exp_key:
+            val = ctrls[exp_key].get("value", 3)
+            parts.append(f"{exp_key}={val}")
+            if val == 1 and "exposure_time_absolute" in ctrls:
+                parts.append(f"exposure_time_absolute={ctrls['exposure_time_absolute'].get('value', 156)}")
+
+        # White balance
+        wb_key = "white_balance_automatic" if "white_balance_automatic" in ctrls else ("white_balance_temperature_auto" if "white_balance_temperature_auto" in ctrls else None)
+        if wb_key:
+            val = ctrls[wb_key].get("value", 1)
+            parts.append(f"{wb_key}={val}")
+            if not val and "white_balance_temperature" in ctrls:
+                parts.append(f"white_balance_temperature={ctrls['white_balance_temperature'].get('value', 4600)}")
+
+        # Additional standard controls
+        for k in ("gain", "brightness", "contrast"):
+            if k in ctrls and "value" in ctrls[k]:
+                parts.append(f"{k}={ctrls[k]['value']}")
+
+        return ",".join(parts)
+
+    @classmethod
+    def generate_service_unit_content(cls, cameras: list[str]) -> str:
+        """Generate systemd user service unit content for camera settings on boot."""
+        exec_lines = []
+        v4l2_bin = "/usr/bin/v4l2-ctl"
+        for dev in cameras:
+            ctrls_str = cls.get_camera_control_settings_string(dev)
+            if ctrls_str:
+                exec_lines.append(f"ExecStart=-{v4l2_bin} -d {dev} --set-ctrl={ctrls_str}")
+
+        exec_section = "\n".join(exec_lines) if exec_lines else f"ExecStart=-{v4l2_bin} --version"
+        return f"""[Unit]
+Description=SUIT Camera Settings on Boot
+Before=autodarts.service
+After=default.target
+
+[Service]
+Type=oneshot
+{exec_section}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target
+"""
+
+    @classmethod
+    def is_boot_service_enabled(cls) -> bool:
+        """Check if suit-camera-settings.service is enabled."""
+        try:
+            res = subprocess.run(
+                ["systemctl", "--user", "is-enabled", cls.SERVICE_NAME],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            return res.returncode == 0 and "enabled" in res.stdout
+        except Exception:
+            return False
+
+    @classmethod
+    def enable_boot_service(cls, cameras: list[str], service_path: Path | None = None) -> bool:
+        """Write camera settings systemd user unit and enable it."""
+        target = service_path or cls.USER_UNIT_PATH
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            content = cls.generate_service_unit_content(cameras)
+            target.write_text(content, encoding="utf-8")
+            subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, timeout=5)
+            res = subprocess.run(["systemctl", "--user", "enable", cls.SERVICE_NAME], capture_output=True, timeout=5)
+            logger.info("Enabled camera boot service: %s", target)
+            return res.returncode == 0
+        except Exception:
+            logger.exception("Failed enabling camera boot service")
+            return False
+
+    @classmethod
+    def disable_boot_service(cls, service_path: Path | None = None) -> bool:
+        """Disable and remove camera settings systemd user unit."""
+        target = service_path or cls.USER_UNIT_PATH
+        try:
+            subprocess.run(["systemctl", "--user", "disable", "--now", cls.SERVICE_NAME], capture_output=True, timeout=5)
+            if target.exists():
+                target.unlink()
+            subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, timeout=5)
+            logger.info("Disabled camera boot service")
+            return True
+        except Exception:
+            logger.exception("Failed disabling camera boot service")
+            return False
+
+    @classmethod
+    def update_boot_service_if_enabled(cls, cameras: list[str], service_path: Path | None = None) -> bool:
+        """Update systemd unit commands if the service is currently enabled."""
+        if not cls.is_boot_service_enabled():
+            return False
+        target = service_path or cls.USER_UNIT_PATH
+        try:
+            content = cls.generate_service_unit_content(cameras)
+            target.write_text(content, encoding="utf-8")
+            subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, timeout=5)
+            logger.debug("Updated camera boot service with current settings")
+            return True
+        except Exception:
+            logger.exception("Failed updating camera boot service")
+            return False
 
     @classmethod
     def save_preset(cls, device_path: str, settings: dict, config_path: Path | None = None) -> bool:
-        """Save a set of control adjustments for a device into configuration."""
+        """Deprecated: Save a set of control adjustments for a device into configuration."""
         target = config_path or DEFAULT_CONFIG_PATH
         try:
             data = cls.load_presets(config_path=target)
@@ -110,7 +265,7 @@ class CameraManualService:
 
     @classmethod
     def load_presets(cls, config_path: Path | None = None) -> dict:
-        """Load saved camera presets from configuration."""
+        """Deprecated: Load saved camera presets from configuration."""
         target = config_path or DEFAULT_CONFIG_PATH
         if target.exists():
             try:
@@ -122,7 +277,7 @@ class CameraManualService:
 
     @classmethod
     def apply_saved_presets(cls, config_path: Path | None = None) -> bool:
-        """Apply all saved presets to their respective devices."""
+        """Deprecated: Apply all saved presets to their respective devices."""
         presets = cls.load_presets(config_path=config_path)
         if not presets:
             return True
@@ -133,3 +288,4 @@ class CameraManualService:
                 if not cls.set_control(dev, ctrl_name, val):
                     overall_ok = False
         return overall_ok
+
