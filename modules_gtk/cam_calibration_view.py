@@ -555,8 +555,6 @@ class CamCalibrationView(Adw.Bin):
         self.dash_active_switch.handler_block_by_func(self._on_dash_switch_toggled)
         if has_any_calib:
             self.dash_active_switch.set_sensitive(True)
-            self.dash_reset_row.set_sensitive(True)
-            self.dash_reset_btn.set_sensitive(True)
             self.dash_active_switch.set_active(self.persistence.is_calibration_enabled())
             if self.persistence.is_calibration_enabled():
                 self.dash_active_switch.set_subtitle("Optimized profiles are active and enabled in boot service.")
@@ -564,11 +562,13 @@ class CamCalibrationView(Adw.Bin):
                 self.dash_active_switch.set_subtitle("Cameras are running in default automatic mode.")
         else:
             self.dash_active_switch.set_sensitive(False)
-            self.dash_reset_row.set_sensitive(False)
-            self.dash_reset_btn.set_sensitive(False)
             self.dash_active_switch.set_active(False)
             self.dash_active_switch.set_subtitle("No calibration found — Please start calibration.")
         self.dash_active_switch.handler_unblock_by_func(self._on_dash_switch_toggled)
+
+        # Always allow resetting hardware to defaults
+        self.dash_reset_row.set_sensitive(True)
+        self.dash_reset_btn.set_sensitive(True)
 
         for cam in self.cameras:
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -2073,6 +2073,17 @@ class CamCalibrationView(Adw.Bin):
     # =========================================================================
     def _go_to_dashboard(self):
         self._stop_focus_stream()
+        calibrations = self.persistence.load_calibrations()
+        is_enabled = self.persistence.is_calibration_enabled()
+        for cam in self.cameras:
+            try:
+                vdev = V4L2Device(cam.dev_node)
+                if is_enabled and cam.by_path in calibrations:
+                    vdev.apply_settings(calibrations[cam.by_path])
+                else:
+                    vdev.reset_to_defaults()
+            except Exception as e:
+                logger.warning("Failed to restore camera %s on return to dashboard: %s", cam.dev_node, e)
         self.stack.set_visible_child_name("dashboard")
         self._update_dashboard()
 
@@ -2082,6 +2093,13 @@ class CamCalibrationView(Adw.Bin):
             SystemdManager.stop_autodarts()
         self.detector.unlock_target()
         self.accum_crops.clear()
+        # Reset all cameras to standard factory auto mode for Focus Check & Baseline
+        for cam in self.cameras:
+            try:
+                vdev = V4L2Device(cam.dev_node)
+                vdev.reset_to_defaults()
+            except Exception as e:
+                logger.warning("Failed to reset camera %s on focus start: %s", cam.dev_node, e)
         self.stack.set_visible_child_name("focus")
         self._setup_focus_columns()
         self._start_focus_stream()
