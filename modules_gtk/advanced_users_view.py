@@ -30,14 +30,14 @@ class AdvancedUsersView(Adw.NavigationPage):
         scrolled.set_kinetic_scrolling(True)
         self.set_child(scrolled)
 
-        clamp = Adw.Clamp(maximum_size=820, tightening_threshold=640)
-        clamp.set_margin_top(12)
-        clamp.set_margin_bottom(16)
-        clamp.set_margin_start(12)
-        clamp.set_margin_end(12)
+        clamp = Adw.Clamp(maximum_size=940, tightening_threshold=760)
+        clamp.set_margin_top(8)
+        clamp.set_margin_bottom(12)
+        clamp.set_margin_start(10)
+        clamp.set_margin_end(10)
         scrolled.set_child(clamp)
 
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         clamp.set_child(main_box)
 
         # =========================================================================
@@ -70,11 +70,11 @@ class AdvancedUsersView(Adw.NavigationPage):
         self.box_rdp_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.box_rdp_actions.set_valign(Gtk.Align.CENTER)
 
-        self.btn_copy_rdp = create_button_with_icon("edit-copy-symbolic", "Copy Info", "secondary-btn compact-btn", height=38)
+        self.btn_copy_rdp = create_button_with_icon("edit-copy-symbolic", "Copy Info", "secondary-btn compact-btn", height=34)
         self.btn_copy_rdp.connect("clicked", self._on_copy_rdp_clicked)
         self.box_rdp_actions.append(self.btn_copy_rdp)
 
-        self.btn_gnome_settings = create_button_with_icon("preferences-system-symbolic", "Settings", "secondary-btn compact-btn", height=38)
+        self.btn_gnome_settings = create_button_with_icon("preferences-system-symbolic", "Settings", "secondary-btn compact-btn", height=34)
         self.btn_gnome_settings.connect("clicked", lambda b: SystemService.open_gnome_sharing_settings())
         self.box_rdp_actions.append(self.btn_gnome_settings)
 
@@ -86,13 +86,13 @@ class AdvancedUsersView(Adw.NavigationPage):
         # =========================================================================
         self.grp_tailscale = Adw.PreferencesGroup(
             title="Tailscale VPN",
-            description="Secure mesh VPN for connecting to your dartboard from anywhere."
+            description="Secure mesh VPN for connecting to your dartboard."
         )
         main_box.append(self.grp_tailscale)
 
         self.row_tailscale = Adw.ActionRow(
             title="Tailscale VPN",
-            subtitle="Remote network access for board management away from home."
+            subtitle="Remote network access for board management."
         )
         self.box_tailscale = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.box_tailscale.set_valign(Gtk.Align.CENTER)
@@ -102,7 +102,7 @@ class AdvancedUsersView(Adw.NavigationPage):
             "network-vpn-symbolic",
             "Install Tailscale",
             "suggested-action compact-btn",
-            height=38
+            height=34
         )
         self.btn_tailscale.connect("clicked", self._on_tailscale_clicked)
         self.box_tailscale.append(self.lbl_tailscale_badge)
@@ -114,7 +114,7 @@ class AdvancedUsersView(Adw.NavigationPage):
         # =========================================================================
         self.grp_waydroid = Adw.PreferencesGroup(
             title="Darts Scorer",
-            description="Android companion app for live scores, stats, and scoreboard."
+            description="Android scoreboard companion app."
         )
         main_box.append(self.grp_waydroid)
 

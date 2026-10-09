@@ -1,8 +1,8 @@
-import re
 import json
 import subprocess
 from pathlib import Path
 from core.logger import get_logger
+from core.v4l2_device import V4L2Device
 
 logger = get_logger("camera_manual")
 
@@ -11,124 +11,46 @@ DEFAULT_CONFIG_PATH = Path.home() / ".suit_camera_profiles.json"
 
 class CameraManualService:
     DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_PATH
+    SERVICE_NAME = "suit-camera-settings.service"
+    USER_UNIT_PATH = Path.home() / ".config" / "systemd" / "user" / SERVICE_NAME
 
-    @staticmethod
-    def parse_v4l2_controls(raw_output: str) -> dict[str, dict]:
-        """Parse the output of `v4l2-ctl --list-ctrls` into a structured dictionary."""
-        controls: dict[str, dict] = {}
-        for line in raw_output.splitlines():
-            line = line.strip()
-            if not line or ":" not in line:
-                continue
-
-            # Format: <name> <hex_id> (<type>) : <attributes>
-            left, right = line.split(":", 1)
-            parts = left.strip().split()
-            if len(parts) < 3:
-                continue
-
-            name = parts[0]
-            hex_id = parts[1]
-            ctrl_type_match = re.search(r"\(([^)]+)\)", parts[2])
-            ctrl_type = ctrl_type_match.group(1) if ctrl_type_match else "int"
-
-            attrs: dict = {
-                "id": hex_id,
-                "type": ctrl_type,
-            }
-
-            for token in right.strip().split():
-                if "=" in token:
-                    k, v = token.split("=", 1)
-                    try:
-                        attrs[k] = int(v)
-                    except ValueError:
-                        attrs[k] = v
-
-            controls[name] = attrs
-
-        return controls
+    @classmethod
+    def parse_v4l2_controls(cls, raw_output: str) -> dict[str, dict]:
+        """Parse the output of v4l2-ctl into a structured dictionary."""
+        controls = V4L2Device.parse_v4l2_ctl_output(raw_output)
+        return {name: ctrl.to_dict() for name, ctrl in controls.items()}
 
     @classmethod
     def get_camera_controls(cls, device_path: str) -> dict[str, dict]:
-        """Query supported V4L2 controls and their limits for a camera device."""
+        """Query supported V4L2 controls and their limits for a camera device via V4L2Device."""
         try:
-            res = subprocess.run(
-                ["v4l2-ctl", "-d", device_path, "--list-ctrls"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            return cls.parse_v4l2_controls(res.stdout)
+            dev = V4L2Device(device_path)
+            controls = dev.query_controls()
+            return {name: ctrl.to_dict() for name, ctrl in controls.items()}
         except Exception:
             logger.exception("Failed querying V4L2 controls for %s", device_path)
             return {}
 
     @classmethod
     def set_control(cls, device_path: str, control_name: str, value: int | bool) -> bool:
-        """Set a single V4L2 control on a camera device."""
+        """Set a single V4L2 control on a camera device via V4L2Device."""
         try:
-            val_str = str(int(value) if isinstance(value, bool) else value)
-            cmd = ["v4l2-ctl", "-d", device_path, f"--set-ctrl={control_name}={val_str}"]
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
-            logger.debug("Set %s on %s to %s", control_name, device_path, val_str)
-            return True
+            dev = V4L2Device(device_path)
+            val = int(value) if isinstance(value, bool) else int(value)
+            return dev.set_control(control_name, val)
         except Exception:
             logger.exception("Failed setting %s=%s on %s", control_name, value, device_path)
             return False
 
-    SERVICE_NAME = "suit-camera-settings.service"
-    USER_UNIT_PATH = Path.home() / ".config" / "systemd" / "user" / SERVICE_NAME
-
     @classmethod
     def reset_defaults(cls, device_path: str) -> bool:
-        """Reset all supported controls for the device to their factory defaults,
-        skipping inactive dependent controls (e.g. shutter speed during auto exposure)."""
-        ctrls = cls.get_camera_controls(device_path)
-        if not ctrls:
+        """Reset all supported controls for the device to their factory defaults via V4L2Device."""
+        try:
+            dev = V4L2Device(device_path)
+            return dev.reset_to_defaults()
+        except Exception:
+            logger.exception("Failed resetting camera defaults on %s", device_path)
             return False
-
-        # Determine auto/manual modes first
-        exp_auto_name = "auto_exposure" if "auto_exposure" in ctrls else ("exposure_auto" if "exposure_auto" in ctrls else None)
-        wb_auto_name = "white_balance_automatic" if "white_balance_automatic" in ctrls else ("white_balance_temperature_auto" if "white_balance_temperature_auto" in ctrls else None)
-
-        exp_default_auto = True
-        if exp_auto_name and "default" in ctrls[exp_auto_name]:
-            exp_default_auto = (ctrls[exp_auto_name]["default"] != 1)
-
-        wb_default_auto = True
-        if wb_auto_name and "default" in ctrls[wb_auto_name]:
-            wb_default_auto = bool(ctrls[wb_auto_name]["default"])
-
-        to_set: dict[str, int | bool] = {}
-
-        # 1. Add mode controls first
-        if exp_auto_name and "default" in ctrls[exp_auto_name]:
-            to_set[exp_auto_name] = ctrls[exp_auto_name]["default"]
-        if wb_auto_name and "default" in ctrls[wb_auto_name]:
-            to_set[wb_auto_name] = ctrls[wb_auto_name]["default"]
-
-        # 2. Add other controls
-        for name, data in ctrls.items():
-            if "default" not in data:
-                continue
-            if name in (exp_auto_name, wb_auto_name):
-                continue
-            if name == "exposure_time_absolute" and exp_default_auto:
-                continue
-            if name == "white_balance_temperature" and wb_default_auto:
-                continue
-            to_set[name] = data["default"]
-
-        # Apply settings
-        success_count = 0
-        for name, val in to_set.items():
-            if cls.set_control(device_path, name, val):
-                success_count += 1
-            else:
-                logger.warning("Failed resetting control %s to %s on %s", name, val, device_path)
-
-        return success_count > 0
 
     @classmethod
     def get_camera_control_settings_string(cls, device_path: str) -> str:
@@ -288,4 +210,3 @@ WantedBy=default.target
                 if not cls.set_control(dev, ctrl_name, val):
                     overall_ok = False
         return overall_ok
-

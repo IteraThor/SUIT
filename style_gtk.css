@@ -1,93 +1,94 @@
 /* SUIT for Fedora - Touchscreen Optimization Stylesheet
    Tailored for 16-inch displays at 1920x1200 / 1200x1920 (~141 DPI) */
 
-/* Generous row heights for effortless finger tapping */
+/* Touch-friendly compact row heights for effortless tapping */
 list.boxed-list > row {
-    min-height: 62px;
-    padding-top: 8px;
-    padding-bottom: 8px;
-    padding-left: 16px;
-    padding-right: 16px;
+    min-height: 42px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    padding-left: 12px;
+    padding-right: 12px;
 }
 
 /* Touch-friendly primary action buttons */
 .touch-btn {
-    min-height: 52px;
-    font-size: 15px;
-    font-weight: 600;
-    border-radius: 12px;
-    padding-left: 20px;
-    padding-right: 20px;
-}
-
-/* Big touch tiles for rotation angle toggles (0°, 90°, 180°, 270°) */
-.angle-touch-btn {
-    min-height: 64px;
-    min-width: 84px;
-    font-size: 16px;
-    font-weight: 700;
-    border-radius: 12px;
-}
-
-/* Big buttons for service actions (Start / Stop / Restart) */
-.service-touch-btn {
-    min-height: 52px;
-    min-width: 110px;
-    font-size: 14px;
-    font-weight: 600;
-    border-radius: 10px;
-}
-
-/* Enlarge HeaderBar navigation back button for easy thumb reaches */
-headerbar button.image-button {
-    min-width: 44px;
-    min-height: 44px;
-    border-radius: 10px;
-}
-
-/* Larger combo box and dropdown touch targets */
-combobox button,
-dropdown > button {
-    min-height: 46px;
-    font-size: 14px;
-    border-radius: 10px;
-}
-
-/* Switches touch target */
-switch {
-    min-width: 54px;
-    min-height: 30px;
-}
-
-/* Clear card spacing */
-.banner-card {
-    border-radius: 16px;
-}
-
-/* Touch Dashboard Cards */
-.tile-card {
-    background-color: alpha(@window_fg_color, 0.04);
-    border: 1px solid alpha(@window_fg_color, 0.08);
-    border-radius: 16px;
-    padding: 20px;
-}
-
-.tile-card-compact {
-    background-color: alpha(@window_fg_color, 0.04);
-    border: 1px solid alpha(@window_fg_color, 0.08);
-    border-radius: 14px;
-    padding: 12px 16px;
-}
-
-button.compact-btn,
-.compact-btn {
-    min-height: 44px;
+    min-height: 40px;
     font-size: 14px;
     font-weight: 600;
     border-radius: 10px;
     padding-left: 14px;
     padding-right: 14px;
 }
+
+/* Big touch tiles for rotation angle toggles (0°, 90°, 180°, 270°) */
+.angle-touch-btn {
+    min-height: 44px;
+    min-width: 68px;
+    font-size: 14px;
+    font-weight: 700;
+    border-radius: 10px;
+}
+
+/* Big buttons for service actions (Start / Stop / Restart) */
+.service-touch-btn {
+    min-height: 44px;
+    min-width: 96px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 10px;
+}
+
+/* Enlarge HeaderBar navigation back button for easy thumb reaches */
+headerbar button.image-button {
+    min-width: 40px;
+    min-height: 40px;
+    border-radius: 8px;
+}
+
+/* Larger combo box and dropdown touch targets */
+combobox button,
+dropdown > button {
+    min-height: 40px;
+    font-size: 13px;
+    border-radius: 8px;
+}
+
+/* Switches touch target */
+switch {
+    min-width: 48px;
+    min-height: 26px;
+}
+
+/* Clear card spacing */
+.banner-card {
+    border-radius: 14px;
+}
+
+/* Touch Dashboard Cards */
+.tile-card {
+    background-color: alpha(@window_fg_color, 0.04);
+    border: 1px solid alpha(@window_fg_color, 0.08);
+    border-radius: 12px;
+    padding: 12px 14px;
+}
+
+.tile-card-compact {
+    background-color: alpha(@window_fg_color, 0.04);
+    border: 1px solid alpha(@window_fg_color, 0.08);
+    border-radius: 12px;
+    padding: 10px 14px;
+}
+
+button.compact-btn,
+.compact-btn {
+    min-height: 38px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 8px;
+    padding-left: 12px;
+    padding-right: 12px;
+}
+
 
 .status-pill-running {
     background-color: alpha(#2ec27e, 0.15);
@@ -271,12 +272,12 @@ button.compact-btn,
 .focus-gauge-card {
     background-color: alpha(@window_fg_color, 0.04);
     border: 1px solid alpha(@window_fg_color, 0.08);
-    border-radius: 16px;
-    padding: 16px;
+    border-radius: 14px;
+    padding: 10px 12px;
 }
 
 .focus-gauge-score {
-    font-size: 46px;
+    font-size: 32px;
     font-weight: 800;
     font-family: monospace;
     letter-spacing: -1px;
@@ -324,14 +325,14 @@ button.compact-btn,
     background-color: #0b0d0e;
     border: 1px solid alpha(@window_fg_color, 0.12);
     border-radius: 14px;
-    min-height: 420px;
+    min-height: 200px;
 }
 
 .focus-zoom-card {
     background-color: alpha(@window_fg_color, 0.04);
     border: 1px solid alpha(@window_fg_color, 0.08);
     border-radius: 16px;
-    padding: 12px;
+    padding: 10px;
 }
 
 .focus-zoom-frame {
@@ -344,15 +345,15 @@ button.compact-btn,
     background-color: alpha(@window_fg_color, 0.05);
     border: 1px solid alpha(@window_fg_color, 0.08);
     border-radius: 14px;
-    padding: 4px;
+    padding: 3px;
 }
 
 .camera-tab-btn {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
-    padding: 8px 16px;
+    padding: 6px 12px;
     border-radius: 10px;
-    min-height: 44px;
+    min-height: 38px;
     transition: all 150ms ease-in-out;
 }
 
@@ -617,8 +618,8 @@ button.compact-btn,
 .cam-column-card {
     background-color: alpha(@theme_fg_color, 0.035);
     border: 1px solid alpha(@theme_fg_color, 0.09);
-    border-radius: 14px;
-    padding: 14px;
+    border-radius: 12px;
+    padding: 10px 12px;
 }
 
 .cam-column-card.active-calibrating {
@@ -627,33 +628,34 @@ button.compact-btn,
 }
 
 .wizard-title {
-    font-size: 1.4em;
+    font-size: 1.25em;
     font-weight: 800;
 }
 
 .wizard-subtitle {
-    font-size: 0.95em;
+    font-size: 0.9em;
     opacity: 0.75;
 }
 
 .metric-badge {
     background-color: alpha(@theme_fg_color, 0.06);
     border-radius: 8px;
-    padding: 6px 10px;
+    padding: 4px 8px;
 }
 
 .metric-val {
     font-weight: bold;
-    font-size: 1.05em;
+    font-size: 1.0em;
 }
 
 .metric-lbl {
-    font-size: 0.8em;
+    font-size: 0.78em;
     opacity: 0.7;
 }
 
 .big-cta-button {
     font-weight: 700;
-    font-size: 1.1em;
-    padding: 12px 32px;
+    font-size: 1.0em;
+    padding: 10px 24px;
 }
+

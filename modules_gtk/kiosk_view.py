@@ -20,14 +20,14 @@ class KioskView(Adw.NavigationPage):
         scrolled.set_kinetic_scrolling(True)
         self.set_child(scrolled)
 
-        clamp = Adw.Clamp(maximum_size=880, tightening_threshold=660)
-        clamp.set_margin_top(16)
-        clamp.set_margin_bottom(24)
-        clamp.set_margin_start(16)
-        clamp.set_margin_end(16)
+        clamp = Adw.Clamp(maximum_size=940, tightening_threshold=760)
+        clamp.set_margin_top(8)
+        clamp.set_margin_bottom(12)
+        clamp.set_margin_start(10)
+        clamp.set_margin_end(10)
         scrolled.set_child(clamp)
 
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         clamp.set_child(main_box)
 
         # 1. Fullscreen Kiosk Group
@@ -61,8 +61,8 @@ class KioskView(Adw.NavigationPage):
         self.btn_launch = Gtk.Button(label="Launch Kiosk Session")
         self.btn_launch.add_css_class("suggested-action")
         self.btn_launch.add_css_class("touch-btn")
-        self.btn_launch.set_size_request(-1, 50)
-        self.btn_launch.set_margin_top(8)
+        self.btn_launch.set_size_request(-1, 44)
+        self.btn_launch.set_margin_top(6)
         self.btn_launch.connect("clicked", self._launch_kiosk)
         grp_kiosk.add(self.btn_launch)
 

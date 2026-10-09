@@ -37,13 +37,13 @@ class UsbView(Adw.NavigationPage):
         self.set_child(scrolled)
 
         clamp = Adw.Clamp(maximum_size=820, tightening_threshold=640)
-        clamp.set_margin_top(14)
-        clamp.set_margin_bottom(20)
-        clamp.set_margin_start(14)
-        clamp.set_margin_end(14)
+        clamp.set_margin_top(10)
+        clamp.set_margin_bottom(12)
+        clamp.set_margin_start(12)
+        clamp.set_margin_end(12)
         scrolled.set_child(clamp)
 
-        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         clamp.set_child(self.main_box)
 
         # 1. Top Control Bar (Resolution & FPS selectors + Live badge)
@@ -53,7 +53,7 @@ class UsbView(Adw.NavigationPage):
         self._build_status_banner()
 
         # 4. Camera Stream Cards Container
-        self.cams_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.cams_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.main_box.append(self.cams_container)
 
         self.connect("map", lambda w: self.refresh())
@@ -70,7 +70,7 @@ class UsbView(Adw.NavigationPage):
         box_res.append(lbl_res)
 
         self.combo_res = Gtk.DropDown.new_from_strings(["1280x960", "1280x720", "1920x1080", "640x480"])
-        self.combo_res.set_size_request(160, 44)
+        self.combo_res.set_size_request(160, 40)
         self.combo_res.connect("notify::selected", self._on_settings_changed)
         box_res.append(self.combo_res)
         card.append(box_res)
@@ -82,7 +82,7 @@ class UsbView(Adw.NavigationPage):
         box_fps.append(lbl_fps)
 
         self.combo_fps = Gtk.DropDown.new_from_strings(["15", "20", "25", "30"])
-        self.combo_fps.set_size_request(110, 44)
+        self.combo_fps.set_size_request(110, 40)
         self.combo_fps.connect("notify::selected", self._on_settings_changed)
         box_fps.append(self.combo_fps)
         card.append(box_fps)

@@ -24,8 +24,8 @@ class SuitWindow(Adw.ApplicationWindow):
                 geom = monitors.get_item(0).get_geometry()
                 screen_w, screen_h = geom.width, geom.height
 
-        default_w = min(880, max(520, int(screen_w * 0.72)))
-        default_h = min(620, max(440, int(screen_h * 0.68)))
+        default_w = min(840, max(560, screen_w - 60))
+        default_h = min(720, max(540, screen_h - 90))
         self.set_default_size(default_w, default_h)
         self.set_size_request(380, 420)
 
@@ -179,8 +179,46 @@ class SuitWindow(Adw.ApplicationWindow):
         self._adapt_window_size_for_page(page)
 
     def _adapt_window_size_for_page(self, page):
-        """Keeps window sizing responsive without exceeding display bounds."""
-        pass
+        """Dynamically adapts window size for active module without overflowing display bounds."""
+        if not page:
+            return
+
+        display = Gdk.Display.get_default()
+        screen_w, screen_h = 1280, 800
+        if display:
+            monitors = display.get_monitors()
+            if monitors.get_n_items() > 0:
+                geom = monitors.get_item(0).get_geometry()
+                screen_w, screen_h = geom.width, geom.height
+
+        # Safety clearance for GNOME top bar and dock
+        max_allowed_w = max(420, screen_w - 60)
+        max_allowed_h = max(420, screen_h - 90)
+
+        tag = getattr(page, "tag", None)
+        if not tag and hasattr(page, "get_tag"):
+            tag = page.get_tag()
+
+        target_map = {
+            "main_menu": (760, 640),
+            "camera_tools": (740, 480),
+            "camera_focus": (940, 640),
+            "camera_manual": (920, 600),
+            "cam_calibration": (980, 640),
+            "autodarts": (840, 680),
+            "rotation": (780, 680),
+            "kiosk": (780, 680),
+            "system": (800, 780),
+            "usb": (780, 560),
+            "advanced_users": (800, 720),
+        }
+
+        ideal_w, ideal_h = target_map.get(tag, (780, 680))
+        target_w = min(max_allowed_w, ideal_w)
+        target_h = min(max_allowed_h, ideal_h)
+
+        self.set_default_size(target_w, target_h)
+
 
     def show_toast(self, text):
         toast = Adw.Toast(title=text, timeout=3)

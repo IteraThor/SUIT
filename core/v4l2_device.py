@@ -29,6 +29,18 @@ class V4L2Control:
     current_val: int
     flags: List[str] = dataclasses.field(default_factory=list)
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": "",
+            "type": self.ctrl_type,
+            "min": self.min_val,
+            "max": self.max_val,
+            "step": self.step,
+            "default": self.default_val,
+            "value": self.current_val,
+            "flags": self.flags,
+        }
+
 
 @dataclasses.dataclass
 class CameraSettings:
@@ -142,10 +154,10 @@ class V4L2Device:
         """Set a single V4L2 control on the device."""
         try:
             cmd = ["v4l2-ctl", "-d", self.dev_node, f"--set-ctrl={name}={value}"]
-            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
             return True
         except subprocess.CalledProcessError as e:
-            logger.error("Failed to set control %s=%d on %s: %s", name, value, self.dev_node, e.stderr.strip())
+            logger.error("Failed to set control %s=%d on %s: %s", name, value, self.dev_node, e.stderr.strip() if e.stderr else "")
             return False
         except Exception as e:
             logger.exception("Unexpected error setting control %s on %s: %s", name, self.dev_node, e)
@@ -156,29 +168,35 @@ class V4L2Device:
         clean_ctrls = dict(ctrls)
         
         # If auto exposure is active (not 1=manual), absolute exposure cannot be set
-        if clean_ctrls.get("auto_exposure", 1) != 1 and "exposure_time_absolute" in clean_ctrls:
+        exp_auto = clean_ctrls.get("auto_exposure", clean_ctrls.get("exposure_auto", None))
+        if exp_auto is not None and exp_auto != 1 and "exposure_time_absolute" in clean_ctrls:
             clean_ctrls.pop("exposure_time_absolute", None)
             
         # If auto white balance is active (1=auto), manual temperature cannot be set
-        if clean_ctrls.get("white_balance_automatic", 0) == 1 and "white_balance_temperature" in clean_ctrls:
+        wb_auto = clean_ctrls.get("white_balance_automatic", clean_ctrls.get("white_balance_temperature_auto", None))
+        if wb_auto is not None and wb_auto == 1 and "white_balance_temperature" in clean_ctrls:
             clean_ctrls.pop("white_balance_temperature", None)
 
         ordered_keys = []
         # If setting to manual, ensure manual mode is set before manual values
-        if clean_ctrls.get("auto_exposure") == 1:
-            ordered_keys.append("auto_exposure")
-        if clean_ctrls.get("white_balance_automatic") == 0 and "white_balance_automatic" in clean_ctrls:
-            ordered_keys.append("white_balance_automatic")
+        for auto_k in ("auto_exposure", "exposure_auto"):
+            if auto_k in clean_ctrls and clean_ctrls[auto_k] == 1:
+                ordered_keys.append(auto_k)
+        for auto_wb in ("white_balance_automatic", "white_balance_temperature_auto"):
+            if auto_wb in clean_ctrls and clean_ctrls[auto_wb] == 0:
+                ordered_keys.append(auto_wb)
 
         for k in clean_ctrls:
-            if k not in ordered_keys and k not in ("auto_exposure", "white_balance_automatic"):
+            if k not in ordered_keys and k not in ("auto_exposure", "exposure_auto", "white_balance_automatic", "white_balance_temperature_auto"):
                 ordered_keys.append(k)
 
         # If setting to auto mode, apply auto at the end so preceding manual values don't conflict
-        if clean_ctrls.get("auto_exposure", 1) != 1 and "auto_exposure" in clean_ctrls:
-            ordered_keys.append("auto_exposure")
-        if clean_ctrls.get("white_balance_automatic") == 1:
-            ordered_keys.append("white_balance_automatic")
+        for auto_k in ("auto_exposure", "exposure_auto"):
+            if auto_k in clean_ctrls and clean_ctrls[auto_k] != 1 and auto_k not in ordered_keys:
+                ordered_keys.append(auto_k)
+        for auto_wb in ("white_balance_automatic", "white_balance_temperature_auto"):
+            if auto_wb in clean_ctrls and clean_ctrls[auto_wb] == 1 and auto_wb not in ordered_keys:
+                ordered_keys.append(auto_wb)
 
         success = True
         for name in ordered_keys:
@@ -207,7 +225,16 @@ class V4L2Device:
         return self.set_controls_dict(ctrl_map)
 
     def reset_to_defaults(self) -> bool:
-        """Reset camera controls to standard factory defaults."""
+        """Reset camera controls to standard factory defaults, querying hardware defaults first if available."""
+        ctrls = self.query_controls()
+        if ctrls:
+            to_set: Dict[str, int] = {}
+            for name, ctrl in ctrls.items():
+                if ctrl.default_val is not None:
+                    to_set[name] = ctrl.default_val
+            if to_set:
+                return self.set_controls_dict(to_set)
+
         return self.set_controls_dict({
             "white_balance_automatic": 1,
             "auto_exposure": 3,

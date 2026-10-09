@@ -27,13 +27,13 @@ class RotationView(Adw.NavigationPage):
         self.set_child(scrolled)
 
         clamp = Adw.Clamp(maximum_size=880, tightening_threshold=660)
-        clamp.set_margin_top(16)
-        clamp.set_margin_bottom(24)
-        clamp.set_margin_start(16)
-        clamp.set_margin_end(16)
+        clamp.set_margin_top(10)
+        clamp.set_margin_bottom(12)
+        clamp.set_margin_start(12)
+        clamp.set_margin_end(12)
         scrolled.set_child(clamp)
 
-        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         clamp.set_child(self.main_box)
 
         # Header Info Card
@@ -236,7 +236,7 @@ class RotationView(Adw.NavigationPage):
                 btn = Gtk.Button(label=r_label)
                 btn.add_css_class("touch-btn")
                 btn.add_css_class("angle-touch-btn")
-                btn.set_size_request(-1, 52)
+                btn.set_size_request(-1, 44)
                 if r_val == current_staged_rot:
                     btn.add_css_class("suggested-action")
                 btn.connect("clicked", make_angle_handler(r_val))
@@ -260,7 +260,7 @@ class RotationView(Adw.NavigationPage):
             touch_options = ["None"] + touchscreens
             touch_dd = Gtk.DropDown.new_from_strings(touch_options)
             touch_dd.set_valign(Gtk.Align.CENTER)
-            touch_dd.set_size_request(260, 46)
+            touch_dd.set_size_request(240, 42)
 
             # Pre-select active/staged touch device
             staged_dev = self.staged_touch.get(name, "None")
@@ -288,7 +288,7 @@ class RotationView(Adw.NavigationPage):
             btn_apply = Gtk.Button()
             btn_apply.add_css_class("touch-btn")
             btn_apply.add_css_class("suggested-action")
-            btn_apply.set_size_request(-1, 52)
+            btn_apply.set_size_request(-1, 44)
             btn_apply.set_hexpand(True)
 
             apply_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)

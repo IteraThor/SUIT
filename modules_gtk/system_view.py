@@ -40,11 +40,11 @@ class SystemView(Adw.NavigationPage):
         scrolled.set_kinetic_scrolling(True)
         self.root_overlay.set_child(scrolled)
 
-        clamp = Adw.Clamp(maximum_size=820, tightening_threshold=640)
-        clamp.set_margin_top(12)
-        clamp.set_margin_bottom(16)
-        clamp.set_margin_start(12)
-        clamp.set_margin_end(12)
+        clamp = Adw.Clamp(maximum_size=940, tightening_threshold=760)
+        clamp.set_margin_top(8)
+        clamp.set_margin_bottom(12)
+        clamp.set_margin_start(10)
+        clamp.set_margin_end(10)
         scrolled.set_child(clamp)
 
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -132,7 +132,7 @@ class SystemView(Adw.NavigationPage):
         # 2. Automatic Login Switch
         self.row_autologin = Adw.SwitchRow(
             title="Automatic Login",
-            subtitle="Bypass password prompt when the system turns on."
+            subtitle="Bypass password prompt when turning on."
         )
         self.row_autologin.connect("notify::active", self._on_autologin_toggled)
         self.grp_system.add(self.row_autologin)
@@ -140,7 +140,7 @@ class SystemView(Adw.NavigationPage):
         # 3. Screen Blanking & Sleep Switch
         self.row_blanking = Adw.SwitchRow(
             title="Display Always On",
-            subtitle="Keep screen lit continuously without sleeping."
+            subtitle="Keep screen lit continuously."
         )
         self.row_blanking.connect("notify::active", self._on_blanking_toggled)
         self.grp_system.add(self.row_blanking)
@@ -148,7 +148,7 @@ class SystemView(Adw.NavigationPage):
         # 4. GNOME Keyring Password Status
         self.row_keyring = Adw.ActionRow(
             title="Keyring Password",
-            subtitle="Allow background apps to unlock without password popups."
+            subtitle="Unlock apps without password popups."
         )
         self.box_keyring = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.box_keyring.set_valign(Gtk.Align.CENTER)
@@ -158,7 +158,7 @@ class SystemView(Adw.NavigationPage):
             "dialog-password-symbolic",
             "Remove Password",
             "suggested-action compact-btn",
-            height=38
+            height=34
         )
         self.btn_keyring_action.connect("clicked", self._on_keyring_action_clicked)
         self.box_keyring.append(self.lbl_keyring_badge)
@@ -168,7 +168,7 @@ class SystemView(Adw.NavigationPage):
         # 5. Appearance and Theme
         self.row_visuals = Adw.ActionRow(
             title="Appearance and Theme",
-            subtitle="Dark theme, clean wallpaper, app grid clean up."
+            subtitle="Dark theme and clean wallpaper."
         )
         self.box_visuals = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.box_visuals.set_valign(Gtk.Align.CENTER)
@@ -178,7 +178,7 @@ class SystemView(Adw.NavigationPage):
             "preferences-desktop-wallpaper-symbolic",
             "Apply Theme",
             "suggested-action compact-btn",
-            height=38
+            height=34
         )
         self.btn_visuals_action.connect("clicked", self._on_visuals_action_clicked)
         self.box_visuals.append(self.lbl_visuals_badge)
@@ -188,7 +188,7 @@ class SystemView(Adw.NavigationPage):
         # 6. Touchscreen Tweaks Switch
         self.row_touch = Adw.SwitchRow(
             title="Touchscreen Tweaks",
-            subtitle="Enlarge top bar, window controls, and on-screen keyboard."
+            subtitle="Enlarge top bar, controls, and keyboard."
         )
         self.row_touch.connect("notify::active", self._on_touch_scaling_toggled)
         self.grp_system.add(self.row_touch)

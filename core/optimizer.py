@@ -81,23 +81,23 @@ class CameraOptimizer:
             return None
 
         cap = None
-        if hasattr(self.device, "open_stream"):
-            try:
-                res_cap = self.device.open_stream(1280, 960)
-                if isinstance(res_cap, cv2.VideoCapture) and res_cap.isOpened():
-                    cap = res_cap
-            except Exception:
-                cap = None
+        try:
+            res_cap = self.device.open_stream(1280, 960)
+            if isinstance(res_cap, cv2.VideoCapture) and res_cap.isOpened():
+                cap = res_cap
+        except Exception:
+            cap = None
 
         def get_frame(flush: int = 2) -> Optional[np.ndarray]:
-            if cap is not None and hasattr(self.device, "read_stream_frame"):
+            if cap is not None and cap.isOpened():
                 return self.device.read_stream_frame(cap, flush_frames=flush)
             return self.device.capture_frame(warmup_frames=max(3, flush))
 
         def get_burst(count: int, flush: int = 2) -> List[np.ndarray]:
-            if cap is not None and hasattr(self.device, "read_stream_burst"):
+            if cap is not None and cap.isOpened():
                 return self.device.read_stream_burst(cap, count=count, flush_frames=flush)
             return self.device.capture_burst(count=count, warmup_frames=max(3, flush))
+
 
         try:
             # Capture initial baseline frames with multi-frame burst
