@@ -15,8 +15,19 @@ logger = get_logger("window")
 class SuitWindow(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="SUIT for Fedora")
-        self.set_default_size(1020, 820)
-        self.set_size_request(480, 600)
+        # Determine monitor size for display-aware default window bounds
+        display = Gdk.Display.get_default()
+        screen_w, screen_h = 1280, 800
+        if display:
+            monitors = display.get_monitors()
+            if monitors.get_n_items() > 0:
+                geom = monitors.get_item(0).get_geometry()
+                screen_w, screen_h = geom.width, geom.height
+
+        default_w = min(880, max(520, int(screen_w * 0.72)))
+        default_h = min(620, max(440, int(screen_h * 0.68)))
+        self.set_default_size(default_w, default_h)
+        self.set_size_request(380, 420)
 
         self.project_dir = Path(__file__).resolve().parent.parent
 
@@ -168,40 +179,8 @@ class SuitWindow(Adw.ApplicationWindow):
         self._adapt_window_size_for_page(page)
 
     def _adapt_window_size_for_page(self, page):
-        """Expands the window when entering the Autodarts menu so all TUI panels
-        fit without scrolling, and restores standard window size when returning."""
-        if self.is_maximized() or self.is_fullscreen():
-            return
-
-        is_autodarts = (hasattr(self, "autodarts_page") and page == self.autodarts_page) or (
-            hasattr(page, "get_tag") and page.get_tag() == "autodarts"
-        )
-
-        if is_autodarts:
-            cur_w, cur_h = self.get_width(), self.get_height()
-            if cur_w > 0 and cur_h > 0 and not getattr(self, "_saved_menu_size", None):
-                self._saved_menu_size = (cur_w, cur_h)
-            elif not getattr(self, "_saved_menu_size", None):
-                self._saved_menu_size = (1020, 820)
-
-            # Target 1200x1040 provides 140+ cols x 38+ rows for the full FTXUI console
-            target_w, target_h = 1200, 1040
-            display = self.get_display() or Gdk.Display.get_default()
-            if display:
-                monitors = display.get_monitors()
-                if monitors.get_n_items() > 0:
-                    geom = monitors.get_item(0).get_geometry()
-                    target_w = min(target_w, max(800, geom.width - 40))
-                    target_h = min(target_h, max(600, geom.height - 70))
-
-            if cur_w < target_w or cur_h < target_h:
-                self.set_default_size(max(cur_w, target_w), max(cur_h, target_h))
-        else:
-            saved_size = getattr(self, "_saved_menu_size", None)
-            if saved_size:
-                prev_w, prev_h = saved_size
-                self._saved_menu_size = None
-                self.set_default_size(prev_w, prev_h)
+        """Keeps window sizing responsive without exceeding display bounds."""
+        pass
 
     def show_toast(self, text):
         toast = Adw.Toast(title=text, timeout=3)

@@ -772,7 +772,7 @@ class CamCalibrationView(Adw.Bin):
             # Video Picture
             pic = Gtk.Picture()
             pic.set_can_shrink(True)
-            pic.set_size_request(400, 260)
+            pic.set_size_request(160, 110)
             pic.set_hexpand(True)
             pic.set_vexpand(True)
             card.append(pic)
@@ -1059,7 +1059,7 @@ class CamCalibrationView(Adw.Bin):
 
             pic = Gtk.Picture()
             pic.set_can_shrink(True)
-            pic.set_size_request(400, 260)
+            pic.set_size_request(160, 110)
             pic.set_hexpand(True)
             pic.set_vexpand(True)
             card.append(pic)
@@ -1292,7 +1292,7 @@ class CamCalibrationView(Adw.Bin):
 
             pic = Gtk.Picture()
             pic.set_can_shrink(True)
-            pic.set_size_request(400, 260)
+            pic.set_size_request(160, 110)
             pic.set_hexpand(True)
             pic.set_vexpand(True)
             card.append(pic)
@@ -1672,7 +1672,7 @@ class CamCalibrationView(Adw.Bin):
 
         self.rev_detail_pic_before = Gtk.Picture()
         self.rev_detail_pic_before.set_can_shrink(True)
-        self.rev_detail_pic_before.set_size_request(440, 290)
+        self.rev_detail_pic_before.set_size_request(200, 140)
         self.rev_detail_pic_before.set_hexpand(True)
         self.rev_detail_pic_before.set_vexpand(True)
         click_before = Gtk.GestureClick()
@@ -1703,7 +1703,7 @@ class CamCalibrationView(Adw.Bin):
 
         self.rev_detail_pic_after = Gtk.Picture()
         self.rev_detail_pic_after.set_can_shrink(True)
-        self.rev_detail_pic_after.set_size_request(440, 290)
+        self.rev_detail_pic_after.set_size_request(200, 140)
         self.rev_detail_pic_after.set_hexpand(True)
         self.rev_detail_pic_after.set_vexpand(True)
         click_after = Gtk.GestureClick()
@@ -1798,7 +1798,7 @@ class CamCalibrationView(Adw.Bin):
 
             pic = Gtk.Picture()
             pic.set_can_shrink(True)
-            pic.set_size_request(380, 240)
+            pic.set_size_request(160, 110)
             pic.set_hexpand(True)
             pic.set_vexpand(True)
             card.append(pic)
