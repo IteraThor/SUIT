@@ -54,36 +54,10 @@ class HardwareDiagnostics:
         """High-speed focus metric calculation (0 - 100) targeted on the furthest double field."""
         if image is None or image.size == 0:
             return 0.0
-
-        h, w = image.shape[:2]
-        # Crop to the furthest double field if provided, else use upper board region
-        if target_roi:
-            tx, ty, tw, th = target_roi
-            patch = image[max(0, ty):min(h, ty + th), max(0, tx):min(w, tx + tw)]
-        else:
-            # Fallback: Top 35% center region where furthest double sits
-            patch = image[int(h * 0.15):int(h * 0.50), int(w * 0.25):int(w * 0.75)]
-
-        if patch is None or patch.size == 0:
-            patch = image
-
-        gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY) if len(patch.shape) == 3 else patch
-        
-        # 1. Tenengrad Gradient Energy on furthest double blade wires
-        gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-        gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-        ten_energy = float(np.mean(gx ** 2 + gy ** 2))
-
-        # 2. Laplacian Variance (high-frequency edge contrast)
-        lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-
-        # Real-world calibrated normalization for blade wires on dartboard furthest double patch (220x80):
-        # Defocused / blurry sweet spot has lap_var ~180-250 and ten_energy ~10000-14000.
-        # In-focus sharp sweet spot has lap_var >= 1000-1400 and ten_energy >= 35000-40000.
-        norm_lap = min(1.0, max(0.0, (lap_var - 180.0) / 1050.0))
-        norm_ten = min(1.0, max(0.0, (ten_energy - 10000.0) / 25000.0))
-        raw_score = (norm_lap * 55.0) + (norm_ten * 45.0)
-        return float(round(max(0.0, min(100.0, raw_score)), 1))
+        if not target_roi:
+            h, w = image.shape[:2]
+            target_roi = (int(w * 0.25), int(h * 0.15), int(w * 0.50), int(h * 0.35))
+        return QualityEvaluator.calculate_focus_score(image, target_roi=target_roi)
 
     def analyze_frame(
         self,

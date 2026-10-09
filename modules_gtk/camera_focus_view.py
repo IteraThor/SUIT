@@ -67,13 +67,13 @@ class CameraFocusView(Adw.NavigationPage):
         self.set_child(scrolled)
 
         clamp = Adw.Clamp(maximum_size=980, tightening_threshold=720)
-        clamp.set_margin_top(14)
-        clamp.set_margin_bottom(20)
-        clamp.set_margin_start(14)
-        clamp.set_margin_end(14)
+        clamp.set_margin_top(8)
+        clamp.set_margin_bottom(8)
+        clamp.set_margin_start(10)
+        clamp.set_margin_end(10)
         scrolled.set_child(clamp)
 
-        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         clamp.set_child(self.main_box)
 
         # Header Bar Container
@@ -107,25 +107,25 @@ class CameraFocusView(Adw.NavigationPage):
 
     def _build_header_card(self):
         """Build top navigation and step indicator bar."""
-        header_card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        header_card.add_css_class("tile-card")
+        header_card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        header_card.add_css_class("tile-card-compact")
         self.main_box.append(header_card)
 
         step_icon = Gtk.Image.new_from_icon_name("camera-photo-symbolic")
-        step_icon.set_pixel_size(32)
+        step_icon.set_pixel_size(24)
         step_icon.set_valign(Gtk.Align.CENTER)
         header_card.append(step_icon)
 
-        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         text_box.set_hexpand(True)
         header_card.append(text_box)
 
         self.lbl_step_title = Gtk.Label(label="Camera 1", xalign=0)
-        self.lbl_step_title.add_css_class("title-3")
+        self.lbl_step_title.add_css_class("title-4")
         text_box.append(self.lbl_step_title)
 
         self.lbl_step_desc = Gtk.Label(
-            label="Adjust focus by twisting the camera lens slowly and focus on the furthest double field. Rotate until the score reaches a peak — that peak is your target focus value.",
+            label="Rotate camera lens slowly until sharpness score reaches peak.",
             xalign=0,
             wrap=True,
         )
@@ -135,7 +135,7 @@ class CameraFocusView(Adw.NavigationPage):
         # Audio mute toggle button (muted by default)
         self.btn_mute = Gtk.Button.new_from_icon_name("audio-volume-muted-symbolic")
         self.btn_mute.add_css_class("flat")
-        self.btn_mute.set_size_request(46, 44)
+        self.btn_mute.set_size_request(40, 36)
         self.btn_mute.set_valign(Gtk.Align.CENTER)
         self.btn_mute.set_tooltip_text("Unmute Audio Guidance")
         self.btn_mute.connect("clicked", self._on_mute_clicked)
@@ -177,34 +177,34 @@ class CameraFocusView(Adw.NavigationPage):
 
         self.drawing_area = Gtk.DrawingArea()
         self.drawing_area.set_draw_func(self._on_draw_preview)
-        self.drawing_area.set_size_request(320, 220)
+        self.drawing_area.set_size_request(300, 170)
         self.drawing_area.set_hexpand(True)
         self.drawing_area.set_vexpand(True)
         self.video_overlay.set_child(self.drawing_area)
 
         # Loading Spinner & Message Overlay
-        self.loading_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        self.loading_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.loading_box.add_css_class("focus-loading-overlay")
         self.loading_box.set_valign(Gtk.Align.CENTER)
         self.loading_box.set_halign(Gtk.Align.CENTER)
-        self.loading_box.set_margin_top(40)
-        self.loading_box.set_margin_bottom(40)
-        self.loading_box.set_margin_start(40)
-        self.loading_box.set_margin_end(40)
+        self.loading_box.set_margin_top(20)
+        self.loading_box.set_margin_bottom(20)
+        self.loading_box.set_margin_start(20)
+        self.loading_box.set_margin_end(20)
 
         self.loading_spinner = Gtk.Spinner()
-        self.loading_spinner.set_size_request(48, 48)
+        self.loading_spinner.set_size_request(36, 36)
         self.loading_box.append(self.loading_spinner)
 
         self.loading_lbl = Gtk.Label(label="Stopping Autodarts & Opening Camera 1...")
-        self.loading_lbl.add_css_class("title-3")
+        self.loading_lbl.add_css_class("title-4")
         self.loading_box.append(self.loading_lbl)
 
         self.video_overlay.add_overlay(self.loading_box)
 
         # Right: Sidebar containing Zoom Magnifier Card & Sharpness Gauge Card
-        sidebar_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        sidebar_box.set_size_request(240, -1)
+        sidebar_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        sidebar_box.set_size_request(220, -1)
         content_box.append(sidebar_box)
 
         # 1. Zoom Section (Magnifier on Furthest Double Field, locked to 2.5x)
@@ -218,7 +218,7 @@ class CameraFocusView(Adw.NavigationPage):
 
         self.zoom_drawing_area = Gtk.DrawingArea()
         self.zoom_drawing_area.set_draw_func(self._on_draw_zoom)
-        self.zoom_drawing_area.set_size_request(200, 130)
+        self.zoom_drawing_area.set_size_request(160, 90)
         self.zoom_drawing_area.set_hexpand(True)
         self.zoom_drawing_area.set_tooltip_text("Tap to re-align target sweet spot")
         zoom_gesture = Gtk.GestureClick()
@@ -227,7 +227,7 @@ class CameraFocusView(Adw.NavigationPage):
         zoom_frame.set_child(self.zoom_drawing_area)
 
         # 2. Gauges & Controls Card
-        gauge_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        gauge_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         gauge_box.add_css_class("focus-gauge-card")
         gauge_box.set_vexpand(True)
         sidebar_box.append(gauge_box)
@@ -281,7 +281,7 @@ class CameraFocusView(Adw.NavigationPage):
         self.btn_finish = Gtk.Button(label="Finish")
         self.btn_finish.add_css_class("suggested-action")
         self.btn_finish.add_css_class("touch-btn")
-        self.btn_finish.set_size_request(-1, 50)
+        self.btn_finish.set_size_request(-1, 44)
         self.btn_finish.connect("clicked", self._on_finish_clicked)
         btn_box.append(self.btn_finish)
 
@@ -339,8 +339,8 @@ class CameraFocusView(Adw.NavigationPage):
         self.btn_sum_finish = Gtk.Button(label="Finish")
         self.btn_sum_finish.add_css_class("suggested-action")
         self.btn_sum_finish.add_css_class("touch-btn")
-        self.btn_sum_finish.set_size_request(-1, 54)
-        self.btn_sum_finish.set_margin_top(12)
+        self.btn_sum_finish.set_size_request(-1, 44)
+        self.btn_sum_finish.set_margin_top(8)
         self.btn_sum_finish.connect("clicked", self._on_finish_clicked)
         summary_box.append(self.btn_sum_finish)
 

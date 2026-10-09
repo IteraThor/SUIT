@@ -19,38 +19,38 @@ class CameraToolsView(Adw.NavigationPage):
         self.set_child(scrolled)
 
         # Responsive clamp
-        clamp = Adw.Clamp(maximum_size=880, tightening_threshold=660)
-        clamp.set_margin_top(16)
-        clamp.set_margin_bottom(24)
-        clamp.set_margin_start(16)
-        clamp.set_margin_end(16)
+        clamp = Adw.Clamp(maximum_size=820, tightening_threshold=640)
+        clamp.set_margin_top(6)
+        clamp.set_margin_bottom(8)
+        clamp.set_margin_start(10)
+        clamp.set_margin_end(10)
         scrolled.set_child(clamp)
 
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         clamp.set_child(main_box)
 
         # Header description card
-        header_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        header_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         header_card.add_css_class("card")
-        header_card.set_margin_bottom(8)
+        header_card.set_margin_bottom(2)
 
-        inner_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
-        inner_box.set_margin_top(16)
-        inner_box.set_margin_bottom(16)
-        inner_box.set_margin_start(20)
-        inner_box.set_margin_end(20)
+        inner_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        inner_box.set_margin_top(6)
+        inner_box.set_margin_bottom(6)
+        inner_box.set_margin_start(12)
+        inner_box.set_margin_end(12)
 
         icon_hub = Gtk.Image.new_from_icon_name("camera-photo-symbolic")
-        icon_hub.set_pixel_size(48)
+        icon_hub.set_pixel_size(28)
         icon_hub.set_valign(Gtk.Align.CENTER)
         inner_box.append(icon_hub)
 
-        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         text_box.set_valign(Gtk.Align.CENTER)
         text_box.set_hexpand(True)
 
         lbl_title = Gtk.Label(label="Camera Tools", xalign=0)
-        lbl_title.add_css_class("title-2")
+        lbl_title.add_css_class("title-3")
         text_box.append(lbl_title)
 
         lbl_desc = Gtk.Label(label="Optical calibration, sensor exposure, and diagnostic utilities.", xalign=0)
@@ -70,8 +70,8 @@ class CameraToolsView(Adw.NavigationPage):
         self.row_focus.set_title(GLib.markup_escape_text("Focus Calibration"))
         self.row_focus.set_subtitle(GLib.markup_escape_text("Tune optical sharpness, target sweet spots, and audio tone guidance."))
         icon_focus = Gtk.Image.new_from_icon_name("camera-photo-symbolic")
-        icon_focus.set_pixel_size(28)
-        icon_focus.set_margin_end(12)
+        icon_focus.set_pixel_size(24)
+        icon_focus.set_margin_end(10)
         icon_focus.set_valign(Gtk.Align.CENTER)
         self.row_focus.add_prefix(icon_focus)
         self.row_focus.set_activatable(True)
@@ -87,8 +87,8 @@ class CameraToolsView(Adw.NavigationPage):
         self.row_manual.set_title(GLib.markup_escape_text("Manual Controls"))
         self.row_manual.set_subtitle(GLib.markup_escape_text("Adjust exposure, gain, brightness, and sensor parameters."))
         icon_manual = Gtk.Image.new_from_icon_name("preferences-system-symbolic")
-        icon_manual.set_pixel_size(28)
-        icon_manual.set_margin_end(12)
+        icon_manual.set_pixel_size(24)
+        icon_manual.set_margin_end(10)
         icon_manual.set_valign(Gtk.Align.CENTER)
         self.row_manual.add_prefix(icon_manual)
         self.row_manual.set_activatable(True)
@@ -104,8 +104,8 @@ class CameraToolsView(Adw.NavigationPage):
         self.row_optimizer.set_title(GLib.markup_escape_text("Camera Optimizer (CAM-librator)"))
         self.row_optimizer.set_subtitle(GLib.markup_escape_text("Automated multi-camera exposure, gain, and ISP calibration wizard."))
         icon_optimizer = Gtk.Image.new_from_icon_name("applications-science-symbolic")
-        icon_optimizer.set_pixel_size(28)
-        icon_optimizer.set_margin_end(12)
+        icon_optimizer.set_pixel_size(24)
+        icon_optimizer.set_margin_end(10)
         icon_optimizer.set_valign(Gtk.Align.CENTER)
         self.row_optimizer.add_prefix(icon_optimizer)
         self.row_optimizer.set_activatable(True)
@@ -122,6 +122,7 @@ class CameraToolsView(Adw.NavigationPage):
         self.row_optimizer.add_suffix(chevron_optimizer)
         self.pref_group.add(self.row_optimizer)
         self.row_diag = self.row_optimizer
+
 
     def _open_focus(self):
         logger.debug("Opening Focus Calibration tool from Camera Tools hub")

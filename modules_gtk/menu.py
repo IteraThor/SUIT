@@ -19,47 +19,47 @@ class MainMenuView(Adw.NavigationPage):
         scrolled.set_overlay_scrolling(True)
         self.set_child(scrolled)
         
-        # Clamp to center and constrain width on 16" wide screens (up to 1920px)
-        clamp = Adw.Clamp(maximum_size=880, tightening_threshold=660)
-        clamp.set_margin_top(16)
-        clamp.set_margin_bottom(24)
-        clamp.set_margin_start(16)
-        clamp.set_margin_end(16)
+        # Clamp to center and constrain width
+        clamp = Adw.Clamp(maximum_size=820, tightening_threshold=640)
+        clamp.set_margin_top(6)
+        clamp.set_margin_bottom(8)
+        clamp.set_margin_start(10)
+        clamp.set_margin_end(10)
         scrolled.set_child(clamp)
 
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         clamp.set_child(main_box)
 
         # Header Banner Card with Logo
-        banner_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        banner_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         banner_card.add_css_class("card")
-        banner_card.set_margin_bottom(8)
-        
-        banner_inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=18)
-        banner_inner.set_margin_top(16)
-        banner_inner.set_margin_bottom(16)
-        banner_inner.set_margin_start(20)
-        banner_inner.set_margin_end(20)
-        
+        banner_card.set_margin_bottom(2)
+
+        banner_inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        banner_inner.set_margin_top(6)
+        banner_inner.set_margin_bottom(6)
+        banner_inner.set_margin_start(12)
+        banner_inner.set_margin_end(12)
+
         logo_path = self.window.project_dir / "assets" / "icons" / "suit-icon.png"
         if logo_path.exists():
             logo_img = Gtk.Image.new_from_file(str(logo_path))
-            logo_img.set_pixel_size(64)
+            logo_img.set_pixel_size(36)
             logo_img.set_valign(Gtk.Align.CENTER)
             banner_inner.append(logo_img)
 
-        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         text_box.set_valign(Gtk.Align.CENTER)
         text_box.set_hexpand(True)
 
         self.lbl_title = Gtk.Label(label="SUIT for Fedora", xalign=0)
-        self.lbl_title.add_css_class("title-1")
+        self.lbl_title.add_css_class("title-3")
         text_box.append(self.lbl_title)
-        
+
         self.lbl_subtitle = Gtk.Label(label="Setup Utilities by IteraThor for Autodarts", xalign=0)
         self.lbl_subtitle.add_css_class("dim-label")
         text_box.append(self.lbl_subtitle)
-        
+
         banner_inner.append(text_box)
 
         # Community & QR Dialog Button on most right
@@ -69,12 +69,12 @@ class MainMenuView(Adw.NavigationPage):
         self.btn_community.add_css_class("secondary-btn")
         self.btn_community.set_tooltip_text("IteraThor Community, Discord & 3D Print Models")
 
-        btn_comm_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_comm_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         btn_comm_box.set_halign(Gtk.Align.CENTER)
         btn_comm_box.set_valign(Gtk.Align.CENTER)
 
         icon_qr = Gtk.Image.new_from_icon_name("qr-code-symbolic")
-        icon_qr.set_pixel_size(18)
+        icon_qr.set_pixel_size(16)
         btn_comm_box.append(icon_qr)
 
         lbl_comm = Gtk.Label(label="Community")
@@ -93,15 +93,15 @@ class MainMenuView(Adw.NavigationPage):
         main_box.append(self.pref_group)
 
         self.rows = {}
-        
+
         # Native Module Items
         items = [
             ("btn_system", "preferences-system-symbolic", "System Utilities & Tweaks", "Performance, power, and touch tweaks.", self._open_system, True),
             ("btn_autodarts", "darts-symbolic", "Autodarts Setup", "Board pairing, service, and camera telemetry.", self._open_autodarts, True),
-            ("btn_autoglow", "display-brightness-symbolic", "AutoGlow 2 Manager", "WLED dartboard automation and lighting effects.", None, False),
             ("btn_camera_tools", "camera-photo-symbolic", "Camera Tools", "Focus calibration, manual controls, and diagnostics.", self._open_camera_tools, True),
             ("btn_touch", "screen-touch-symbolic", "Screen & Touch Manager", "Display rotation and touch calibration.", self._open_rotation, True),
             ("btn_kiosk", "view-fullscreen-symbolic", "Kiosk Mode", "Fullscreen browser autostart and controls.", self._open_kiosk, True),
+            ("btn_autoglow", "display-brightness-symbolic", "AutoGlow 2 Manager", "WLED dartboard automation and lighting effects.", None, False),
         ]
 
         for item in items:
@@ -112,14 +112,14 @@ class MainMenuView(Adw.NavigationPage):
             row = Adw.ActionRow()
             row.set_title(GLib.markup_escape_text(title_str))
             row.set_subtitle(GLib.markup_escape_text(subtitle_str))
-            
-            # Crisp Native Symbolic Icon (28px for touch)
+
+            # Crisp Native Symbolic Icon (24px for compact touch)
             icon_img = Gtk.Image.new_from_icon_name(icon_name)
-            icon_img.set_pixel_size(28)
-            icon_img.set_margin_end(12)
+            icon_img.set_pixel_size(24)
+            icon_img.set_margin_end(10)
             icon_img.set_valign(Gtk.Align.CENTER)
             row.add_prefix(icon_img)
-            
+
             if is_enabled:
                 row.set_activatable(True)
                 row.connect("activated", lambda r, cb=callback: cb())
@@ -130,40 +130,41 @@ class MainMenuView(Adw.NavigationPage):
             else:
                 row.set_activatable(False)
                 row.set_opacity(0.55)
-                
+
                 lbl_badge = Gtk.Label(label="Coming Soon")
                 lbl_badge.add_css_class("status-pill-coming-soon")
                 lbl_badge.set_valign(Gtk.Align.CENTER)
                 row.add_suffix(lbl_badge)
-            
+
             self.pref_group.add(row)
             self.rows[key] = row
 
         # Footer Actions (Updates)
-        self.update_group = Adw.PreferencesGroup()
-        self.update_group.set_margin_top(12)
+        self.update_group = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.update_group.set_margin_top(4)
         main_box.append(self.update_group)
 
         self.btn_update = Gtk.Button()
         self.btn_update.add_css_class("suggested-action")
         self.btn_update.add_css_class("touch-btn")
-        self.btn_update.set_size_request(-1, 54)
-        self.btn_update.set_margin_top(6)
+        self.btn_update.set_size_request(-1, 38)
+        self.btn_update.set_margin_top(0)
 
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         btn_box.set_halign(Gtk.Align.CENTER)
-        
+
         upd_icon = Gtk.Image.new_from_icon_name("software-update-available-symbolic")
-        upd_icon.set_pixel_size(22)
+        upd_icon.set_pixel_size(18)
         btn_box.append(upd_icon)
-        
+
         lbl_btn = Gtk.Label(label="Check for Updates")
         lbl_btn.add_css_class("heading")
         btn_box.append(lbl_btn)
-        
+
         self.btn_update.set_child(btn_box)
         self.btn_update.connect("clicked", self._on_check_updates)
-        self.update_group.add(self.btn_update)
+        self.update_group.append(self.btn_update)
+
 
     def _open_autodarts(self):
         logger.debug("Navigating to Autodarts view")

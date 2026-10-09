@@ -6,6 +6,7 @@ contrast-to-noise ratio (CNR), and dynamic range utilization.
 
 from __future__ import annotations
 import dataclasses
+import math
 from typing import List, Optional, Tuple
 import cv2
 import numpy as np
@@ -25,6 +26,36 @@ class QualityMetrics:
 
 class QualityEvaluator:
     """Computes objective optical metrics tailored to Autodarts segmentation."""
+
+    @staticmethod
+    def calculate_focus_score(
+        patch: np.ndarray,
+        target_roi: Optional[Tuple[int, int, int, int]] = None,
+    ) -> float:
+        """Compute normalized sharpness score (0–100) tuned for 2170 CMOS sensors on dartboard wires."""
+        if patch is None or patch.size == 0:
+            return 0.0
+
+        h, w = patch.shape[:2]
+        if target_roi:
+            tx, ty, tw, th = target_roi
+            crop = patch[max(0, ty):min(h, ty + th), max(0, tx):min(w, tx + tw)]
+            if crop.size > 0:
+                patch = crop
+
+        gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY) if len(patch.shape) == 3 else patch
+        lap = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+        gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        ten = float(np.mean(gx**2 + gy**2))
+
+        log_lap = math.log10(lap + 1e-6)
+        log_ten = math.log10(ten + 1e-6)
+        norm_lap = np.clip((log_lap - 1.2) / (3.35 - 1.2), 0.0, 1.0)
+        norm_ten = np.clip((log_ten - 2.2) / (4.70 - 2.2), 0.0, 1.0)
+
+        blended = 0.5 * norm_lap + 0.5 * norm_ten
+        return float(np.clip(blended * 100.0, 0.0, 100.0))
 
     @staticmethod
     def calculate_edge_steepness(frame: np.ndarray, wire_mask: np.ndarray) -> float:

@@ -62,7 +62,7 @@ class AutodartsView(Adw.NavigationPage):
         self.terminal.set_mouse_autohide(True)
         self.terminal.set_vexpand(True)
         self.terminal.set_hexpand(True)
-        self.terminal.set_size_request(540, 320)
+        self.terminal.set_size_request(540, 240)
 
         # Dark theme palette (Catppuccin/Libadwaita dark match)
         bg = Gdk.RGBA()

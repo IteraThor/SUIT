@@ -210,7 +210,7 @@ class BoardDetector:
         cam_idx: Optional[int] = None,
         frame_shape: Optional[Tuple[int, int]] = None,
     ) -> Tuple[int, int]:
-        """Locate Bullseye coordinates using concentric red/green geometry or calibration."""
+        """Locate Bullseye coordinates using concentric red/green geometry, color-agnostic clustering, or calibration."""
         if frame is not None:
             h, w = frame.shape[:2]
         elif frame_shape is not None:
@@ -218,46 +218,92 @@ class BoardDetector:
         else:
             h, w = 960, 1280
 
-        # 1. Concentric red/green bullseye in central region of frame
+        # 1. Concentric red/green & color-agnostic bullseye in central region of frame
         if frame is not None and frame.size > 0:
-            roi_y1, roi_y2 = int(0.25 * h), int(0.58 * h)
-            roi_x1, roi_x2 = int(0.32 * w), int(0.68 * w)
+            roi_y1, roi_y2 = int(0.15 * h), int(0.85 * h)
+            roi_x1, roi_x2 = int(0.15 * w), int(0.85 * w)
             crop = frame[roi_y1:roi_y2, roi_x1:roi_x2]
-            hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+            ch, cw = crop.shape[:2]
 
-            mask_red1 = cv2.inRange(hsv, (0, 70, 70), (14, 255, 255))
-            mask_red2 = cv2.inRange(hsv, (166, 70, 70), (180, 255, 255))
-            mask_red = mask_red1 | mask_red2
-            mask_green = cv2.inRange(hsv, (35, 55, 55), (88, 255, 255))
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
+            hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV) if len(crop.shape) == 3 else None
 
-            cnts_red, _ = cv2.findContours(mask_red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cnts_green, _ = cv2.findContours(mask_green, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            accum = np.zeros((ch, cw), dtype=np.float32)
 
-            red_centers = []
-            for c in cnts_red:
-                if 30 < cv2.contourArea(c) < 1500:
-                    M = cv2.moments(c)
-                    if M["m00"] > 0:
-                        red_centers.append((M["m10"] / M["m00"], M["m01"] / M["m00"]))
+            if hsv is not None:
+                mask_red = cv2.inRange(hsv, (0, 55, 55), (14, 255, 255)) | cv2.inRange(hsv, (166, 55, 55), (180, 255, 255))
+                mask_green = cv2.inRange(hsv, (35, 40, 40), (88, 255, 255))
+                cnts_r, _ = cv2.findContours(mask_red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cnts_g, _ = cv2.findContours(mask_green, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-            green_centers = []
-            for c in cnts_green:
-                if 70 < cv2.contourArea(c) < 3500:
-                    M = cv2.moments(c)
-                    if M["m00"] > 0:
-                        green_centers.append((M["m10"] / M["m00"], M["m01"] / M["m00"]))
+                red_pts = []
+                for c in cnts_r:
+                    area = cv2.contourArea(c)
+                    if 20 < area < 2500:
+                        M = cv2.moments(c)
+                        if M["m00"] > 0:
+                            red_pts.append((M["m10"] / M["m00"], M["m01"] / M["m00"], area))
+                green_pts = []
+                for c in cnts_g:
+                    area = cv2.contourArea(c)
+                    if 50 < area < 4500:
+                        M = cv2.moments(c)
+                        if M["m00"] > 0:
+                            green_pts.append((M["m10"] / M["m00"], M["m01"] / M["m00"], area))
 
-            best_bull = None
-            min_dist = 999.0
-            for rx, ry in red_centers:
-                for gx, gy in green_centers:
-                    d = math.hypot(rx - gx, ry - gy)
-                    if d < 15.0 and d < min_dist:
-                        min_dist = d
-                        best_bull = (int(rx + roi_x1), int(ry + roi_y1))
+                for rx, ry, ra in red_pts:
+                    for gx, gy, ga in green_pts:
+                        d = math.hypot(rx - gx, ry - gy)
+                        ratio = ga / (ra + 1e-5)
+                        if d < 12.0 and 1.5 < ratio < 15.0:
+                            bx_c = int((rx + gx) / 2)
+                            by_c = int((ry + gy) / 2)
+                            if 0 <= bx_c < cw and 0 <= by_c < ch:
+                                accum[by_c, bx_c] += 5000.0 / (1.0 + d * 2.0)
 
-            if best_bull:
-                return best_bull
+            # Color-Agnostic Concentric Edge / Grayscale Ring Detector
+            blurred = cv2.GaussianBlur(gray, (5, 5), 1.0)
+            thresh_adapt = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 4)
+            edges = cv2.Canny(blurred, 30, 100)
+
+            valid_cnts = []
+            for bin_img in [thresh_adapt, edges]:
+                cnts, _ = cv2.findContours(bin_img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                for c in cnts:
+                    area = cv2.contourArea(c)
+                    if 20 < area < 4500:
+                        (cx, cy), radius = cv2.minEnclosingCircle(c)
+                        if 3.0 < radius < 40.0:
+                            circle_area = math.pi * (radius ** 2)
+                            circularity = area / (circle_area + 1e-5)
+                            if 0.35 < circularity < 1.1:
+                                M = cv2.moments(c)
+                                if M["m00"] > 0:
+                                    cx_m = M["m10"] / M["m00"]
+                                    cy_m = M["m01"] / M["m00"]
+                                    valid_cnts.append((cx_m, cy_m, area, circularity))
+
+            for i in range(len(valid_cnts)):
+                for j in range(i + 1, len(valid_cnts)):
+                    c1, c2 = valid_cnts[i], valid_cnts[j]
+                    d = math.hypot(c1[0] - c2[0], c1[1] - c2[1])
+                    inner_area = min(c1[2], c2[2])
+                    outer_area = max(c1[2], c2[2])
+                    ratio = outer_area / (inner_area + 1e-5)
+                    if d < 4.5 and 1.8 < ratio < 9.0 and (80 < inner_area < 700) and (450 < outer_area < 3500):
+                        bx_c = int((c1[0] + c2[0]) / 2)
+                        by_c = int((c1[1] + c2[1]) / 2)
+                        if 0 <= bx_c < cw and 0 <= by_c < ch:
+                            accum[by_c, bx_c] += 1500.0 / (1.0 + d * 2.0)
+
+            accum_smooth = cv2.GaussianBlur(accum, (21, 21), 0)
+            y_g, x_g = np.ogrid[:ch, :cw]
+            prior = 1.0 - 0.25 * ((x_g - cw / 2) ** 2 + (y_g - ch / 2) ** 2) / ((cw / 2) ** 2 + (ch / 2) ** 2)
+            accum_smooth *= np.clip(prior, 0.5, 1.0)
+
+            _, max_v, _, max_loc = cv2.minMaxLoc(accum_smooth)
+            if max_v > 50.0:
+                return (int(max_loc[0] + roi_x1), int(max_loc[1] + roi_y1))
 
         # 2. Calibration homography bullseye
         h_mat = self.load_calibration_homography(w, h, dev_node=dev_node, by_path=by_path, cam_idx=cam_idx)
