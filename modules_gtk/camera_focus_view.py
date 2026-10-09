@@ -177,7 +177,9 @@ class CameraFocusView(Adw.NavigationPage):
 
         self.drawing_area = Gtk.DrawingArea()
         self.drawing_area.set_draw_func(self._on_draw_preview)
-        self.drawing_area.set_size_request(520, 400)
+        self.drawing_area.set_size_request(320, 220)
+        self.drawing_area.set_hexpand(True)
+        self.drawing_area.set_vexpand(True)
         self.video_overlay.set_child(self.drawing_area)
 
         # Loading Spinner & Message Overlay
@@ -202,7 +204,7 @@ class CameraFocusView(Adw.NavigationPage):
 
         # Right: Sidebar containing Zoom Magnifier Card & Sharpness Gauge Card
         sidebar_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        sidebar_box.set_size_request(300, -1)
+        sidebar_box.set_size_request(240, -1)
         content_box.append(sidebar_box)
 
         # 1. Zoom Section (Magnifier on Furthest Double Field, locked to 2.5x)
@@ -216,7 +218,7 @@ class CameraFocusView(Adw.NavigationPage):
 
         self.zoom_drawing_area = Gtk.DrawingArea()
         self.zoom_drawing_area.set_draw_func(self._on_draw_zoom)
-        self.zoom_drawing_area.set_size_request(280, 180)
+        self.zoom_drawing_area.set_size_request(200, 130)
         self.zoom_drawing_area.set_hexpand(True)
         self.zoom_drawing_area.set_tooltip_text("Tap to re-align target sweet spot")
         zoom_gesture = Gtk.GestureClick()
