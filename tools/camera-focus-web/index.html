@@ -672,6 +672,8 @@
       let baselineEstablished = false;
       let initialSampleCount = 0;
       let initialAvgScore = 0.0;
+      let initialBaseline = 0.0;
+      let hasCalibrated = false;
 
       // Lifecycle States: "INITIAL" | "IMPROVING" | "PEAK" | "OVERDRIVEN"
       let currentLifecycleState = "INITIAL";
@@ -851,6 +853,8 @@
         baselineEstablished = false;
         initialSampleCount = 0;
         initialAvgScore = 0.0;
+        initialBaseline = 0.0;
+        hasCalibrated = false;
         currentLifecycleState = "INITIAL";
         updateStateUI("INITIAL");
       }
@@ -1009,7 +1013,7 @@
 
         // 2. Relative auto-scaling window calculation (Guaranteed Finite)
         let minVal = Math.min(...validSamples);
-        let maxVal = Math.max(...validSamples, isFinite(peakScore) ? peakScore : 0);
+        let maxVal = Math.max(...validSamples, (hasCalibrated && isFinite(peakScore)) ? peakScore : 0);
         if (!isFinite(minVal)) minVal = 0;
         if (!isFinite(maxVal) || maxVal <= minVal + 1.0) {
           maxVal = minVal + 5.0;
@@ -1027,7 +1031,7 @@
         }
 
         // 3. Draw Peak Recorded Horizontal Ghost-Line
-        if (peakScore > 0 && baselineEstablished && isFinite(peakScore)) {
+        if (hasCalibrated && peakScore > 0 && isFinite(peakScore)) {
           const peakY = valToY(peakScore);
 
           oscCtx.save();
@@ -1111,7 +1115,7 @@
         oscCtx.restore();
 
         // 5. Draw Glowing Triangular Marker at Peak
-        if (peakSampleIndex >= 0 && baselineEstablished && isFinite(peakScore)) {
+        if (hasCalibrated && peakSampleIndex >= 0 && isFinite(peakScore)) {
           const peakRelIndex = peakSampleIndex - (validSamples.length - MAX_WAVE_SAMPLES > 0 ? validSamples.length - MAX_WAVE_SAMPLES : 0);
           if (peakRelIndex >= 0 && peakRelIndex < validSamples.length) {
             const pkX = (startIndex + peakRelIndex) * stepX;
@@ -1182,9 +1186,10 @@
               if (!baselineEstablished) {
                 initialSampleCount++;
                 initialAvgScore += rawScore;
-                if (initialSampleCount >= 8) {
-                  const avg = initialAvgScore / initialSampleCount;
-                  minSessionScore = avg;
+                if (initialSampleCount >= 10) {
+                  initialBaseline = initialAvgScore / initialSampleCount;
+                  peakScore = initialBaseline;
+                  minSessionScore = initialBaseline;
                   baselineEstablished = true;
                 }
               }
@@ -1192,16 +1197,37 @@
               // Evaluate 4 Lifecycle States
               if (!baselineEstablished || waveHistory.length < 5) {
                 updateStateUI("INITIAL");
+              } else if (!hasCalibrated) {
+                // Awaiting user lens rotation before leaving INITIAL state
+                const currentVal = rawScore;
+                const thresholdUp = initialBaseline * 1.06 + 0.8;
+                const thresholdDown = initialBaseline * 0.90 - 0.8;
+
+                if (currentVal > thresholdUp) {
+                  // Significant sharpness improvement detected!
+                  hasCalibrated = true;
+                  peakScore = currentVal;
+                  peakSampleIndex = waveHistory.length - 1;
+                  updateStateUI("IMPROVING");
+                } else if (currentVal < thresholdDown) {
+                  // Turned focus ring the wrong way
+                  hasCalibrated = true;
+                  updateStateUI("OVERDRIVEN");
+                } else {
+                  // Natural baseline noise fluctuation: strictly stay in INITIAL state
+                  updateStateUI("INITIAL");
+                }
               } else {
+                // Active focus calibration tracking
                 const currentVal = rawScore;
                 const scoreDelta = currentVal - (waveHistory[waveHistory.length - 4] || currentVal);
 
                 // Peak Tracking
-                if (currentVal > peakScore) {
+                if (currentVal > peakScore + 0.3) {
                   peakScore = currentVal;
                   peakSampleIndex = waveHistory.length - 1;
                   updateStateUI("IMPROVING");
-                } else if (peakScore > 0 && (peakScore - currentVal) > Math.max(3.5, peakScore * 0.08)) {
+                } else if (peakScore > 0 && (peakScore - currentVal) > Math.max(3.0, peakScore * 0.07)) {
                   updateStateUI("OVERDRIVEN");
                 } else if (Math.abs(currentVal - peakScore) <= Math.max(1.0, peakScore * 0.03)) {
                   updateStateUI("PEAK");
@@ -1346,8 +1372,15 @@
         const clickX = (clientX - rect.left - offsetX) / renderW;
         const clickY = (clientY - rect.top - offsetY) / renderH;
 
-        targetNormX = Math.max(0.05, Math.min(0.95, clickX));
-        targetNormY = Math.max(0.05, Math.min(0.95, clickY));
+        const newNormX = Math.max(0.05, Math.min(0.95, clickX));
+        const newNormY = Math.max(0.05, Math.min(0.95, clickY));
+
+        const dist = Math.hypot(newNormX - targetNormX, newNormY - targetNormY);
+        if (dist > 0.005) {
+          targetNormX = newNormX;
+          targetNormY = newNormY;
+          resetWaveform();
+        }
       }
 
       canvas.addEventListener("mousedown", (e) => {
