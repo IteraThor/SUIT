@@ -32,7 +32,6 @@ from core.cv_utils import (
 from core.diagnostics import HardwareDiagnostics
 from core.metrics import QualityEvaluator
 from core.optimizer import OptimizationResult
-from core.persistence_service import PersistenceService
 from core.systemd_service import SystemdManager
 from core.v4l2_device import V4L2Device
 from core.v4l2_topology import CameraDevice, V4L2Topology
@@ -74,7 +73,6 @@ class CamCalibrationView(Adw.Bin):
         super().__init__()
         self.on_back = on_back_callback
         self.topology = V4L2Topology()
-        self.persistence = PersistenceService()
         self.detector = BoardDetector()
         self.diagnostics = HardwareDiagnostics(self.detector)
 
@@ -136,17 +134,6 @@ class CamCalibrationView(Adw.Bin):
     # =========================================================================
     def _go_to_dashboard(self):
         self._stop_focus_stream()
-        calibrations = self.persistence.load_calibrations()
-        is_enabled = self.persistence.is_calibration_enabled()
-        for cam in self.cameras:
-            try:
-                vdev = V4L2Device(cam.dev_node)
-                if is_enabled and cam.by_path in calibrations:
-                    vdev.apply_settings(calibrations[cam.by_path])
-                else:
-                    vdev.reset_to_defaults()
-            except Exception as e:
-                logger.warning("Failed to restore camera %s on return to dashboard: %s", cam.dev_node, e)
         self.stack.set_visible_child_name("dashboard")
         self.step_dashboard.update_dashboard()
 
