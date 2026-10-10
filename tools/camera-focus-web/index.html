@@ -970,10 +970,10 @@
         }
       }
 
-      // Render Oscilloscope Waveform Curve & Peak Line
+      // Render Oscilloscope Waveform Curve & Peak Line (Bulletproof)
       function renderOscilloscope() {
-        const w = oscCanvas.width;
-        const h = oscCanvas.height;
+        const w = Math.max(10, oscCanvas.width || 348);
+        const h = Math.max(10, oscCanvas.height || 120);
 
         oscCtx.clearRect(0, 0, w, h);
 
@@ -981,7 +981,6 @@
         oscCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
         oscCtx.lineWidth = 1;
 
-        // Horizontal grid lines
         for (let y = 20; y < h; y += 25) {
           oscCtx.beginPath();
           oscCtx.moveTo(0, y);
@@ -989,7 +988,6 @@
           oscCtx.stroke();
         }
 
-        // Vertical grid lines
         for (let x = 30; x < w; x += 40) {
           oscCtx.beginPath();
           oscCtx.moveTo(x, 0);
@@ -997,8 +995,9 @@
           oscCtx.stroke();
         }
 
-        if (waveHistory.length < 2) {
-          // Flat neutral line in Initial State
+        const validSamples = waveHistory.map(v => (isFinite(v) && !isNaN(v) ? Math.max(0, v) : 0));
+
+        if (validSamples.length < 2) {
           oscCtx.strokeStyle = "#475569";
           oscCtx.lineWidth = 2;
           oscCtx.beginPath();
@@ -1008,24 +1007,27 @@
           return;
         }
 
-        // 2. Relative auto-scaling window calculation
-        let minVal = Math.min(...waveHistory);
-        let maxVal = Math.max(...waveHistory, peakScore);
-        if (maxVal - minVal < 2.0) {
-          maxVal = minVal + 5.0; // Prevent division by zero / flatline clipping
+        // 2. Relative auto-scaling window calculation (Guaranteed Finite)
+        let minVal = Math.min(...validSamples);
+        let maxVal = Math.max(...validSamples, isFinite(peakScore) ? peakScore : 0);
+        if (!isFinite(minVal)) minVal = 0;
+        if (!isFinite(maxVal) || maxVal <= minVal + 1.0) {
+          maxVal = minVal + 5.0;
         }
-        const valRange = maxVal - minVal;
+
+        const valRange = Math.max(0.1, maxVal - minVal);
         const paddingBottom = 16;
         const paddingTop = 22;
-        const usableHeight = h - paddingBottom - paddingTop;
+        const usableHeight = Math.max(10, h - paddingBottom - paddingTop);
 
         function valToY(v) {
-          const norm = (v - minVal) / valRange;
-          return h - paddingBottom - norm * usableHeight;
+          const clampedV = isFinite(v) ? v : minVal;
+          const norm = Math.max(0, Math.min(1, (clampedV - minVal) / valRange));
+          return Math.round(h - paddingBottom - norm * usableHeight);
         }
 
         // 3. Draw Peak Recorded Horizontal Ghost-Line
-        if (peakScore > 0 && baselineEstablished) {
+        if (peakScore > 0 && baselineEstablished && isFinite(peakScore)) {
           const peakY = valToY(peakScore);
 
           oscCtx.save();
@@ -1037,7 +1039,6 @@
           oscCtx.lineTo(w, peakY);
           oscCtx.stroke();
 
-          // Text Annotation: "PEAK RECORDED"
           oscCtx.setLineDash([]);
           oscCtx.fillStyle = "rgba(6, 182, 212, 0.9)";
           oscCtx.font = "bold 9px monospace";
@@ -1046,12 +1047,11 @@
           oscCtx.restore();
         }
 
-        // 4. Draw Oscilloscope History Curve (Right = newest, Left = oldest)
-        const stepX = w / (MAX_WAVE_SAMPLES - 1);
-        const startIndex = MAX_WAVE_SAMPLES - waveHistory.length;
+        // 4. Draw Oscilloscope History Curve
+        const stepX = w / Math.max(1, MAX_WAVE_SAMPLES - 1);
+        const startIndex = MAX_WAVE_SAMPLES - validSamples.length;
 
-        // Choose wave color based on current state
-        let waveColor = "#10b981"; // Emerald green
+        let waveColor = "#10b981";
         let glowColor = "rgba(16, 185, 129, 0.4)";
         let fillColor = "rgba(16, 185, 129, 0.12)";
 
@@ -1060,7 +1060,7 @@
           glowColor = "rgba(100, 116, 139, 0.3)";
           fillColor = "rgba(100, 116, 139, 0.08)";
         } else if (currentLifecycleState === "OVERDRIVEN") {
-          waveColor = "#f59e0b"; // Alert Amber
+          waveColor = "#f59e0b";
           glowColor = "rgba(245, 158, 11, 0.5)";
           fillColor = "rgba(245, 158, 11, 0.15)";
         }
@@ -1077,8 +1077,8 @@
         let firstX = 0;
         let firstY = h;
 
-        for (let i = 0; i < waveHistory.length; i++) {
-          const sample = waveHistory[i];
+        for (let i = 0; i < validSamples.length; i++) {
+          const sample = validSamples[i];
           const x = (startIndex + i) * stepX;
           const y = valToY(sample);
 
@@ -1093,23 +1093,27 @@
         oscCtx.stroke();
 
         // Fill subtle gradient under curve
-        const lastX = (startIndex + waveHistory.length - 1) * stepX;
-        const lastY = valToY(waveHistory[waveHistory.length - 1]);
-
-        oscCtx.lineTo(lastX, h);
-        oscCtx.lineTo(firstX, h);
-        oscCtx.closePath();
-        const grad = oscCtx.createLinearGradient(0, paddingTop, 0, h);
-        grad.addColorStop(0, fillColor);
-        grad.addColorStop(1, "rgba(0, 0, 0, 0)");
-        oscCtx.fillStyle = grad;
-        oscCtx.fill();
+        try {
+          const lastX = (startIndex + validSamples.length - 1) * stepX;
+          oscCtx.lineTo(lastX, h);
+          oscCtx.lineTo(firstX, h);
+          oscCtx.closePath();
+          const gradY0 = Math.max(0, paddingTop);
+          const gradY1 = Math.max(1, h);
+          const grad = oscCtx.createLinearGradient(0, gradY0, 0, gradY1);
+          grad.addColorStop(0, fillColor);
+          grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+          oscCtx.fillStyle = grad;
+          oscCtx.fill();
+        } catch (gradErr) {
+          // Graceful fallback if gradient fails
+        }
         oscCtx.restore();
 
-        // 5. Draw Glowing Triangular Marker at the Peak sample on the curve
-        if (peakSampleIndex >= 0 && baselineEstablished) {
-          const peakRelIndex = peakSampleIndex - (waveHistory.length - MAX_WAVE_SAMPLES > 0 ? waveHistory.length - MAX_WAVE_SAMPLES : 0);
-          if (peakRelIndex >= 0 && peakRelIndex < waveHistory.length) {
+        // 5. Draw Glowing Triangular Marker at Peak
+        if (peakSampleIndex >= 0 && baselineEstablished && isFinite(peakScore)) {
+          const peakRelIndex = peakSampleIndex - (validSamples.length - MAX_WAVE_SAMPLES > 0 ? validSamples.length - MAX_WAVE_SAMPLES : 0);
+          if (peakRelIndex >= 0 && peakRelIndex < validSamples.length) {
             const pkX = (startIndex + peakRelIndex) * stepX;
             const pkY = valToY(peakScore);
 
@@ -1118,7 +1122,6 @@
             oscCtx.shadowColor = "rgba(6, 182, 212, 0.9)";
             oscCtx.shadowBlur = 10;
 
-            // Inverted triangle marker
             oscCtx.beginPath();
             oscCtx.moveTo(pkX, pkY - 2);
             oscCtx.lineTo(pkX - 5, pkY - 9);
@@ -1130,124 +1133,123 @@
         }
       }
 
-      // Main Render Loop (Smooth 60 FPS)
+      // Main Render Loop (Protected 60 FPS)
       function processFrame() {
-        if (!isStreaming || video.readyState < 2) {
+        try {
+          if (isStreaming && video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+            const vw = video.videoWidth;
+            const vh = video.videoHeight;
+
+            if (canvas.width !== vw || canvas.height !== vh) {
+              canvas.width = vw;
+              canvas.height = vh;
+              cvCanvas.width = targetBoxSize;
+              cvCanvas.height = targetBoxSize;
+              if (resValueEl) {
+                resValueEl.textContent = `${vw} × ${vh}`;
+              }
+            }
+
+            // 1. Draw raw video feed (Background) at 60 FPS
+            ctx.drawImage(video, 0, 0, vw, vh);
+
+            // Calculate Target ROI bounding box
+            const tx = Math.round(targetNormX * vw);
+            const ty = Math.round(targetNormY * vh);
+            const rx = Math.max(0, Math.min(vw - targetBoxSize, tx - targetBoxSize / 2));
+            const ry = Math.max(0, Math.min(vh - targetBoxSize, ty - targetBoxSize / 2));
+
+            // 2. Throttled CV Focus & Waveform Tracking (~25 FPS)
+            const now = performance.now();
+            if (now - lastAnalysisTime >= 38) {
+              lastAnalysisTime = now;
+              targetCoordsEl.textContent = `${rx}, ${ry}`;
+
+              cvCtx.drawImage(video, rx, ry, targetBoxSize, targetBoxSize, 0, 0, targetBoxSize, targetBoxSize);
+              const patchData = cvCtx.getImageData(0, 0, targetBoxSize, targetBoxSize);
+              const metrics = processPatch(patchData);
+              const rawScore = (metrics && isFinite(metrics.score)) ? metrics.score : 0.0;
+              currentLighting = (metrics && metrics.lightingState) ? metrics.lightingState : "optimal";
+
+              // Add to Oscilloscope waveform history buffer
+              if (waveHistory.length >= MAX_WAVE_SAMPLES) {
+                waveHistory.shift();
+                if (peakSampleIndex > 0) peakSampleIndex--;
+              }
+              waveHistory.push(rawScore);
+
+              // Track baseline vs active movement
+              if (!baselineEstablished) {
+                initialSampleCount++;
+                initialAvgScore += rawScore;
+                if (initialSampleCount >= 8) {
+                  const avg = initialAvgScore / initialSampleCount;
+                  minSessionScore = avg;
+                  baselineEstablished = true;
+                }
+              }
+
+              // Evaluate 4 Lifecycle States
+              if (!baselineEstablished || waveHistory.length < 5) {
+                updateStateUI("INITIAL");
+              } else {
+                const currentVal = rawScore;
+                const scoreDelta = currentVal - (waveHistory[waveHistory.length - 4] || currentVal);
+
+                // Peak Tracking
+                if (currentVal > peakScore) {
+                  peakScore = currentVal;
+                  peakSampleIndex = waveHistory.length - 1;
+                  updateStateUI("IMPROVING");
+                } else if (peakScore > 0 && (peakScore - currentVal) > Math.max(3.5, peakScore * 0.08)) {
+                  updateStateUI("OVERDRIVEN");
+                } else if (Math.abs(currentVal - peakScore) <= Math.max(1.0, peakScore * 0.03)) {
+                  updateStateUI("PEAK");
+                } else if (scoreDelta > 0.4) {
+                  updateStateUI("IMPROVING");
+                }
+              }
+
+              lastRawScore = rawScore;
+
+              // Render Oscilloscope Waveform Canvas
+              renderOscilloscope();
+
+              // Render Loupe Picture-in-Picture directly from processed patch
+              loupeOffCtx.putImageData(patchData, 0, 0);
+              loupeCtx.imageSmoothingEnabled = false;
+              loupeCtx.drawImage(loupeOffscreen, 0, 0, targetBoxSize, targetBoxSize, 0, 0, loupeCanvas.width, loupeCanvas.height);
+
+              // Lighting Pill
+              if (currentLighting === "optimal") {
+                lightingPill.className = "lighting-pill lighting-optimal";
+                lightingPill.textContent = "Optimal";
+              } else if (currentLighting === "dark") {
+                lightingPill.className = "lighting-pill lighting-dark";
+                lightingPill.textContent = "Too Dark";
+              } else {
+                lightingPill.className = "lighting-pill lighting-bright";
+                lightingPill.textContent = "Overexposed";
+              }
+            }
+
+            // 3. Draw Interactive Reticle on Main Canvas
+            drawReticle(ctx, rx, ry, targetBoxSize, targetBoxSize, currentLifecycleState);
+
+            // FPS Calculation
+            frameCount++;
+            if (now - fpsTimer >= 1000) {
+              currentFps = Math.round((frameCount * 1000) / (now - fpsTimer));
+              fpsValueEl.textContent = `${currentFps} FPS`;
+              frameCount = 0;
+              fpsTimer = now;
+            }
+          }
+        } catch (renderError) {
+          console.error("Non-fatal render loop exception:", renderError);
+        } finally {
           requestAnimationFrame(processFrame);
-          return;
         }
-
-        const vw = video.videoWidth;
-        const vh = video.videoHeight;
-
-        if (canvas.width !== vw || canvas.height !== vh) {
-          canvas.width = vw;
-          canvas.height = vh;
-          cvCanvas.width = targetBoxSize;
-          cvCanvas.height = targetBoxSize;
-          if (resValueEl) {
-            resValueEl.textContent = `${vw} × ${vh}`;
-          }
-        }
-
-        // 1. Draw raw video feed (Background) at 60 FPS
-        ctx.drawImage(video, 0, 0, vw, vh);
-
-        // Calculate Target ROI bounding box
-        const tx = Math.round(targetNormX * vw);
-        const ty = Math.round(targetNormY * vh);
-        const rx = Math.max(0, Math.min(vw - targetBoxSize, tx - targetBoxSize / 2));
-        const ry = Math.max(0, Math.min(vh - targetBoxSize, ty - targetBoxSize / 2));
-
-        // 2. Throttled CV Focus & Waveform Tracking (~25 FPS)
-        const now = performance.now();
-        if (now - lastAnalysisTime >= 38) {
-          lastAnalysisTime = now;
-          targetCoordsEl.textContent = `${rx}, ${ry}`;
-
-          cvCtx.drawImage(video, rx, ry, targetBoxSize, targetBoxSize, 0, 0, targetBoxSize, targetBoxSize);
-          const patchData = cvCtx.getImageData(0, 0, targetBoxSize, targetBoxSize);
-          const metrics = processPatch(patchData);
-          const rawScore = metrics.score;
-          currentLighting = metrics.lightingState;
-
-          // Add to Oscilloscope waveform history buffer
-          if (waveHistory.length >= MAX_WAVE_SAMPLES) {
-            waveHistory.shift();
-            if (peakSampleIndex > 0) peakSampleIndex--;
-          }
-          waveHistory.push(rawScore);
-
-          // Track baseline vs active movement
-          if (!baselineEstablished) {
-            initialSampleCount++;
-            initialAvgScore += rawScore;
-            if (initialSampleCount >= 8) {
-              const avg = initialAvgScore / initialSampleCount;
-              minSessionScore = avg;
-              baselineEstablished = true;
-            }
-          }
-
-          // Evaluate 4 Lifecycle States
-          if (!baselineEstablished || waveHistory.length < 5) {
-            updateStateUI("INITIAL");
-          } else {
-            const currentVal = rawScore;
-            const scoreDelta = currentVal - (waveHistory[waveHistory.length - 4] || currentVal);
-
-            // Peak Tracking
-            if (currentVal > peakScore) {
-              peakScore = currentVal;
-              peakSampleIndex = waveHistory.length - 1;
-              updateStateUI("IMPROVING");
-            } else if (peakScore > 0 && (peakScore - currentVal) > Math.max(3.5, peakScore * 0.08)) {
-              // User rotated past peak: Overdriven state
-              updateStateUI("OVERDRIVEN");
-            } else if (Math.abs(currentVal - peakScore) <= Math.max(1.0, peakScore * 0.03)) {
-              // At Peak sweet spot
-              updateStateUI("PEAK");
-            } else if (scoreDelta > 0.4) {
-              updateStateUI("IMPROVING");
-            }
-          }
-
-          lastRawScore = rawScore;
-
-          // Render Oscilloscope Waveform Canvas
-          renderOscilloscope();
-
-          // Render Loupe Picture-in-Picture directly from processed patch
-          loupeOffCtx.putImageData(patchData, 0, 0);
-          loupeCtx.imageSmoothingEnabled = false;
-          loupeCtx.drawImage(loupeOffscreen, 0, 0, targetBoxSize, targetBoxSize, 0, 0, loupeCanvas.width, loupeCanvas.height);
-
-          // Lighting Pill
-          if (currentLighting === "optimal") {
-            lightingPill.className = "lighting-pill lighting-optimal";
-            lightingPill.textContent = "Optimal";
-          } else if (currentLighting === "dark") {
-            lightingPill.className = "lighting-pill lighting-dark";
-            lightingPill.textContent = "Too Dark";
-          } else {
-            lightingPill.className = "lighting-pill lighting-bright";
-            lightingPill.textContent = "Overexposed";
-          }
-        }
-
-        // 3. Draw Interactive Reticle on Main Canvas
-        drawReticle(ctx, rx, ry, targetBoxSize, targetBoxSize, currentLifecycleState);
-
-        // FPS Calculation
-        frameCount++;
-        if (now - fpsTimer >= 1000) {
-          currentFps = Math.round((frameCount * 1000) / (now - fpsTimer));
-          fpsValueEl.textContent = `${currentFps} FPS`;
-          frameCount = 0;
-          fpsTimer = now;
-        }
-
-        requestAnimationFrame(processFrame);
       }
 
       // Draw Focus Target Reticle
