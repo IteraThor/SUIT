@@ -639,11 +639,13 @@
       const cvCanvas = document.createElement("canvas");
       const cvCtx = cvCanvas.getContext("2d", { willReadFrequently: true });
 
-      // Init cameras list
-      async function populateCameras() {
+      // Init or refresh cameras list
+      async function populateCameras(activeDeviceId = null) {
         try {
           const devices = await navigator.mediaDevices.enumerateDevices();
           const videoDevices = devices.filter(d => d.kind === "videoinput");
+          
+          const currentVal = activeDeviceId || cameraSelect.value;
           cameraSelect.innerHTML = "";
 
           if (videoDevices.length === 0) {
@@ -655,77 +657,90 @@
             const opt = document.createElement("option");
             opt.value = dev.deviceId;
             opt.textContent = dev.label || `Camera ${idx + 1}`;
+            if (dev.deviceId === currentVal || (!currentVal && idx === 0)) {
+              opt.selected = true;
+            }
             cameraSelect.appendChild(opt);
           });
+
+          if (currentVal && Array.from(cameraSelect.options).some(o => o.value === currentVal)) {
+            cameraSelect.value = currentVal;
+          }
         } catch (err) {
           console.error("Camera enumeration error:", err);
         }
       }
 
-      // Start video stream with fallback (default max resolution negotiation)
-      async function startStream(deviceId = null) {
+      // Start video stream with robust multi-camera switching
+      async function startStream(targetDeviceId = null) {
+        const deviceId = targetDeviceId || (cameraSelect.value && cameraSelect.value !== "" ? cameraSelect.value : null);
+
+        // 1. Cleanly stop and release existing camera handle
         if (currentStream) {
-          currentStream.getTracks().forEach(track => track.stop());
+          currentStream.getTracks().forEach(track => {
+            track.stop();
+          });
+          currentStream = null;
+          video.srcObject = null;
         }
 
+        // 2. Build constraints with exact deviceId to ensure correct physical camera
         let videoConstraint = {};
+        if (deviceId) {
+          videoConstraint.deviceId = { exact: deviceId };
+        }
+
         if (resSelect.value === "max") {
-          videoConstraint = {
-            width: { ideal: 4096 },
-            height: { ideal: 2160 },
-            frameRate: { ideal: 60 }
-          };
+          videoConstraint.width = { ideal: 3840, min: 640 };
+          videoConstraint.height = { ideal: 2160, min: 480 };
+          videoConstraint.frameRate = { ideal: 60 };
         } else {
           const [w, h] = resSelect.value.split("x").map(Number);
-          videoConstraint = {
-            width: { ideal: w },
-            height: { ideal: h }
-          };
+          videoConstraint.width = { ideal: w };
+          videoConstraint.height = { ideal: h };
         }
-
-        if (deviceId) {
-          videoConstraint.deviceId = { ideal: deviceId };
-        }
-
-        const constraints = {
-          video: videoConstraint,
-          audio: false
-        };
 
         try {
-          currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-          video.srcObject = currentStream;
-          await video.play();
-
-          emptyState.style.display = "none";
-          hudPanel.style.display = "block";
-          loupePanel.style.display = "flex";
-          instructionsHint.style.display = "block";
-          isStreaming = true;
-          resetPeak();
-
-          await populateCameras();
-          if (deviceId) {
-            cameraSelect.value = deviceId;
-          }
-        } catch (err) {
-          console.warn("Retrying camera with generic constraints:", err);
+          currentStream = await navigator.mediaDevices.getUserMedia({
+            video: videoConstraint,
+            audio: false
+          });
+        } catch (primaryErr) {
+          console.warn("Primary constraints failed, falling back to camera without resolution lock:", primaryErr);
           try {
-            currentStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-            video.srcObject = currentStream;
-            await video.play();
-            emptyState.style.display = "none";
-            hudPanel.style.display = "block";
-            loupePanel.style.display = "flex";
-            instructionsHint.style.display = "block";
-            isStreaming = true;
-            resetPeak();
-            await populateCameras();
-          } catch (finalErr) {
-            console.error("Failed to start camera:", finalErr);
-            alert("Could not access camera: " + finalErr.message);
+            // Fallback: keep the exact deviceId but drop resolution constraints
+            currentStream = await navigator.mediaDevices.getUserMedia({
+              video: deviceId ? { deviceId: { exact: deviceId } } : true,
+              audio: false
+            });
+          } catch (fallbackErr) {
+            console.warn("Exact deviceId failed, attempting generic camera access:", fallbackErr);
+            try {
+              currentStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            } catch (finalErr) {
+              console.error("Fatal camera access error:", finalErr);
+              alert("Could not access camera: " + finalErr.message);
+              return;
+            }
           }
         }
+
+        video.srcObject = currentStream;
+        await video.play();
+
+        emptyState.style.display = "none";
+        hudPanel.style.display = "block";
+        loupePanel.style.display = "flex";
+        instructionsHint.style.display = "block";
+        isStreaming = true;
+        resetPeak();
+
+        // Get actual active device ID from stream
+        const track = currentStream.getVideoTracks()[0];
+        const settings = track ? track.getSettings() : {};
+        const activeId = settings.deviceId || deviceId;
+
+        await populateCameras(activeId);
       }
 
       // Reset Peak Focus Score
