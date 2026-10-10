@@ -751,6 +751,19 @@
         await populateCameras(activeId);
       }
 
+      // Preallocated typed buffers to prevent GC stutter
+      const patchSize = targetBoxSize;
+      const patchPixels = patchSize * patchSize;
+      const staticGray = new Float32Array(patchPixels);
+      const loupeOffscreen = document.createElement("canvas");
+      loupeOffscreen.width = patchSize;
+      loupeOffscreen.height = patchSize;
+      const loupeOffCtx = loupeOffscreen.getContext("2d", { willReadFrequently: true });
+
+      let lastAnalysisTime = 0;
+      let currentTrend = "stable";
+      let currentLighting = "optimal";
+
       // Reset Peak Focus Score
       function resetPeak() {
         peakScore = 0.0;
@@ -761,19 +774,18 @@
         peakTick.style.left = "0%";
       }
 
-      // Normalized focus sharpness calculation (Laplacian + Sobel)
-      function computeFocusMetrics(imageData) {
-        const { data, width, height } = imageData;
-        const totalPixels = width * height;
-
-        const gray = new Float32Array(totalPixels);
+      // High-performance single-pass Focus Metrics & Peaking on 90x90 patch
+      function processPatch(imgData) {
+        const data = imgData.data;
         let lumSum = 0;
+
+        // 1. Fast grayscale conversion into preallocated static buffer
         for (let i = 0, g = 0; i < data.length; i += 4, g++) {
           const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-          gray[g] = luma;
+          staticGray[g] = luma;
           lumSum += luma;
         }
-        const meanLuma = lumSum / totalPixels;
+        const meanLuma = lumSum / patchPixels;
 
         let lightingState = "optimal";
         if (meanLuma < 40) lightingState = "dark";
@@ -783,38 +795,49 @@
           return { score: 0.0, meanLuma, lightingState };
         }
 
+        // 2. Compute Laplacian, Sobel, and Peaking in a single tight loop
         let lapSum = 0;
         let lapSqSum = 0;
         let sobelSum = 0;
         let count = 0;
+        const sqPeakingThreshold = 140 * 140; // 19,600 (eliminates Math.hypot/Math.sqrt)
 
-        for (let y = 1; y < height - 1; y++) {
-          const rowPrev = (y - 1) * width;
-          const rowCurr = y * width;
-          const rowNext = (y + 1) * width;
+        for (let y = 1; y < patchSize - 1; y++) {
+          const rowPrev = (y - 1) * patchSize;
+          const rowCurr = y * patchSize;
+          const rowNext = (y + 1) * patchSize;
 
-          for (let x = 1; x < width - 1; x++) {
+          for (let x = 1; x < patchSize - 1; x++) {
             const lapVal =
-              gray[rowPrev + x] +
-              gray[rowCurr + (x - 1)] -
-              4 * gray[rowCurr + x] +
-              gray[rowCurr + (x + 1)] +
-              gray[rowNext + x];
+              staticGray[rowPrev + x] +
+              staticGray[rowCurr + (x - 1)] -
+              4 * staticGray[rowCurr + x] +
+              staticGray[rowCurr + (x + 1)] +
+              staticGray[rowNext + x];
 
             lapSum += lapVal;
             lapSqSum += lapVal * lapVal;
 
             const gx =
-              -gray[rowPrev + (x - 1)] + gray[rowPrev + (x + 1)] -
-              2 * gray[rowCurr + (x - 1)] + 2 * gray[rowCurr + (x + 1)] -
-              gray[rowNext + (x - 1)] + gray[rowNext + (x + 1)];
+              -staticGray[rowPrev + (x - 1)] + staticGray[rowPrev + (x + 1)] -
+              2 * staticGray[rowCurr + (x - 1)] + 2 * staticGray[rowCurr + (x + 1)] -
+              staticGray[rowNext + (x - 1)] + staticGray[rowNext + (x + 1)];
 
             const gy =
-              -gray[rowPrev + (x - 1)] - 2 * gray[rowPrev + x] - gray[rowPrev + (x + 1)] +
-              gray[rowNext + (x - 1)] + 2 * gray[rowNext + x] + gray[rowNext + (x + 1)];
+              -staticGray[rowPrev + (x - 1)] - 2 * staticGray[rowPrev + x] - staticGray[rowPrev + (x + 1)] +
+              staticGray[rowNext + (x - 1)] + 2 * staticGray[rowNext + x] + staticGray[rowNext + (x + 1)];
 
-            sobelSum += (gx * gx + gy * gy);
+            const gradSq = gx * gx + gy * gy;
+            sobelSum += gradSq;
             count++;
+
+            // Highlight wire edges on the patch directly
+            if (peakingEnabled && gradSq > sqPeakingThreshold) {
+              const idx = (rowCurr + x) * 4;
+              data[idx] = (data[idx] * 3 + 16 * 7) >> 3;      // R
+              data[idx + 1] = (data[idx + 1] * 3 + 245 * 7) >> 3; // G (Neon Emerald)
+              data[idx + 2] = (data[idx + 2] * 3 + 130 * 7) >> 3; // B
+            }
           }
         }
 
@@ -839,53 +862,7 @@
         };
       }
 
-      // Draw Focus Peaking in Loupe
-      function renderLoupe(sourceVideo, rx, ry, rw, rh) {
-        const lw = loupeCanvas.width;
-        const lh = loupeCanvas.height;
-
-        loupeCtx.drawImage(sourceVideo, rx, ry, rw, rh, 0, 0, lw, lh);
-
-        if (!peakingEnabled) return;
-
-        const imgData = loupeCtx.getImageData(0, 0, lw, lh);
-        const pixels = imgData.data;
-        const gray = new Float32Array(lw * lh);
-
-        for (let i = 0, g = 0; i < pixels.length; i += 4, g++) {
-          gray[g] = 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
-        }
-
-        const threshold = 140;
-        for (let y = 1; y < lh - 1; y++) {
-          const rowPrev = (y - 1) * lw;
-          const rowCurr = y * lw;
-          const rowNext = (y + 1) * lw;
-
-          for (let x = 1; x < lw - 1; x++) {
-            const gx =
-              -gray[rowPrev + (x - 1)] + gray[rowPrev + (x + 1)] -
-              2 * gray[rowCurr + (x - 1)] + 2 * gray[rowCurr + (x + 1)] -
-              gray[rowNext + (x - 1)] + gray[rowNext + (x + 1)];
-
-            const gy =
-              -gray[rowPrev + (x - 1)] - 2 * gray[rowPrev + x] - gray[rowPrev + (x + 1)] +
-              gray[rowNext + (x - 1)] + 2 * gray[rowNext + x] + gray[rowNext + (x + 1)];
-
-            const mag = Math.hypot(gx, gy);
-            if (mag > threshold) {
-              const idx = (rowCurr + x) * 4;
-              pixels[idx] = Math.round(pixels[idx] * 0.25 + 16 * 0.75);      // R
-              pixels[idx + 1] = Math.round(pixels[idx + 1] * 0.25 + 245 * 0.75); // G
-              pixels[idx + 2] = Math.round(pixels[idx + 2] * 0.25 + 130 * 0.75); // B
-            }
-          }
-        }
-
-        loupeCtx.putImageData(imgData, 0, 0);
-      }
-
-      // Main Render & Analysis Loop
+      // Main Render & Analysis Loop (Smooth 60 FPS)
       function processFrame() {
         if (!isStreaming || video.readyState < 2) {
           requestAnimationFrame(processFrame);
@@ -905,7 +882,7 @@
           }
         }
 
-        // 1. Draw raw video feed
+        // 1. Draw raw video feed at native display refresh rate (60 FPS)
         ctx.drawImage(video, 0, 0, vw, vh);
 
         // Calculate Target ROI bounding box
@@ -914,73 +891,79 @@
         const rx = Math.max(0, Math.min(vw - targetBoxSize, tx - targetBoxSize / 2));
         const ry = Math.max(0, Math.min(vh - targetBoxSize, ty - targetBoxSize / 2));
 
-        targetCoordsEl.textContent = `${rx}, ${ry}`;
+        // 2. Throttled CV Analysis (~25-30 FPS) to eliminate CPU lag and battery drain
+        const now = performance.now();
+        if (now - lastAnalysisTime >= 35) {
+          lastAnalysisTime = now;
+          targetCoordsEl.textContent = `${rx}, ${ry}`;
 
-        // 2. Perform Focus Analysis on ROI
-        cvCtx.drawImage(video, rx, ry, targetBoxSize, targetBoxSize, 0, 0, targetBoxSize, targetBoxSize);
-        const patchData = cvCtx.getImageData(0, 0, targetBoxSize, targetBoxSize);
-        const metrics = computeFocusMetrics(patchData);
-        rawScore = metrics.score;
+          cvCtx.drawImage(video, rx, ry, targetBoxSize, targetBoxSize, 0, 0, targetBoxSize, targetBoxSize);
+          const patchData = cvCtx.getImageData(0, 0, targetBoxSize, targetBoxSize);
+          const metrics = processPatch(patchData);
+          rawScore = metrics.score;
+          currentLighting = metrics.lightingState;
 
-        // Smooth score display
-        smoothScore = smoothScore === 0 ? rawScore : smoothScore * 0.7 + rawScore * 0.3;
+          // Smooth score display
+          smoothScore = smoothScore === 0 ? rawScore : smoothScore * 0.65 + rawScore * 0.35;
 
-        // Update Peak
-        if (rawScore > peakScore) {
-          peakScore = rawScore;
+          // Update Peak
+          if (rawScore > peakScore) {
+            peakScore = rawScore;
+          }
+
+          // Trend calculation
+          if (rawScore > lastScore + 0.8) {
+            currentTrend = "sharpening";
+          } else if (peakScore > 10 && (peakScore - rawScore) >= 3.5) {
+            currentTrend = "overshot";
+          } else if (rawScore < lastScore - 0.8) {
+            currentTrend = "overshot";
+          } else {
+            currentTrend = "stable";
+          }
+          lastScore = rawScore;
+
+          // Render Loupe Picture-in-Picture directly from processed patch
+          loupeOffCtx.putImageData(patchData, 0, 0);
+          loupeCtx.imageSmoothingEnabled = false; // Crisp 1:1 pixel magnifier
+          loupeCtx.drawImage(loupeOffscreen, 0, 0, targetBoxSize, targetBoxSize, 0, 0, loupeCanvas.width, loupeCanvas.height);
+
+          // Update UI stats
+          scoreValueEl.textContent = smoothScore.toFixed(1);
+          scoreBarFill.style.width = `${smoothScore}%`;
+          peakValueEl.textContent = peakScore.toFixed(1);
+          peakTick.style.left = `${peakScore}%`;
+
+          // Update Trend Pill
+          if (currentTrend === "sharpening") {
+            trendBadge.className = "trend-badge trend-sharpening";
+            trendBadge.textContent = "▲ Sharpening";
+          } else if (currentTrend === "overshot") {
+            trendBadge.className = "trend-badge trend-overshot";
+            trendBadge.textContent = "▼ Overshot";
+          } else {
+            trendBadge.className = "trend-badge trend-stable";
+            trendBadge.textContent = "● Stable";
+          }
+
+          // Lighting Pill
+          if (currentLighting === "optimal") {
+            lightingPill.className = "lighting-pill lighting-optimal";
+            lightingPill.textContent = "Optimal";
+          } else if (currentLighting === "dark") {
+            lightingPill.className = "lighting-pill lighting-dark";
+            lightingPill.textContent = "Too Dark";
+          } else {
+            lightingPill.className = "lighting-pill lighting-bright";
+            lightingPill.textContent = "Overexposed";
+          }
         }
 
-        // Trend calculation
-        let trend = "stable";
-        if (rawScore > lastScore + 0.8) {
-          trend = "sharpening";
-        } else if (peakScore > 10 && (peakScore - rawScore) >= 3.5) {
-          trend = "overshot";
-        } else if (rawScore < lastScore - 0.8) {
-          trend = "overshot";
-        }
-        lastScore = rawScore;
-
-        // 3. Render Loupe (Picture-in-Picture)
-        renderLoupe(video, rx, ry, targetBoxSize, targetBoxSize);
-
-        // 4. Draw Interactive Reticle on Main Canvas
-        drawReticle(ctx, rx, ry, targetBoxSize, targetBoxSize, trend);
-
-        // 5. Update UI Stats
-        scoreValueEl.textContent = smoothScore.toFixed(1);
-        scoreBarFill.style.width = `${smoothScore}%`;
-
-        peakValueEl.textContent = peakScore.toFixed(1);
-        peakTick.style.left = `${peakScore}%`;
-
-        // Update Trend Pill
-        if (trend === "sharpening") {
-          trendBadge.className = "trend-badge trend-sharpening";
-          trendBadge.textContent = "▲ Sharpening";
-        } else if (trend === "overshot") {
-          trendBadge.className = "trend-badge trend-overshot";
-          trendBadge.textContent = "▼ Overshot";
-        } else {
-          trendBadge.className = "trend-badge trend-stable";
-          trendBadge.textContent = "● Stable";
-        }
-
-        // Lighting Pill
-        if (metrics.lightingState === "optimal") {
-          lightingPill.className = "lighting-pill lighting-optimal";
-          lightingPill.textContent = "Optimal";
-        } else if (metrics.lightingState === "dark") {
-          lightingPill.className = "lighting-pill lighting-dark";
-          lightingPill.textContent = "Too Dark";
-        } else {
-          lightingPill.className = "lighting-pill lighting-bright";
-          lightingPill.textContent = "Overexposed";
-        }
+        // 3. Draw Interactive Reticle on Main Canvas (smooth at 60 FPS)
+        drawReticle(ctx, rx, ry, targetBoxSize, targetBoxSize, currentTrend);
 
         // FPS Calculation
         frameCount++;
-        const now = performance.now();
         if (now - fpsTimer >= 1000) {
           currentFps = Math.round((frameCount * 1000) / (now - fpsTimer));
           fpsValueEl.textContent = `${currentFps} FPS`;
