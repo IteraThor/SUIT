@@ -570,7 +570,7 @@
         }
       }
 
-      // Discover and populate resolutions supported by the active camera
+      // Discover and populate resolutions supported by the active camera (>= 800x600)
       async function updateSupportedResolutions(track, requestedRes = null) {
         if (!track) return;
 
@@ -582,14 +582,9 @@
           [1280, 1024],
           [1280, 960],
           [1280, 720],
-          [1000, 1000],
           [1024, 768],
-          [848, 480],
-          [800, 600],
-          [640, 480],
-          [640, 360],
-          [352, 288],
-          [320, 240]
+          [1000, 1000],
+          [800, 600]
         ];
 
         const supported = [];
@@ -601,7 +596,7 @@
           try {
             await track.applyConstraints({ width: { exact: w }, height: { exact: h } });
             const s = track.getSettings();
-            if (s && s.width === w && s.height === h) {
+            if (s && s.width === w && s.height === h && w >= 800 && h >= 600) {
               supported.push(`${w}x${h}`);
             }
           } catch (_) {
@@ -609,7 +604,9 @@
           }
         }
 
-        const validResolutions = supported.length > 0 ? supported : (currentW && currentH ? [`${currentW}x${currentH}`] : ["1280x960"]);
+        const validResolutions = supported.length > 0 
+          ? supported 
+          : (currentW >= 800 && currentH >= 600 ? [`${currentW}x${currentH}`] : ["1280x960"]);
 
         // Select resolution (prefer requested, or 1280x960 if supported, or first available)
         let chosen = validResolutions[0];
