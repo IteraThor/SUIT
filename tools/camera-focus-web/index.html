@@ -1,0 +1,1013 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dartboard Camera Focus Tool</title>
+  <style>
+    :root {
+      --bg-main: #0a0c10;
+      --bg-card: rgba(18, 22, 32, 0.85);
+      --bg-card-hover: rgba(28, 34, 48, 0.95);
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent-green: #10b981;
+      --accent-green-glow: rgba(16, 185, 129, 0.25);
+      --accent-cyan: #06b6d4;
+      --accent-amber: #f59e0b;
+      --accent-amber-glow: rgba(245, 158, 11, 0.25);
+      --accent-red: #ef4444;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* Header Bar */
+    header {
+      background: rgba(15, 18, 26, 0.95);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      z-index: 50;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-icon {
+      width: 22px;
+      height: 22px;
+      fill: none;
+      stroke: var(--accent-cyan);
+      stroke-width: 2;
+    }
+
+    .brand-title {
+      font-size: 1.05rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .brand-badge {
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 9999px;
+      background: rgba(6, 182, 212, 0.15);
+      color: var(--accent-cyan);
+      border: 1px solid rgba(6, 182, 212, 0.3);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .controls-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    select, button {
+      background: var(--bg-card);
+      color: var(--text-main);
+      border: 1px solid var(--border-subtle);
+      padding: 7px 12px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    select:hover, button:hover {
+      background: var(--bg-card-hover);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    select:focus, button:focus {
+      outline: none;
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.2);
+    }
+
+    button.btn-active {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--accent-green);
+      border-color: var(--accent-green);
+    }
+
+    button.btn-danger:hover {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--accent-red);
+      border-color: var(--accent-red);
+    }
+
+    /* Main Container */
+    main {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      background: radial-gradient(circle at center, #111420 0%, #080a0e 100%);
+    }
+
+    .viewport-wrapper {
+      position: relative;
+      max-width: 100%;
+      max-height: calc(100vh - 110px);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border-subtle);
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    video {
+      display: none;
+    }
+
+    canvas#viewCanvas {
+      display: block;
+      max-width: 100%;
+      max-height: calc(100vh - 110px);
+      object-fit: contain;
+      cursor: crosshair;
+    }
+
+    /* HUD Overlay Top-Left */
+    .hud-panel {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      background: var(--bg-card);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 16px;
+      min-width: 240px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      pointer-events: auto;
+      z-index: 20;
+    }
+
+    .hud-title {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .score-container {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .score-value {
+      font-family: var(--font-mono);
+      font-size: 2.8rem;
+      font-weight: 700;
+      line-height: 1;
+      color: #fff;
+    }
+
+    .score-max {
+      font-size: 1rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .score-bar-wrapper {
+      position: relative;
+      height: 8px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
+      overflow: visible;
+      margin-bottom: 12px;
+    }
+
+    .score-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent-cyan), var(--accent-green));
+      border-radius: 4px;
+      transition: width 0.08s ease-out;
+    }
+
+    .peak-indicator-tick {
+      position: absolute;
+      top: -3px;
+      width: 3px;
+      height: 14px;
+      background: #ffffff;
+      border-radius: 2px;
+      box-shadow: 0 0 6px rgba(255, 255, 255, 0.8);
+      transform: translateX(-50%);
+      left: 0%;
+      transition: left 0.1s ease-out;
+    }
+
+    .hud-stats-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      margin-top: 6px;
+    }
+
+    .hud-stat-label {
+      color: var(--text-muted);
+    }
+
+    .hud-stat-val {
+      font-family: var(--font-mono);
+      font-weight: 600;
+    }
+
+    .trend-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .trend-sharpening {
+      background: var(--accent-green-glow);
+      color: var(--accent-green);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .trend-overshot {
+      background: var(--accent-amber-glow);
+      color: var(--accent-amber);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    .trend-stable {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-muted);
+      border: 1px solid var(--border-subtle);
+    }
+
+    /* Magnifier Picture-in-Picture */
+    .loupe-panel {
+      position: absolute;
+      bottom: 16px;
+      right: 16px;
+      background: var(--bg-card);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 12px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .loupe-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    canvas#loupeCanvas {
+      width: 220px;
+      height: 220px;
+      border-radius: 8px;
+      background: #000;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      display: block;
+    }
+
+    .loupe-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.75rem;
+    }
+
+    .lighting-pill {
+      font-size: 0.7rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 500;
+    }
+
+    .lighting-optimal {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--accent-green);
+    }
+
+    .lighting-dark {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--accent-red);
+    }
+
+    .lighting-bright {
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--accent-amber);
+    }
+
+    /* Initial state overlay */
+    .empty-state {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: var(--bg-main);
+      z-index: 30;
+      padding: 24px;
+      text-align: center;
+    }
+
+    .empty-state-btn {
+      background: var(--accent-green);
+      color: #000;
+      font-weight: 600;
+      font-size: 1rem;
+      padding: 12px 24px;
+      border-radius: 10px;
+      border: none;
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.4);
+    }
+
+    .empty-state-btn:hover {
+      background: #059669;
+      color: #fff;
+    }
+
+    .instructions-hint {
+      position: absolute;
+      bottom: 16px;
+      left: 16px;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    @media (max-width: 768px) {
+      .hud-panel {
+        top: 8px;
+        left: 8px;
+        padding: 12px;
+        min-width: 180px;
+      }
+      .score-value {
+        font-size: 2.2rem;
+      }
+      .loupe-panel {
+        bottom: 8px;
+        right: 8px;
+        padding: 8px;
+      }
+      canvas#loupeCanvas {
+        width: 140px;
+        height: 140px;
+      }
+      .instructions-hint {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <svg class="brand-icon" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" />
+        <circle cx="12" cy="12" r="3" />
+        <line x1="12" y1="1" x2="12" y2="5" />
+        <line x1="12" y1="19" x2="12" y2="23" />
+        <line x1="1" y1="12" x2="5" y2="12" />
+        <line x1="19" y1="12" x2="23" y2="12" />
+      </svg>
+      <span class="brand-title">
+        Dart Focus
+        <span class="brand-badge">Standalone</span>
+      </span>
+    </div>
+
+    <div class="controls-group">
+      <select id="cameraSelect" title="Select Video Device">
+        <option value="">Detecting cameras...</option>
+      </select>
+
+      <select id="resSelect" title="Select Target Resolution">
+        <option value="1280x960" selected>1280 × 960 (4:3)</option>
+        <option value="1920x1080">1920 × 1080 (16:9)</option>
+        <option value="1280x720">1280 × 720 (16:9)</option>
+        <option value="640x480">640 × 480 (4:3)</option>
+      </select>
+
+      <button id="btnPeaking" class="btn-active" title="Toggle Green Focus Peaking Overlay">
+        <span>Peaking: ON</span>
+      </button>
+
+      <button id="btnResetPeak" class="btn-danger" title="Reset Peak Sharpness Record">
+        <span>Reset Peak</span>
+      </button>
+
+      <button id="btnFullscreen" title="Toggle Fullscreen">
+        <span>⛶</span>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <div class="viewport-wrapper" id="viewportWrapper">
+      <video id="webcamVideo" playsinline autoplay muted></video>
+      <canvas id="viewCanvas"></canvas>
+
+      <!-- HUD Overlay -->
+      <div class="hud-panel" id="hudPanel">
+        <div class="hud-title">
+          <span>Focus Sharpness</span>
+          <span id="trendBadge" class="trend-badge trend-stable">● Stable</span>
+        </div>
+
+        <div class="score-container">
+          <div class="score-value" id="scoreValue">0.0</div>
+          <div class="score-max">/ 100</div>
+        </div>
+
+        <div class="score-bar-wrapper">
+          <div class="score-bar-fill" id="scoreBarFill"></div>
+          <div class="peak-indicator-tick" id="peakTick" title="Peak Score"></div>
+        </div>
+
+        <div class="hud-stats-row">
+          <span class="hud-stat-label">Peak Latch</span>
+          <span class="hud-stat-val" id="peakValue" style="color: var(--accent-cyan)">0.0</span>
+        </div>
+        <div class="hud-stats-row">
+          <span class="hud-stat-label">Frame Rate</span>
+          <span class="hud-stat-val" id="fpsValue">0 FPS</span>
+        </div>
+      </div>
+
+      <!-- Picture-in-Picture Magnifier Loupe -->
+      <div class="loupe-panel" id="loupePanel">
+        <div class="loupe-header">
+          <span>2.5× Loupe</span>
+          <span id="lightingPill" class="lighting-pill lighting-optimal">Optimal</span>
+        </div>
+        <canvas id="loupeCanvas" width="220" height="220"></canvas>
+        <div class="loupe-footer">
+          <span style="color: var(--text-muted); font-size: 0.7rem;">Furthest Double / Target</span>
+          <span id="targetCoords" style="font-family: var(--font-mono); color: var(--text-muted); font-size: 0.7rem;">0, 0</span>
+        </div>
+      </div>
+
+      <!-- Draggable Instructions -->
+      <div class="instructions-hint">
+        💡 Click or drag the reticle to reposition the focus sweet spot
+      </div>
+
+      <!-- Permission / Start Prompt -->
+      <div class="empty-state" id="emptyState">
+        <h2>Dartboard Optical Focus Calibrator</h2>
+        <p style="color: var(--text-muted); max-width: 420px; font-size: 0.9rem; line-height: 1.5;">
+          Connect your USB dartboard camera, grant camera permissions, and rotate the lens barrel until the sharpness metric peaks.
+        </p>
+        <button class="empty-state-btn" id="btnStartCamera">Start Camera</button>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    (function () {
+      // Elements
+      const video = document.getElementById("webcamVideo");
+      const canvas = document.getElementById("viewCanvas");
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const loupeCanvas = document.getElementById("loupeCanvas");
+      const loupeCtx = loupeCanvas.getContext("2d");
+
+      const cameraSelect = document.getElementById("cameraSelect");
+      const resSelect = document.getElementById("resSelect");
+      const btnPeaking = document.getElementById("btnPeaking");
+      const btnResetPeak = document.getElementById("btnResetPeak");
+      const btnFullscreen = document.getElementById("btnFullscreen");
+      const btnStartCamera = document.getElementById("btnStartCamera");
+      const emptyState = document.getElementById("emptyState");
+
+      const scoreValueEl = document.getElementById("scoreValue");
+      const scoreBarFill = document.getElementById("scoreBarFill");
+      const peakTick = document.getElementById("peakTick");
+      const peakValueEl = document.getElementById("peakValue");
+      const trendBadge = document.getElementById("trendBadge");
+      const fpsValueEl = document.getElementById("fpsValue");
+      const lightingPill = document.getElementById("lightingPill");
+      const targetCoordsEl = document.getElementById("targetCoords");
+
+      // State
+      let currentStream = null;
+      let isStreaming = false;
+      let peakingEnabled = true;
+
+      let score = 0.0;
+      let peakScore = 0.0;
+      let lastScore = 0.0;
+
+      // Target ROI in normalized coordinates (0.0 to 1.0)
+      let targetNormX = 0.5;
+      let targetNormY = 0.28;
+      const targetBoxSize = 90; // Pixels in native video resolution
+
+      let isDragging = false;
+      let frameCount = 0;
+      let currentFps = 0;
+      let fpsTimer = performance.now();
+
+      // Offscreen canvas for fast CV analysis
+      const cvCanvas = document.createElement("canvas");
+      const cvCtx = cvCanvas.getContext("2d", { willReadFrequently: true });
+
+      // Init cameras list
+      async function populateCameras() {
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const videoDevices = devices.filter(d => d.kind === "videoinput");
+          cameraSelect.innerHTML = "";
+
+          if (videoDevices.length === 0) {
+            cameraSelect.innerHTML = '<option value="">No cameras detected</option>';
+            return;
+          }
+
+          videoDevices.forEach((dev, idx) => {
+            const opt = document.createElement("option");
+            opt.value = dev.deviceId;
+            opt.textContent = dev.label || `Camera ${idx + 1}`;
+            cameraSelect.appendChild(opt);
+          });
+        } catch (err) {
+          console.error("Camera enumeration error:", err);
+        }
+      }
+
+      // Start video stream
+      async function startStream(deviceId = null) {
+        if (currentStream) {
+          currentStream.getTracks().forEach(track => track.stop());
+        }
+
+        const [w, h] = resSelect.value.split("x").map(Number);
+        const constraints = {
+          video: {
+            width: { ideal: w },
+            height: { ideal: h }
+          },
+          audio: false
+        };
+
+        if (deviceId) {
+          constraints.video.deviceId = { exact: deviceId };
+        }
+
+        try {
+          currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+          video.srcObject = currentStream;
+          await video.play();
+
+          emptyState.style.display = "none";
+          isStreaming = true;
+          resetPeak();
+
+          await populateCameras();
+          if (deviceId) {
+            cameraSelect.value = deviceId;
+          }
+        } catch (err) {
+          console.error("Failed to start camera:", err);
+          alert("Could not access camera: " + err.message);
+        }
+      }
+
+      // Reset Peak Focus Score
+      function resetPeak() {
+        peakScore = 0.0;
+        lastScore = 0.0;
+        peakValueEl.textContent = "0.0";
+        peakTick.style.left = "0%";
+      }
+
+      // Laplacian + Sobel normalized focus sharpness calculation
+      function computeFocusMetrics(imageData) {
+        const { data, width, height } = imageData;
+        const totalPixels = width * height;
+
+        // Grayscale conversion
+        const gray = new Float32Array(totalPixels);
+        let lumSum = 0;
+        for (let i = 0, g = 0; i < data.length; i += 4, g++) {
+          const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+          gray[g] = luma;
+          lumSum += luma;
+        }
+        const meanLuma = lumSum / totalPixels;
+
+        // Lighting check
+        let lightingState = "optimal";
+        if (meanLuma < 40) lightingState = "dark";
+        else if (meanLuma > 190) lightingState = "bright";
+
+        if (lightingState !== "optimal") {
+          return { score: 0.0, meanLuma, lightingState };
+        }
+
+        // 3x3 Laplacian & Sobel operators
+        let lapSum = 0;
+        let lapSqSum = 0;
+        let sobelSum = 0;
+        let count = 0;
+
+        for (let y = 1; y < height - 1; y++) {
+          const rowPrev = (y - 1) * width;
+          const rowCurr = y * width;
+          const rowNext = (y + 1) * width;
+
+          for (let x = 1; x < width - 1; x++) {
+            // Laplacian: [0, 1, 0, 1, -4, 1, 0, 1, 0]
+            const lapVal =
+              gray[rowPrev + x] +
+              gray[rowCurr + (x - 1)] -
+              4 * gray[rowCurr + x] +
+              gray[rowCurr + (x + 1)] +
+              gray[rowNext + x];
+
+            lapSum += lapVal;
+            lapSqSum += lapVal * lapVal;
+
+            // Sobel Gx and Gy
+            const gx =
+              -gray[rowPrev + (x - 1)] + gray[rowPrev + (x + 1)] -
+              2 * gray[rowCurr + (x - 1)] + 2 * gray[rowCurr + (x + 1)] -
+              gray[rowNext + (x - 1)] + gray[rowNext + (x + 1)];
+
+            const gy =
+              -gray[rowPrev + (x - 1)] - 2 * gray[rowPrev + x] - gray[rowPrev + (x + 1)] +
+              gray[rowNext + (x - 1)] + 2 * gray[rowNext + x] + gray[rowNext + (x + 1)];
+
+            sobelSum += (gx * gx + gy * gy);
+            count++;
+          }
+        }
+
+        if (count === 0) return { score: 0.0, meanLuma, lightingState };
+
+        const lapVar = Math.max(0, (lapSqSum / count) - (lapSum / count) ** 2);
+        const tenengrad = sobelSum / count;
+
+        const logLap = Math.log10(lapVar + 1e-6);
+        const logTen = Math.log10(tenengrad + 1e-6);
+
+        const normLap = Math.min(Math.max((logLap - 1.2) / (3.35 - 1.2), 0.0), 1.0);
+        const normTen = Math.min(Math.max((logTen - 2.2) / (4.70 - 2.2), 0.0), 1.0);
+
+        const rawScore = (0.5 * normLap + 0.5 * normTen) * 100.0;
+        const finalScore = Math.min(Math.max(rawScore, 0.0), 100.0);
+
+        return {
+          score: finalScore,
+          meanLuma,
+          lightingState
+        };
+      }
+
+      // Draw Focus Peaking Overlay in Loupe
+      function renderLoupe(sourceVideo, rx, ry, rw, rh) {
+        const lw = loupeCanvas.width;
+        const lh = loupeCanvas.height;
+
+        // Draw zoomed crop to loupe canvas
+        loupeCtx.drawImage(sourceVideo, rx, ry, rw, rh, 0, 0, lw, lh);
+
+        if (!peakingEnabled) return;
+
+        const imgData = loupeCtx.getImageData(0, 0, lw, lh);
+        const pixels = imgData.data;
+        const gray = new Float32Array(lw * lh);
+
+        for (let i = 0, g = 0; i < pixels.length; i += 4, g++) {
+          gray[g] = 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+        }
+
+        // Apply edge detection threshold and highlight sharp edges in neon green
+        const threshold = 180;
+        for (let y = 1; y < lh - 1; y++) {
+          const rowPrev = (y - 1) * lw;
+          const rowCurr = y * lw;
+          const rowNext = (y + 1) * lw;
+
+          for (let x = 1; x < lw - 1; x++) {
+            const gx =
+              -gray[rowPrev + (x - 1)] + gray[rowPrev + (x + 1)] -
+              2 * gray[rowCurr + (x - 1)] + 2 * gray[rowCurr + (x + 1)] -
+              gray[rowNext + (x - 1)] + gray[rowNext + (x + 1)];
+
+            const gy =
+              -gray[rowPrev + (x - 1)] - 2 * gray[rowPrev + x] - gray[rowPrev + (x + 1)] +
+              gray[rowNext + (x - 1)] + 2 * gray[rowNext + x] + gray[rowNext + (x + 1)];
+
+            const mag = Math.hypot(gx, gy);
+            if (mag > threshold) {
+              const idx = (rowCurr + x) * 4;
+              pixels[idx] = Math.round(pixels[idx] * 0.3 + 16 * 0.7);      // R
+              pixels[idx + 1] = Math.round(pixels[idx + 1] * 0.3 + 245 * 0.7); // G
+              pixels[idx + 2] = Math.round(pixels[idx + 2] * 0.3 + 130 * 0.7); // B
+            }
+          }
+        }
+
+        loupeCtx.putImageData(imgData, 0, 0);
+      }
+
+      // Main Render & Analysis Loop
+      function processFrame() {
+        if (!isStreaming || video.readyState < 2) {
+          requestAnimationFrame(processFrame);
+          return;
+        }
+
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+
+        if (canvas.width !== vw || canvas.height !== vh) {
+          canvas.width = vw;
+          canvas.height = vh;
+          cvCanvas.width = targetBoxSize;
+          cvCanvas.height = targetBoxSize;
+        }
+
+        // 1. Draw raw video feed
+        ctx.drawImage(video, 0, 0, vw, vh);
+
+        // Calculate Target ROI bounding box
+        const tx = Math.round(targetNormX * vw);
+        const ty = Math.round(targetNormY * vh);
+        const rx = Math.max(0, Math.min(vw - targetBoxSize, tx - targetBoxSize / 2));
+        const ry = Math.max(0, Math.min(vh - targetBoxSize, ty - targetBoxSize / 2));
+
+        targetCoordsEl.textContent = `${rx}, ${ry}`;
+
+        // 2. Perform Focus Analysis on ROI
+        cvCtx.drawImage(video, rx, ry, targetBoxSize, targetBoxSize, 0, 0, targetBoxSize, targetBoxSize);
+        const patchData = cvCtx.getImageData(0, 0, targetBoxSize, targetBoxSize);
+        const metrics = computeFocusMetrics(patchData);
+        score = metrics.score;
+
+        // Update Peak
+        if (score > peakScore) {
+          peakScore = score;
+        }
+
+        // Trend calculation
+        let trend = "stable";
+        if (score > lastScore + 0.8) {
+          trend = "sharpening";
+        } else if (peakScore > 10 && (peakScore - score) >= 3.5) {
+          trend = "overshot";
+        } else if (score < lastScore - 0.8) {
+          trend = "overshot";
+        }
+        lastScore = score;
+
+        // 3. Render Loupe (Picture-in-Picture)
+        renderLoupe(video, rx, ry, targetBoxSize, targetBoxSize);
+
+        // 4. Draw Interactive Reticle on Main Canvas
+        drawReticle(ctx, rx, ry, targetBoxSize, targetBoxSize, trend);
+
+        // 5. Update UI Stats
+        scoreValueEl.textContent = score.toFixed(1);
+        scoreBarFill.style.width = `${score}%`;
+
+        peakValueEl.textContent = peakScore.toFixed(1);
+        peakTick.style.left = `${peakScore}%`;
+
+        // Update Trend Pill
+        if (trend === "sharpening") {
+          trendBadge.className = "trend-badge trend-sharpening";
+          trendBadge.textContent = "▲ Sharpening";
+        } else if (trend === "overshot") {
+          trendBadge.className = "trend-badge trend-overshot";
+          trendBadge.textContent = "▼ Overshot";
+        } else {
+          trendBadge.className = "trend-badge trend-stable";
+          trendBadge.textContent = "● Stable";
+        }
+
+        // Lighting Pill
+        if (metrics.lightingState === "optimal") {
+          lightingPill.className = "lighting-pill lighting-optimal";
+          lightingPill.textContent = "Optimal";
+        } else if (metrics.lightingState === "dark") {
+          lightingPill.className = "lighting-pill lighting-dark";
+          lightingPill.textContent = "Too Dark";
+        } else {
+          lightingPill.className = "lighting-pill lighting-bright";
+          lightingPill.textContent = "Overexposed";
+        }
+
+        // FPS Calculation
+        frameCount++;
+        const now = performance.now();
+        if (now - fpsTimer >= 1000) {
+          currentFps = Math.round((frameCount * 1000) / (now - fpsTimer));
+          fpsValueEl.textContent = `${currentFps} FPS`;
+          frameCount = 0;
+          fpsTimer = now;
+        }
+
+        requestAnimationFrame(processFrame);
+      }
+
+      // Draw Focus Target Reticle
+      function drawReticle(context, x, y, w, h, trend) {
+        context.save();
+
+        let color = "#38bdf8"; // Cyan default
+        if (trend === "sharpening") color = "#10b981"; // Green
+        else if (trend === "overshot") color = "#f59e0b"; // Amber
+
+        context.strokeStyle = color;
+        context.lineWidth = 2;
+        context.shadowColor = "rgba(0, 0, 0, 0.8)";
+        context.shadowBlur = 6;
+
+        // Corner brackets
+        const cornerSize = 14;
+
+        // Top-Left
+        context.beginPath();
+        context.moveTo(x, y + cornerSize);
+        context.lineTo(x, y);
+        context.lineTo(x + cornerSize, y);
+        context.stroke();
+
+        // Top-Right
+        context.beginPath();
+        context.moveTo(x + w - cornerSize, y);
+        context.lineTo(x + w);
+        context.lineTo(x + w, y + cornerSize);
+        context.stroke();
+
+        // Bottom-Left
+        context.beginPath();
+        context.moveTo(x, y + h - cornerSize);
+        context.lineTo(x, y + h);
+        context.lineTo(x + cornerSize, y + h);
+        context.stroke();
+
+        // Bottom-Right
+        context.beginPath();
+        context.moveTo(x + w - cornerSize, y + h);
+        context.lineTo(x + w, y + h);
+        context.lineTo(x + w, y + h - cornerSize);
+        context.stroke();
+
+        // Center Crosshair
+        const cx = x + w / 2;
+        const cy = y + h / 2;
+        context.beginPath();
+        context.arc(cx, cy, 3, 0, 2 * Math.PI);
+        context.fillStyle = color;
+        context.fill();
+
+        context.restore();
+      }
+
+      // Handle Reticle Dragging & Clicking
+      function handlePointerMove(e) {
+        if (!isDragging) return;
+        const rect = canvas.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+        const normX = (clientX - rect.left) / rect.width;
+        const normY = (clientY - rect.top) / rect.height;
+
+        targetNormX = Math.max(0.05, Math.min(0.95, normX));
+        targetNormY = Math.max(0.05, Math.min(0.95, normY));
+      }
+
+      canvas.addEventListener("mousedown", (e) => {
+        isDragging = true;
+        handlePointerMove(e);
+      });
+
+      window.addEventListener("mousemove", handlePointerMove);
+      window.addEventListener("mouseup", () => { isDragging = false; });
+
+      canvas.addEventListener("touchstart", (e) => {
+        isDragging = true;
+        handlePointerMove(e);
+      }, { passive: true });
+
+      window.addEventListener("touchmove", handlePointerMove, { passive: true });
+      window.addEventListener("touchend", () => { isDragging = false; });
+
+      // Event Listeners
+      btnStartCamera.addEventListener("click", () => startStream());
+
+      cameraSelect.addEventListener("change", () => {
+        if (cameraSelect.value) {
+          startStream(cameraSelect.value);
+        }
+      });
+
+      resSelect.addEventListener("change", () => {
+        if (isStreaming) {
+          startStream(cameraSelect.value || null);
+        }
+      });
+
+      btnResetPeak.addEventListener("click", resetPeak);
+
+      btnPeaking.addEventListener("click", () => {
+        peakingEnabled = !peakingEnabled;
+        btnPeaking.classList.toggle("btn-active", peakingEnabled);
+        btnPeaking.querySelector("span").textContent = peakingEnabled ? "Peaking: ON" : "Peaking: OFF";
+      });
+
+      btnFullscreen.addEventListener("click", () => {
+        const wrapper = document.getElementById("viewportWrapper");
+        if (!document.fullscreenElement) {
+          wrapper.requestFullscreen().catch(err => console.error(err));
+        } else {
+          document.exitFullscreen();
+        }
+      });
+
+      // Populate camera list on page load
+      if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+        populateCameras();
+      }
+
+      // Start animation loop
+      requestAnimationFrame(processFrame);
+    })();
+  </script>
+</body>
+</html>
