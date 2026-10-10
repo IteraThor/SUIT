@@ -532,12 +532,8 @@
         <option value="">Detecting cameras...</option>
       </select>
 
-      <select id="resSelect" title="Select Target Resolution">
-        <option value="1280x960" selected>1280 × 960 (Autodarts Native 4:3)</option>
-        <option value="1920x1080">1920 × 1080 (1080p FHD)</option>
-        <option value="1280x720">1280 × 720 (720p HD)</option>
-        <option value="max">Max Possible (Force 2K/4K)</option>
-        <option value="640x480">640 × 480 (Low Res)</option>
+      <select id="resSelect" title="Select Resolution">
+        <option value="1280x960">1280x960</option>
       </select>
 
       <button id="btnPeaking" class="btn-active" title="Toggle Green Focus Peaking Overlay">
@@ -739,9 +735,90 @@
         }
       }
 
+      // Discover and populate resolutions supported by the active camera
+      async function updateSupportedResolutions(track, requestedRes = null) {
+        if (!track) return;
+
+        const candidateResolutions = [
+          [3840, 2160],
+          [2560, 1440],
+          [1920, 1080],
+          [1600, 1200],
+          [1280, 1024],
+          [1280, 960],
+          [1280, 720],
+          [1000, 1000],
+          [1024, 768],
+          [848, 480],
+          [800, 600],
+          [640, 480],
+          [640, 360],
+          [352, 288],
+          [320, 240]
+        ];
+
+        const supported = [];
+        const initialSettings = track.getSettings() || {};
+        const currentW = initialSettings.width;
+        const currentH = initialSettings.height;
+
+        for (const [w, h] of candidateResolutions) {
+          try {
+            await track.applyConstraints({ width: { exact: w }, height: { exact: h } });
+            const s = track.getSettings();
+            if (s && s.width === w && s.height === h) {
+              supported.push(`${w}x${h}`);
+            }
+          } catch (_) {
+            // Resolution not supported by hardware/driver
+          }
+        }
+
+        const validResolutions = supported.length > 0 ? supported : (currentW && currentH ? [`${currentW}x${currentH}`] : ["1280x960"]);
+
+        // Select resolution (prefer requested, or 1280x960 if supported, or first available)
+        let chosen = validResolutions[0];
+        if (requestedRes && validResolutions.includes(requestedRes)) {
+          chosen = requestedRes;
+        } else if (validResolutions.includes("1280x960")) {
+          chosen = "1280x960";
+        }
+
+        resSelect.innerHTML = "";
+        validResolutions.forEach((resStr) => {
+          const opt = document.createElement("option");
+          opt.value = resStr;
+          opt.textContent = resStr;
+          if (resStr === chosen) {
+            opt.selected = true;
+          }
+          resSelect.appendChild(opt);
+        });
+
+        const [tw, th] = chosen.split("x").map(Number);
+        try {
+          await track.applyConstraints({ width: { exact: tw }, height: { exact: th } });
+        } catch (_) {
+          try {
+            await track.applyConstraints({ width: { ideal: tw }, height: { ideal: th } });
+          } catch (_) {}
+        }
+      }
+
       // Start video stream with robust hardware release and multi-tier fallback
-      async function startStream(targetDeviceId = null) {
+      async function startStream(targetDeviceId = null, targetResolution = null) {
         const deviceId = targetDeviceId || (cameraSelect.value && cameraSelect.value !== "" ? cameraSelect.value : null);
+        const chosenRes = targetResolution || resSelect.value || "1280x960";
+        let widthIdeal = 1280;
+        let heightIdeal = 960;
+
+        if (chosenRes && chosenRes.includes("x")) {
+          const [w, h] = chosenRes.split("x").map(Number);
+          if (!isNaN(w) && !isNaN(h)) {
+            widthIdeal = w;
+            heightIdeal = h;
+          }
+        }
 
         // 1. Cleanly stop old tracks and pause briefly for OS driver handle release
         if (currentStream) {
@@ -753,28 +830,9 @@
           await new Promise(r => setTimeout(r, 80));
         }
 
-        // 2. Build ideal constraints (avoid strict min that crashes unsupported cameras)
-        let widthIdeal = 1280;
-        let heightIdeal = 960;
-
-        if (resSelect.value === "1920x1080") {
-          widthIdeal = 1920;
-          heightIdeal = 1080;
-        } else if (resSelect.value === "1280x720") {
-          widthIdeal = 1280;
-          heightIdeal = 720;
-        } else if (resSelect.value === "640x480") {
-          widthIdeal = 640;
-          heightIdeal = 480;
-        } else if (resSelect.value === "max") {
-          widthIdeal = 3840;
-          heightIdeal = 2160;
-        }
-
         // Tiered attempts to ensure the camera ALWAYS starts
         const attemptConfigs = [];
 
-        // Attempt 1: Exact device with requested ideal resolution
         if (deviceId) {
           attemptConfigs.push({
             video: {
@@ -784,12 +842,10 @@
             },
             audio: false
           });
-          // Attempt 2: Exact device without resolution constraints
           attemptConfigs.push({
             video: { deviceId: { exact: deviceId } },
             audio: false
           });
-          // Attempt 3: Ideal device
           attemptConfigs.push({
             video: { deviceId: { ideal: deviceId } },
             audio: false
@@ -844,6 +900,7 @@
         const activeId = settings.deviceId || deviceId;
 
         await populateCameras(activeId);
+        await updateSupportedResolutions(track, chosenRes);
       }
 
       // Reset Oscilloscope Waveform & Peak
@@ -1430,9 +1487,19 @@
         }
       });
 
-      resSelect.addEventListener("change", () => {
-        if (isStreaming) {
-          startStream(cameraSelect.value || null);
+      resSelect.addEventListener("change", async () => {
+        if (!isStreaming || !currentStream) return;
+        const track = currentStream.getVideoTracks()[0];
+        const chosen = resSelect.value;
+        if (!track || !chosen) return;
+
+        const [w, h] = chosen.split("x").map(Number);
+        try {
+          await track.applyConstraints({ width: { exact: w }, height: { exact: h } });
+          resetWaveform();
+        } catch (err) {
+          console.warn("Direct applyConstraints failed on resolution change, restarting stream:", err);
+          await startStream(cameraSelect.value || null, chosen);
         }
       });
 
