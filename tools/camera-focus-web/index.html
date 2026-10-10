@@ -662,18 +662,21 @@
       let isStreaming = false;
       let peakingEnabled = true;
 
-      // Oscilloscope History Buffer (100 samples)
+      // Oscilloscope History Buffer (100 samples @ 100ms = 10s timeline window)
       const MAX_WAVE_SAMPLES = 100;
       const waveHistory = [];
       let peakScore = 0.0;
       let minSessionScore = Infinity;
       let peakSampleIndex = -1;
       let lastRawScore = 0.0;
+      let smoothedScore = 0.0;
       let baselineEstablished = false;
       let initialSampleCount = 0;
       let initialAvgScore = 0.0;
       let initialBaseline = 0.0;
       let hasCalibrated = false;
+      let lastWaveSampleTime = 0;
+      const WAVE_SAMPLE_INTERVAL_MS = 100; // 10 samples/sec (calm, readable waveform scrolling)
 
       // Lifecycle States: "INITIAL" | "IMPROVING" | "PEAK" | "OVERDRIVEN"
       let currentLifecycleState = "INITIAL";
@@ -850,11 +853,13 @@
         minSessionScore = Infinity;
         peakSampleIndex = -1;
         lastRawScore = 0.0;
+        smoothedScore = 0.0;
         baselineEstablished = false;
         initialSampleCount = 0;
         initialAvgScore = 0.0;
         initialBaseline = 0.0;
         hasCalibrated = false;
+        lastWaveSampleTime = 0;
         currentLifecycleState = "INITIAL";
         updateStateUI("INITIAL");
       }
@@ -1163,9 +1168,9 @@
             const rx = Math.max(0, Math.min(vw - targetBoxSize, tx - targetBoxSize / 2));
             const ry = Math.max(0, Math.min(vh - targetBoxSize, ty - targetBoxSize / 2));
 
-            // 2. Throttled CV Focus & Waveform Tracking (~25 FPS)
+            // 2. Throttled CV Focus & Loupe (~30 FPS)
             const now = performance.now();
-            if (now - lastAnalysisTime >= 38) {
+            if (now - lastAnalysisTime >= 33) {
               lastAnalysisTime = now;
               targetCoordsEl.textContent = `${rx}, ${ry}`;
 
@@ -1175,71 +1180,78 @@
               const rawScore = (metrics && isFinite(metrics.score)) ? metrics.score : 0.0;
               currentLighting = (metrics && metrics.lightingState) ? metrics.lightingState : "optimal";
 
-              // Add to Oscilloscope waveform history buffer
-              if (waveHistory.length >= MAX_WAVE_SAMPLES) {
-                waveHistory.shift();
-                if (peakSampleIndex > 0) peakSampleIndex--;
-              }
-              waveHistory.push(rawScore);
+              // Light exponential moving average to filter out single-frame camera sensor jitter
+              smoothedScore = smoothedScore === 0 ? rawScore : (smoothedScore * 0.65 + rawScore * 0.35);
 
-              // Track baseline vs active movement
-              if (!baselineEstablished) {
-                initialSampleCount++;
-                initialAvgScore += rawScore;
-                if (initialSampleCount >= 10) {
-                  initialBaseline = initialAvgScore / initialSampleCount;
-                  peakScore = initialBaseline;
-                  minSessionScore = initialBaseline;
-                  baselineEstablished = true;
+              // 3. Human-paced Oscilloscope Waveform Sampling (100ms = 10 samples/sec, 10s history)
+              if (now - lastWaveSampleTime >= WAVE_SAMPLE_INTERVAL_MS) {
+                lastWaveSampleTime = now;
+
+                if (waveHistory.length >= MAX_WAVE_SAMPLES) {
+                  waveHistory.shift();
+                  if (peakSampleIndex > 0) peakSampleIndex--;
                 }
-              }
+                waveHistory.push(smoothedScore);
 
-              // Evaluate 4 Lifecycle States
-              if (!baselineEstablished || waveHistory.length < 5) {
-                updateStateUI("INITIAL");
-              } else if (!hasCalibrated) {
-                // Awaiting user lens rotation before leaving INITIAL state
-                const currentVal = rawScore;
-                const thresholdUp = initialBaseline * 1.06 + 0.8;
-                const thresholdDown = initialBaseline * 0.90 - 0.8;
+                // Track baseline vs active movement (first 8 samples = ~800ms)
+                if (!baselineEstablished) {
+                  initialSampleCount++;
+                  initialAvgScore += smoothedScore;
+                  if (initialSampleCount >= 8) {
+                    initialBaseline = initialAvgScore / initialSampleCount;
+                    peakScore = initialBaseline;
+                    minSessionScore = initialBaseline;
+                    baselineEstablished = true;
+                  }
+                }
 
-                if (currentVal > thresholdUp) {
-                  // Significant sharpness improvement detected!
-                  hasCalibrated = true;
-                  peakScore = currentVal;
-                  peakSampleIndex = waveHistory.length - 1;
-                  updateStateUI("IMPROVING");
-                } else if (currentVal < thresholdDown) {
-                  // Turned focus ring the wrong way
-                  hasCalibrated = true;
-                  updateStateUI("OVERDRIVEN");
-                } else {
-                  // Natural baseline noise fluctuation: strictly stay in INITIAL state
+                // Evaluate 4 Lifecycle States
+                if (!baselineEstablished || waveHistory.length < 4) {
                   updateStateUI("INITIAL");
-                }
-              } else {
-                // Active focus calibration tracking
-                const currentVal = rawScore;
-                const scoreDelta = currentVal - (waveHistory[waveHistory.length - 4] || currentVal);
+                } else if (!hasCalibrated) {
+                  // Awaiting user lens rotation before leaving INITIAL state
+                  const currentVal = smoothedScore;
+                  const thresholdUp = initialBaseline * 1.05 + 0.8;
+                  const thresholdDown = initialBaseline * 0.90 - 0.8;
 
-                // Peak Tracking
-                if (currentVal > peakScore + 0.3) {
-                  peakScore = currentVal;
-                  peakSampleIndex = waveHistory.length - 1;
-                  updateStateUI("IMPROVING");
-                } else if (peakScore > 0 && (peakScore - currentVal) > Math.max(3.0, peakScore * 0.07)) {
-                  updateStateUI("OVERDRIVEN");
-                } else if (Math.abs(currentVal - peakScore) <= Math.max(1.0, peakScore * 0.03)) {
-                  updateStateUI("PEAK");
-                } else if (scoreDelta > 0.4) {
-                  updateStateUI("IMPROVING");
+                  if (currentVal > thresholdUp) {
+                    // Significant sharpness improvement detected!
+                    hasCalibrated = true;
+                    peakScore = currentVal;
+                    peakSampleIndex = waveHistory.length - 1;
+                    updateStateUI("IMPROVING");
+                  } else if (currentVal < thresholdDown) {
+                    // Turned focus ring the wrong way
+                    hasCalibrated = true;
+                    updateStateUI("OVERDRIVEN");
+                  } else {
+                    // Natural baseline noise fluctuation: strictly stay in INITIAL state
+                    updateStateUI("INITIAL");
+                  }
+                } else {
+                  // Active focus calibration tracking
+                  const currentVal = smoothedScore;
+                  const scoreDelta = currentVal - (waveHistory[waveHistory.length - 3] || currentVal);
+
+                  // Peak Tracking
+                  if (currentVal > peakScore + 0.25) {
+                    peakScore = currentVal;
+                    peakSampleIndex = waveHistory.length - 1;
+                    updateStateUI("IMPROVING");
+                  } else if (peakScore > 0 && (peakScore - currentVal) > Math.max(2.5, peakScore * 0.06)) {
+                    updateStateUI("OVERDRIVEN");
+                  } else if (Math.abs(currentVal - peakScore) <= Math.max(1.0, peakScore * 0.03)) {
+                    updateStateUI("PEAK");
+                  } else if (scoreDelta > 0.3) {
+                    updateStateUI("IMPROVING");
+                  }
                 }
+
+                lastRawScore = smoothedScore;
+
+                // Render Oscilloscope Waveform Canvas
+                renderOscilloscope();
               }
-
-              lastRawScore = rawScore;
-
-              // Render Oscilloscope Waveform Canvas
-              renderOscilloscope();
 
               // Render Loupe Picture-in-Picture directly from processed patch
               loupeOffCtx.putImageData(patchData, 0, 0);
