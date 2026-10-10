@@ -257,21 +257,23 @@
       top: 24px;
       left: 50%;
       transform: translateX(-50%);
-      background: rgba(15, 23, 42, 0.88);
-      backdrop-filter: blur(12px);
+      background: rgba(15, 23, 42, 0.92);
+      backdrop-filter: blur(14px);
       color: #38bdf8;
-      border: 1px solid rgba(56, 189, 248, 0.3);
-      padding: 10px 22px;
-      border-radius: 10px;
-      font-size: 0.84rem;
-      font-weight: 700;
-      letter-spacing: 0.04em;
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      padding: 12px 24px;
+      border-radius: 12px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
       display: none;
       align-items: center;
-      gap: 10px;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      justify-content: center;
+      text-align: center;
+      max-width: 90%;
+      line-height: 1.45;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
       z-index: 35;
-      text-transform: uppercase;
     }
 
     /* Magnifier Loupe Picture-in-Picture */
@@ -414,7 +416,7 @@
 
       <!-- Initial Call to Action Banner -->
       <div class="initial-cta-banner" id="initialCta">
-        <span>⟳ Rotate Focus Ring to Initialize</span>
+        <span>Select desired focus point by clicking on it<br><small style="opacity: 0.85; font-size: 0.82rem; font-weight: 500;">(Recommended: center of the furthest double field, or center of T20)</small></span>
       </div>
 
       <!-- OSCILLOSCOPE WAVEFORM HUD OVERLAY -->
@@ -488,6 +490,7 @@
       // State
       let currentStream = null;
       let isStreaming = false;
+      let hasSelectedFocusPoint = false;
       let peakingEnabled = true;
 
       // Oscilloscope History Buffer (100 samples @ 100ms = 10s timeline window)
@@ -722,9 +725,11 @@
         await video.play();
 
         emptyState.style.display = "none";
-        oscilloscopeHud.style.display = "flex";
-        loupePanel.style.display = "flex";
         isStreaming = true;
+        hasSelectedFocusPoint = false;
+        oscilloscopeHud.style.display = "none";
+        loupePanel.style.display = "none";
+        initialCta.style.display = "flex";
         frameCount = 0;
         fpsTimer = performance.now();
         resetWaveform();
@@ -1034,6 +1039,24 @@
             // 1. Draw raw video feed (Background) at 60 FPS
             ctx.drawImage(video, 0, 0, vw, vh);
 
+            // FPS Calculation (Updated every 500ms for fast, accurate response)
+            const now = performance.now();
+            frameCount++;
+            const fpsElapsed = now - fpsTimer;
+            if (fpsElapsed >= 500) {
+              currentFps = Math.round((frameCount * 1000) / fpsElapsed);
+              if (fpsValueEl) {
+                fpsValueEl.textContent = `${currentFps} FPS`;
+              }
+              frameCount = 0;
+              fpsTimer = now;
+            }
+
+            // Only run focus tracking and loupe once the user selects a target focus point
+            if (!hasSelectedFocusPoint) {
+              return;
+            }
+
             // Calculate Target ROI bounding box
             const tx = Math.round(targetNormX * vw);
             const ty = Math.round(targetNormY * vh);
@@ -1041,7 +1064,6 @@
             const ry = Math.max(0, Math.min(vh - targetBoxSize, ty - targetBoxSize / 2));
 
             // 2. Throttled CV Focus & Loupe (~30 FPS)
-            const now = performance.now();
             if (now - lastAnalysisTime >= 33) {
               lastAnalysisTime = now;
 
@@ -1146,18 +1168,6 @@
 
             // 3. Draw Interactive Reticle on Main Canvas
             drawReticle(ctx, rx, ry, targetBoxSize, targetBoxSize, currentLifecycleState);
-
-            // FPS Calculation (Updated every 500ms for fast, accurate response)
-            frameCount++;
-            const fpsElapsed = now - fpsTimer;
-            if (fpsElapsed >= 500) {
-              currentFps = Math.round((frameCount * 1000) / fpsElapsed);
-              if (fpsValueEl) {
-                fpsValueEl.textContent = `${currentFps} FPS`;
-              }
-              frameCount = 0;
-              fpsTimer = now;
-            }
           }
         } catch (renderError) {
           console.error("Non-fatal render loop exception:", renderError);
@@ -1250,7 +1260,16 @@
         const newNormY = Math.max(0.05, Math.min(0.95, clickY));
 
         const dist = Math.hypot(newNormX - targetNormX, newNormY - targetNormY);
-        if (dist > 0.005) {
+
+        if (!hasSelectedFocusPoint) {
+          hasSelectedFocusPoint = true;
+          initialCta.style.display = "none";
+          oscilloscopeHud.style.display = "flex";
+          loupePanel.style.display = "flex";
+          targetNormX = newNormX;
+          targetNormY = newNormY;
+          resetWaveform();
+        } else if (dist > 0.005) {
           targetNormX = newNormX;
           targetNormY = newNormY;
           resetWaveform();
