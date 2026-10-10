@@ -734,63 +734,97 @@
         }
       }
 
-      // Start video stream with exact device preservation
+      // Start video stream with robust hardware release and multi-tier fallback
       async function startStream(targetDeviceId = null) {
         const deviceId = targetDeviceId || (cameraSelect.value && cameraSelect.value !== "" ? cameraSelect.value : null);
 
+        // 1. Cleanly stop old tracks and pause briefly for OS driver handle release
         if (currentStream) {
-          currentStream.getTracks().forEach(track => track.stop());
+          currentStream.getTracks().forEach(track => {
+            track.stop();
+          });
           currentStream = null;
           video.srcObject = null;
+          await new Promise(r => setTimeout(r, 80));
         }
 
-        let videoConstraint = {};
-        if (deviceId) {
-          videoConstraint.deviceId = { exact: deviceId };
-        }
+        // 2. Build ideal constraints (avoid strict min that crashes unsupported cameras)
+        let widthIdeal = 1280;
+        let heightIdeal = 960;
 
-        if (resSelect.value === "1280x960") {
-          videoConstraint.width = { ideal: 1280, min: 1280 };
-          videoConstraint.height = { ideal: 960, min: 720 };
-          videoConstraint.frameRate = { ideal: 60 };
-        } else if (resSelect.value === "1920x1080") {
-          videoConstraint.width = { ideal: 1920, min: 1920 };
-          videoConstraint.height = { ideal: 1080, min: 1080 };
-          videoConstraint.frameRate = { ideal: 60 };
+        if (resSelect.value === "1920x1080") {
+          widthIdeal = 1920;
+          heightIdeal = 1080;
+        } else if (resSelect.value === "1280x720") {
+          widthIdeal = 1280;
+          heightIdeal = 720;
+        } else if (resSelect.value === "640x480") {
+          widthIdeal = 640;
+          heightIdeal = 480;
         } else if (resSelect.value === "max") {
-          videoConstraint.width = { ideal: 3840, min: 1280 };
-          videoConstraint.height = { ideal: 2160, min: 720 };
-          videoConstraint.frameRate = { ideal: 60 };
-        } else {
-          const [w, h] = resSelect.value.split("x").map(Number);
-          videoConstraint.width = { ideal: w };
-          videoConstraint.height = { ideal: h };
+          widthIdeal = 3840;
+          heightIdeal = 2160;
         }
 
-        try {
-          currentStream = await navigator.mediaDevices.getUserMedia({
-            video: videoConstraint,
+        // Tiered attempts to ensure the camera ALWAYS starts
+        const attemptConfigs = [];
+
+        // Attempt 1: Exact device with requested ideal resolution
+        if (deviceId) {
+          attemptConfigs.push({
+            video: {
+              deviceId: { exact: deviceId },
+              width: { ideal: widthIdeal },
+              height: { ideal: heightIdeal }
+            },
             audio: false
           });
-        } catch (primaryErr) {
-          console.warn("Primary constraints failed, falling back to camera without resolution lock:", primaryErr);
+          // Attempt 2: Exact device without resolution constraints
+          attemptConfigs.push({
+            video: { deviceId: { exact: deviceId } },
+            audio: false
+          });
+          // Attempt 3: Ideal device
+          attemptConfigs.push({
+            video: { deviceId: { ideal: deviceId } },
+            audio: false
+          });
+        } else {
+          attemptConfigs.push({
+            video: {
+              width: { ideal: widthIdeal },
+              height: { ideal: heightIdeal }
+            },
+            audio: false
+          });
+        }
+
+        // Final fallback: Standard generic video
+        attemptConfigs.push({ video: true, audio: false });
+
+        let streamAcquired = null;
+        let lastError = null;
+
+        for (let i = 0; i < attemptConfigs.length; i++) {
           try {
-            currentStream = await navigator.mediaDevices.getUserMedia({
-              video: deviceId ? { deviceId: { exact: deviceId } } : true,
-              audio: false
-            });
-          } catch (fallbackErr) {
-            console.warn("Exact deviceId failed, attempting generic camera access:", fallbackErr);
-            try {
-              currentStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-            } catch (finalErr) {
-              console.error("Fatal camera access error:", finalErr);
-              alert("Could not access camera: " + finalErr.message);
-              return;
-            }
+            streamAcquired = await navigator.mediaDevices.getUserMedia(attemptConfigs[i]);
+            if (streamAcquired) break;
+          } catch (err) {
+            lastError = err;
+            await new Promise(r => setTimeout(r, 50));
           }
         }
 
+        if (!streamAcquired) {
+          console.error("Camera acquisition failed across all tiers:", lastError);
+          const msg = lastError ? (lastError.name === "NotReadableError"
+            ? "Camera is in use by another app or browser tab. Please close Autodarts or other camera apps and try again."
+            : lastError.message) : "Unknown error";
+          alert("Could not access camera: " + msg);
+          return;
+        }
+
+        currentStream = streamAcquired;
         video.srcObject = currentStream;
         await video.play();
 
