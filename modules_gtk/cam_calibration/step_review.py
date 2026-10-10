@@ -1,9 +1,7 @@
-"""Review and A/B comparison step for CamCalibrationView: magnified ROI & dart testing."""
+"""Review and A/B comparison step for CamCalibrationView: magnified ROI and ISP filter evaluation."""
 
 from __future__ import annotations
 import logging
-import threading
-import time
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
 import cv2
 import numpy as np
@@ -14,13 +12,12 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk
 
 from core.cv_utils import (
-    apply_difference_filter,
     apply_edge_contrast_filter,
     apply_noise_inspector_filter,
-    detect_dart_tip,
 )
 from core.systemd_service import SystemdManager
 from core.v4l2_device import V4L2Device
+from core.camera_manual_service import CameraManualService
 from modules_gtk.cv_gtk_utils import extract_magnified_pixbuf, frame_to_pixbuf
 
 if TYPE_CHECKING:
@@ -30,23 +27,17 @@ logger = logging.getLogger("cam_librator.review")
 
 
 class ReviewStep:
-    """Manages the A/B comparison review, magnifier details, filter modes, and dart insertion testing."""
+    """Manages the A/B comparison review, magnifier details, and filter inspection modes."""
 
     def __init__(self, view: CamCalibrationView):
         self.view = view
         self.review_selected_cam: Optional[str] = None
-        self.review_source_mode: str = "empty"
         self.review_zoom_zone: str = "sweet_spot"
         self.review_custom_coord: Optional[Tuple[int, int]] = None
         self.review_zoom_factor: float = 2.5
         self.active_review_mode: str = "after"
         self.active_review_filter: str = "normal"
         self._magnifier_crop_coords: Dict[str, Tuple[int, int, int, int]] = {}
-
-        self.dart_frames_before: Dict[str, np.ndarray] = {}
-        self.dart_frames_after: Dict[str, np.ndarray] = {}
-        self.dart_tips: Dict[str, Tuple[int, int]] = {}
-        self.dart_capturing: bool = False
 
         self.review_cam_widgets: Dict[str, dict] = {}
         self.rev_cam_nav_buttons: Dict[Optional[str], Gtk.Button] = {}
@@ -96,28 +87,13 @@ class ReviewStep:
         # -------------------------------------------------------------
         self.review_overview_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
 
-        # Overview Top Controls (Source + A/B Toggle + Filters)
+        # Overview Top Controls (A/B Toggle + Filters)
         ov_ctrls_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         ov_ctrls_box.set_halign(Gtk.Align.FILL)
 
         ov_row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         ov_row1.set_halign(Gtk.Align.END)
         ov_ctrls_box.append(ov_row1)
-
-        ov_src_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        self.rev_src_empty_btn = Gtk.Button(label="Empty Board")
-        self.rev_src_empty_btn.add_css_class("compact-btn")
-        self.rev_src_empty_btn.connect("clicked", lambda _: self.set_review_source("empty"))
-        ov_src_box.append(self.rev_src_empty_btn)
-
-        self.rev_src_dart_btn = Gtk.Button(label="With Dart")
-        self.rev_src_dart_btn.add_css_class("compact-btn")
-        self.rev_src_dart_btn.connect("clicked", lambda _: self.set_review_source("dart"))
-        ov_src_box.append(self.rev_src_dart_btn)
-        ov_row1.append(ov_src_box)
-
-        ov_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        ov_row1.append(ov_sep)
 
         ov_ab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         self.rev_btn_after = Gtk.Button(label="After (Calibrated)")
@@ -138,7 +114,6 @@ class ReviewStep:
         for f_val, f_lbl in [
             ("normal", "Normal"),
             ("edge", "Edges & Wire"),
-            ("diff", "CV Difference"),
             ("noise", "Noise Analysis"),
         ]:
             btn = Gtk.Button(label=f_lbl)
@@ -161,7 +136,7 @@ class ReviewStep:
         self.review_detail_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.review_detail_box.set_vexpand(True)
 
-        # Detail Toolbar (Source, Zones, Zoom Level, Filters)
+        # Detail Toolbar (Zones, Zoom Level, Filters)
         detail_tb = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         detail_tb.set_valign(Gtk.Align.CENTER)
 
@@ -177,7 +152,6 @@ class ReviewStep:
         zone_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         self.rev_zone_buttons.clear()
         for z_val, z_lbl in [
-            ("dart_tip", "Dart Tip"),
             ("sweet_spot", "Sweet Spot"),
             ("bullseye", "Bullseye"),
             ("treble", "Treble Ring"),
@@ -212,26 +186,6 @@ class ReviewStep:
         detail_row2.set_halign(Gtk.Align.CENTER)
         detail_tb.append(detail_row2)
 
-        # Source Selector in Detail Mode
-        det_src_lbl = Gtk.Label(label="Source:")
-        det_src_lbl.add_css_class("caption")
-        detail_row2.append(det_src_lbl)
-
-        det_src_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        self.det_src_empty_btn = Gtk.Button(label="Empty Board")
-        self.det_src_empty_btn.add_css_class("compact-btn")
-        self.det_src_empty_btn.connect("clicked", lambda _: self.set_review_source("empty"))
-        det_src_box.append(self.det_src_empty_btn)
-
-        self.det_src_dart_btn = Gtk.Button(label="With Dart")
-        self.det_src_dart_btn.add_css_class("compact-btn")
-        self.det_src_dart_btn.connect("clicked", lambda _: self.set_review_source("dart"))
-        det_src_box.append(self.det_src_dart_btn)
-        detail_row2.append(det_src_box)
-
-        sep_d2 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        detail_row2.append(sep_d2)
-
         # Filter Group in Detail Mode
         det_filt_lbl = Gtk.Label(label="Filter:")
         det_filt_lbl.add_css_class("caption")
@@ -242,7 +196,6 @@ class ReviewStep:
         for f_val, f_lbl in [
             ("normal", "Normal"),
             ("edge", "Edges & Wire"),
-            ("diff", "CV Difference"),
             ("noise", "Noise Analysis"),
         ]:
             btn = Gtk.Button(label=f_lbl)
@@ -333,7 +286,7 @@ class ReviewStep:
         self.review_view_stack.add_named(self.review_detail_box, "detail")
         box.append(self.review_view_stack)
 
-        # Bottom Bar: Discard vs Test with Dart vs Apply
+        # Bottom Bar: Discard vs Apply
         bottom_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
         bottom_bar.set_margin_top(10)
 
@@ -341,11 +294,6 @@ class ReviewStep:
         discard_btn.add_css_class("compact-btn")
         discard_btn.connect("clicked", lambda _: self.view._go_to_dashboard())
         bottom_bar.append(discard_btn)
-
-        self.rev_btn_test_dart = Gtk.Button(label="Test with Dart")
-        self.rev_btn_test_dart.add_css_class("compact-btn")
-        self.rev_btn_test_dart.connect("clicked", lambda _: self._show_dart_test_prompt())
-        bottom_bar.append(self.rev_btn_test_dart)
 
         apply_btn = Gtk.Button(label="Save & Apply Settings")
         apply_btn.add_css_class("suggested-action")
@@ -372,13 +320,13 @@ class ReviewStep:
         self.rev_cam_nav_buttons[None] = btn_all
 
         for cam in self.view.cameras:
-            c_btn = Gtk.Button(label=f"Camera {cam.index}")
-            c_btn.add_css_class("compact-btn")
-            c_btn.connect("clicked", self._make_cam_select_handler(cam.dev_node))
-            self.rev_cam_selector_box.append(c_btn)
-            self.rev_cam_nav_buttons[cam.dev_node] = c_btn
+            b = Gtk.Button(label=f"Camera {cam.index}")
+            b.add_css_class("compact-btn")
+            b.connect("clicked", self._make_cam_select_handler(cam.dev_node))
+            self.rev_cam_selector_box.append(b)
+            self.rev_cam_nav_buttons[cam.dev_node] = b
 
-        # 2. Rebuild 3 Overview Column Cards
+        # 2. Rebuild 3 Columns Overview Cards
         while child := self.review_columns_box.get_first_child():
             self.review_columns_box.remove(child)
 
@@ -387,19 +335,21 @@ class ReviewStep:
         for cam in self.view.cameras:
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
             card.add_css_class("cam-column-card")
+            card.set_vexpand(True)
 
-            hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             title = Gtk.Label(label=f"Camera {cam.index}", xalign=0.0)
             title.add_css_class("heading")
             hdr.append(title)
 
-            badge = Gtk.Label(label="Calibrated")
+            badge = Gtk.Label(label="Optimized")
             badge.set_css_classes(["status-pill-ok"])
             badge.set_hexpand(True)
             badge.set_xalign(1.0)
             hdr.append(badge)
             card.append(hdr)
 
+            # Picture container
             pic = Gtk.Picture()
             pic.set_can_shrink(True)
             pic.set_size_request(160, 110)
@@ -407,45 +357,44 @@ class ReviewStep:
             pic.set_vexpand(True)
             card.append(pic)
 
-            # Metric Box under picture
-            metric_grid = Gtk.Grid()
-            metric_grid.set_column_spacing(12)
-            metric_grid.set_row_spacing(4)
-
+            # Parameter Delta Grid
             res = self.view.results.get(cam.dev_node)
+            grid = Gtk.Grid()
+            grid.set_column_spacing(8)
+            grid.set_row_spacing(4)
+            grid.set_margin_top(4)
+
+            def add_param(row: int, name: str, val_before: str, val_after: str):
+                nl = Gtk.Label(label=name, xalign=0.0)
+                nl.add_css_class("caption")
+                grid.attach(nl, 0, row, 1, 1)
+
+                vl = Gtk.Label(label=f"{val_before} → {val_after}", xalign=1.0)
+                vl.set_hexpand(True)
+                vl.add_css_class("caption")
+                vl.add_css_class("accent")
+                grid.attach(vl, 1, row, 1, 1)
+
             if res:
-                s_opt = res.optimized_settings
-                m_init = res.initial_metrics
-                m_opt = res.optimized_metrics
-                exp_lbl = Gtk.Label(label=f"Exposure: {s_opt.exposure_absolute * 0.1:.1f}ms", xalign=0.0)
-                exp_lbl.add_css_class("caption")
-                gain_lbl = Gtk.Label(label=f"Gain: {s_opt.gain}", xalign=0.0)
-                gain_lbl.add_css_class("caption")
+                s_i = res.initial_settings
+                s_o = res.optimized_settings
+                m_i = res.initial_metrics
+                m_o = res.optimized_metrics
+                add_param(0, "Exposure:", f"{s_i.exposure_absolute * 0.1:.1f}ms", f"{s_o.exposure_absolute * 0.1:.1f}ms")
+                add_param(1, "Gain:", str(s_i.gain), str(s_o.gain))
+                add_param(2, "Contrast:", str(s_i.contrast), str(s_o.contrast))
+                add_param(3, "Sharpness:", str(s_i.sharpness), str(s_o.sharpness))
+                if m_i and m_o:
+                    n_delta = ((m_i.temporal_noise - m_o.temporal_noise) / max(0.01, m_i.temporal_noise)) * 100.0
+                    n_sign = "-" if n_delta >= 0 else "+"
+                    add_param(4, "Noise:", f"{m_i.temporal_noise:.1f}", f"{n_sign}{abs(n_delta):.0f}%")
+            card.append(grid)
 
-                noise_delta = ((m_init.temporal_noise - m_opt.temporal_noise) / max(0.01, m_init.temporal_noise)) * 100.0 if m_init else 0.0
-                noise_sign = "-" if noise_delta >= 0 else "+"
-                noise_lbl = Gtk.Label(label=f"Noise: {noise_sign}{abs(noise_delta):.0f}%", xalign=0.0)
-                noise_lbl.add_css_class("caption")
-
-                contrast_sign = "+" if res.improvement_percentage >= 0 else ""
-                contrast_lbl = Gtk.Label(label=f"Wire Contrast: {contrast_sign}{res.improvement_percentage:.0f}%", xalign=0.0)
-                contrast_lbl.add_css_class("caption")
-                contrast_lbl.add_css_class("accent")
-
-                metric_grid.attach(exp_lbl, 0, 0, 1, 1)
-                metric_grid.attach(gain_lbl, 1, 0, 1, 1)
-                metric_grid.attach(noise_lbl, 0, 1, 1, 1)
-                metric_grid.attach(contrast_lbl, 1, 1, 1, 1)
-            else:
-                info = Gtk.Label(label="Default values unchanged", xalign=0.0)
-                info.add_css_class("caption")
-                metric_grid.attach(info, 0, 0, 2, 1)
-
-            card.append(metric_grid)
-
-            inspect_btn = Gtk.Button(label="Inspect Magnified")
+            # Inspect Detail Button
+            inspect_btn = Gtk.Button(label="Inspect Details")
             inspect_btn.add_css_class("compact-btn")
-            inspect_btn.add_css_class("suggested-action")
+            inspect_btn.add_css_class("pill")
+            inspect_btn.set_halign(Gtk.Align.CENTER)
             inspect_btn.connect("clicked", self._make_cam_select_handler(cam.dev_node))
             card.append(inspect_btn)
 
@@ -461,7 +410,6 @@ class ReviewStep:
         else:
             self.select_review_camera(self.review_selected_cam)
 
-        self._update_source_button_styles()
         self._update_zone_button_styles()
         self._update_zoom_button_styles()
         self._set_review_filter(self.active_review_filter)
@@ -472,10 +420,7 @@ class ReviewStep:
     def select_review_camera(self, dev_node: Optional[str]):
         self.review_selected_cam = dev_node
         self.review_custom_coord = None
-        if self.review_source_mode == "dart" and len(self.dart_frames_after) > 0:
-            self.review_zoom_zone = "dart_tip"
-        else:
-            self.review_zoom_zone = "sweet_spot"
+        self.review_zoom_zone = "sweet_spot"
 
         for node, btn in self.rev_cam_nav_buttons.items():
             if node == dev_node:
@@ -495,129 +440,6 @@ class ReviewStep:
         self._update_zone_button_styles()
         self.refresh_review_pictures()
 
-    def set_review_source(self, source: str):
-        if source == "dart" and not self.dart_frames_after:
-            self._show_dart_test_prompt()
-            return
-        self.review_source_mode = source
-        if source == "dart":
-            self.review_zoom_zone = "dart_tip"
-        elif self.review_zoom_zone == "dart_tip":
-            self.review_zoom_zone = "sweet_spot"
-        self._update_source_button_styles()
-        self._update_zone_button_styles()
-        self.refresh_review_pictures()
-
-    def _update_source_button_styles(self):
-        is_dart = self.review_source_mode == "dart"
-        if hasattr(self, "rev_src_empty_btn"):
-            if not is_dart:
-                self.rev_src_empty_btn.add_css_class("suggested-action")
-                self.rev_src_dart_btn.remove_css_class("suggested-action")
-            else:
-                self.rev_src_dart_btn.add_css_class("suggested-action")
-                self.rev_src_empty_btn.remove_css_class("suggested-action")
-        if hasattr(self, "det_src_empty_btn"):
-            if not is_dart:
-                self.det_src_empty_btn.add_css_class("suggested-action")
-                self.det_src_dart_btn.remove_css_class("suggested-action")
-            else:
-                self.det_src_dart_btn.add_css_class("suggested-action")
-                self.det_src_empty_btn.remove_css_class("suggested-action")
-
-    def _show_dart_test_prompt(self):
-        root = self.view.get_root()
-        dialog = Adw.MessageDialog(
-            transient_for=root if isinstance(root, Gtk.Window) else None,
-            heading="Insert Dart for Verification",
-            body="Place or throw a dart into any board sector (e.g. Treble 20 or Bullseye). SUIT will capture before vs after snapshots across all cameras to verify dart tip edge contrast and CV difference signal.",
-        )
-        dialog.add_response("cancel", "Cancel")
-        dialog.add_response("capture", "Capture Snapshot")
-        dialog.set_response_appearance("capture", Adw.ResponseAppearance.SUGGESTED)
-        dialog.connect("response", self._on_dart_dialog_response)
-        dialog.present()
-
-    def _on_dart_dialog_response(self, dialog, response: str):
-        if response == "capture":
-            self._start_dart_capture()
-
-    def _start_dart_capture(self):
-        if self.dart_capturing:
-            return
-        self.dart_capturing = True
-        if hasattr(self, "rev_btn_test_dart"):
-            self.rev_btn_test_dart.set_sensitive(False)
-        self.review_sub_lbl.set_text("Capturing dart test frames across all cameras...")
-        thread = threading.Thread(target=self._dart_capture_worker, daemon=True)
-        thread.start()
-
-    def _dart_capture_worker(self):
-        try:
-            for cam in self.view.cameras:
-                res = self.view.results.get(cam.dev_node)
-                vdev = V4L2Device(cam.dev_node)
-
-                # 1. Capture Before Frame with initial settings
-                if res and res.initial_settings:
-                    vdev.apply_settings(res.initial_settings)
-                time.sleep(0.12)
-
-                frame_before = None
-                for _ in range(4):
-                    frame_before = vdev.grab_single_frame()
-                    time.sleep(0.04)
-
-                # 2. Capture After Frame with optimized settings
-                if res and res.optimized_settings:
-                    vdev.apply_settings(res.optimized_settings)
-                time.sleep(0.12)
-
-                frame_after = None
-                for _ in range(4):
-                    frame_after = vdev.grab_single_frame()
-                    time.sleep(0.04)
-
-                if frame_before is not None:
-                    self.dart_frames_before[cam.dev_node] = frame_before
-                if frame_after is not None:
-                    self.dart_frames_after[cam.dev_node] = frame_after
-
-                # Detect dart tip coordinate
-                empty_frame = (
-                    res.initial_frame
-                    if (res and res.initial_frame is not None)
-                    else self.view.baseline_frames.get(cam.dev_node)
-                )
-                if empty_frame is not None and frame_after is not None:
-                    roi = res.roi if res else None
-                    tip = detect_dart_tip(empty_frame, frame_after, roi=roi)
-                    if tip:
-                        self.dart_tips[cam.dev_node] = tip
-        except Exception as e:
-            logger.exception("Error capturing dart frames: %s", e)
-        finally:
-            GLib.idle_add(self._on_dart_capture_complete)
-
-    def _on_dart_capture_complete(self):
-        self.dart_capturing = False
-        if hasattr(self, "rev_btn_test_dart"):
-            self.rev_btn_test_dart.set_sensitive(True)
-        self.review_source_mode = "dart"
-        self.review_zoom_zone = "dart_tip"
-        self._update_source_button_styles()
-        self._update_zone_button_styles()
-        self._set_review_filter("diff")
-        self.refresh_review_pictures()
-
-        if self.review_selected_cam:
-            cam = next((c for c in self.view.cameras if c.dev_node == self.review_selected_cam), None)
-            cam_title = f"Camera {cam.index}" if cam else self.review_selected_cam
-            self.review_sub_lbl.set_text(f"Dart Test Inspection ({cam_title}) - Dart tip locked.")
-        else:
-            self.review_sub_lbl.set_text("Dart test captured. Inspect magnified dart tip and difference signal.")
-        return False
-
     def _make_zone_handler(self, zone: str):
         return lambda _: self.set_zoom_zone(zone)
 
@@ -633,10 +455,6 @@ class ReviewStep:
         self.refresh_review_pictures()
 
     def _update_zone_button_styles(self):
-        has_dart = len(self.dart_frames_after) > 0
-        if "dart_tip" in self.rev_zone_buttons:
-            self.rev_zone_buttons["dart_tip"].set_sensitive(has_dart)
-
         for z_val, btn in self.rev_zone_buttons.items():
             if z_val == self.review_zoom_zone:
                 btn.add_css_class("suggested-action")
@@ -648,106 +466,98 @@ class ReviewStep:
 
     def set_zoom_factor(self, factor: float):
         self.review_zoom_factor = factor
-        if self.review_zoom_zone == "center" and factor > 1.05:
-            self.review_zoom_zone = "sweet_spot"
-            self._update_zone_button_styles()
         self._update_zoom_button_styles()
         self.refresh_review_pictures()
 
     def _update_zoom_button_styles(self):
-        for z_f, btn in self.rev_zoom_buttons.items():
-            if abs(z_f - self.review_zoom_factor) < 0.1:
+        for z_val, btn in self.rev_zoom_buttons.items():
+            if abs(z_val - self.review_zoom_factor) < 0.1:
                 btn.add_css_class("suggested-action")
             else:
                 btn.remove_css_class("suggested-action")
 
-    def _on_detail_picture_clicked(self, gesture, n_press, x, y, frame_key: str):
-        widget = gesture.get_widget()
-        ww = widget.get_width()
-        wh = widget.get_height()
-        if ww <= 0 or wh <= 0:
-            return
-        crop_box = self._magnifier_crop_coords.get(frame_key)
-        if not crop_box:
-            return
-        x1, y1, cw, ch = crop_box
-        if cw <= 0 or ch <= 0:
-            return
-        rel_x = max(0.0, min(1.0, x / ww))
-        rel_y = max(0.0, min(1.0, y / wh))
-        target_x = int(x1 + rel_x * cw)
-        target_y = int(y1 + rel_y * ch)
-        self.review_custom_coord = (target_x, target_y)
-        self.review_zoom_zone = "custom"
-        self._update_zone_button_styles()
-        self.refresh_review_pictures()
-
     def set_review_mode(self, mode: str):
         self.active_review_mode = mode
-        if mode == "after":
-            self.rev_btn_after.add_css_class("suggested-action")
-            self.rev_btn_before.remove_css_class("suggested-action")
-        else:
-            self.rev_btn_before.add_css_class("suggested-action")
-            self.rev_btn_after.remove_css_class("suggested-action")
+        if hasattr(self, "rev_btn_after"):
+            if mode == "after":
+                self.rev_btn_after.add_css_class("suggested-action")
+                self.rev_btn_before.remove_css_class("suggested-action")
+            else:
+                self.rev_btn_before.add_css_class("suggested-action")
+                self.rev_btn_after.remove_css_class("suggested-action")
         self.refresh_review_pictures()
 
-    def _make_filter_handler(self, f_val: str):
-        return lambda _: self._set_review_filter(f_val)
+    def _make_filter_handler(self, filter_name: str):
+        return lambda _: self._set_review_filter(filter_name)
 
-    def _set_review_filter(self, f_val: str):
-        self.active_review_filter = f_val
-        for k, b in self.ov_filt_buttons.items():
-            if k == f_val:
-                b.add_css_class("suggested-action")
+    def _set_review_filter(self, filter_name: str):
+        self.active_review_filter = filter_name
+        for f_val, btn in self.ov_filt_buttons.items():
+            if f_val == filter_name:
+                btn.add_css_class("suggested-action")
             else:
-                b.remove_css_class("suggested-action")
-        for k, b in self.det_filt_buttons.items():
-            if k == f_val:
-                b.add_css_class("suggested-action")
+                btn.remove_css_class("suggested-action")
+        for f_val, btn in self.det_filt_buttons.items():
+            if f_val == filter_name:
+                btn.add_css_class("suggested-action")
             else:
-                b.remove_css_class("suggested-action")
+                btn.remove_css_class("suggested-action")
         self.refresh_review_pictures()
+
+    def _on_detail_picture_clicked(self, gesture, n_press, x, y, pane_type: str):
+        """Map click coordinates inside magnified picture back to original image space."""
+        if pane_type not in self._magnifier_crop_coords:
+            return
+        cx, cy, cw, ch = self._magnifier_crop_coords[pane_type]
+        pic_widget = self.rev_detail_pic_before if pane_type == "before" else self.rev_detail_pic_after
+        alloc_w = pic_widget.get_width()
+        alloc_h = pic_widget.get_height()
+        if alloc_w <= 0 or alloc_h <= 0:
+            return
+
+        rel_x = float(x) / float(alloc_w)
+        rel_y = float(y) / float(alloc_h)
+        full_x = int(cx + (rel_x * cw))
+        full_y = int(cy + (rel_y * ch))
+
+        dev_node = self.review_selected_cam
+        res = self.view.results.get(dev_node) if dev_node else None
+        base_frame = self.view.baseline_frames.get(dev_node) if dev_node else None
+        ref = res.optimized_frame if (res and res.optimized_frame is not None) else base_frame
+        if ref is not None and ref.size > 0:
+            fh, fw = ref.shape[:2]
+            full_x = max(0, min(fw - 1, full_x))
+            full_y = max(0, min(fh - 1, full_y))
+            self.review_custom_coord = (full_x, full_y)
+            self.review_zoom_zone = "custom"
+            self._update_zone_button_styles()
+            self.refresh_review_pictures()
 
     def refresh_review_pictures(self):
-        """Render and display frames according to active view (overview vs detail)."""
-        # 1. Update Overview Columns
+        GLib.idle_add(self._update_review_display)
+
+    def _update_review_display(self):
+        # 1. Update Overview View
         for cam in self.view.cameras:
             if cam.dev_node not in self.review_cam_widgets:
                 continue
-
             res = self.view.results.get(cam.dev_node)
             base_frame = self.view.baseline_frames.get(cam.dev_node)
 
-            if self.review_source_mode == "dart":
-                frame = (
-                    self.dart_frames_after.get(cam.dev_node)
-                    if self.active_review_mode == "after"
-                    else self.dart_frames_before.get(cam.dev_node)
-                )
-                if frame is None:
-                    frame = res.optimized_frame if (self.active_review_mode == "after" and res) else (res.initial_frame if res else base_frame)
-                badge_txt = "Dart Snapshot"
-                badge_cls = "status-pill-ok" if self.active_review_mode == "after" else "status-pill-warn"
-                empty_ref = self.view.baseline_frames.get(cam.dev_node) or (res.initial_frame if res else None)
+            if self.active_review_mode == "after" and res:
+                frame = res.optimized_frame
+                badge_sign = "+" if res.improvement_percentage >= 0 else ""
+                badge_txt = f"{badge_sign}{res.improvement_percentage:.0f}% Sharper"
+                badge_cls = "status-pill-ok" if res.improvement_percentage >= 0 else "status-pill-warn"
             else:
-                if self.active_review_mode == "after" and res:
-                    frame = res.optimized_frame
-                    badge_sign = "+" if res.improvement_percentage >= 0 else ""
-                    badge_txt = f"{badge_sign}{res.improvement_percentage:.0f}% Sharper"
-                    badge_cls = "status-pill-ok" if res.improvement_percentage >= 0 else "status-pill-warn"
-                else:
-                    frame = res.initial_frame if res else base_frame
-                    badge_txt = "Default"
-                    badge_cls = "status-pill-warn"
-                empty_ref = None
+                frame = res.initial_frame if res else base_frame
+                badge_txt = "Default"
+                badge_cls = "status-pill-warn"
 
             if frame is None:
                 continue
 
-            if self.active_review_filter == "diff" and empty_ref is not None:
-                filtered = apply_difference_filter(empty_ref, frame)
-            elif self.active_review_filter == "edge":
+            if self.active_review_filter == "edge":
                 filtered = apply_edge_contrast_filter(frame)
             elif self.active_review_filter == "noise":
                 filtered = apply_noise_inspector_filter(frame)
@@ -767,29 +577,15 @@ class ReviewStep:
             res = self.view.results.get(dev_node)
             base_frame = self.view.baseline_frames.get(dev_node)
 
-            if self.review_source_mode == "dart":
-                before_frame = self.dart_frames_before.get(dev_node)
-                after_frame = self.dart_frames_after.get(dev_node)
-                empty_ref = self.view.baseline_frames.get(dev_node) or (res.initial_frame if res else None)
-            else:
-                before_frame = res.initial_frame if (res and res.initial_frame is not None) else base_frame
-                after_frame = res.optimized_frame if (res and res.optimized_frame is not None) else base_frame
-                empty_ref = None
+            before_frame = res.initial_frame if (res and res.initial_frame is not None) else base_frame
+            after_frame = res.optimized_frame if (res and res.optimized_frame is not None) else base_frame
 
             ref_frame = after_frame if after_frame is not None else before_frame
             if ref_frame is not None and ref_frame.size > 0:
                 fh, fw = ref_frame.shape[:2]
 
                 # Determine center coordinate
-                if self.review_zoom_zone == "dart_tip":
-                    if dev_node in self.dart_tips:
-                        center = self.dart_tips[dev_node]
-                    elif res and res.roi and res.roi.target_roi:
-                        tx, ty, tw, th = res.roi.target_roi
-                        center = (tx + tw // 2, ty + th // 2)
-                    else:
-                        center = (fw // 2, int(fh * 0.25))
-                elif self.review_zoom_zone == "custom" and self.review_custom_coord:
+                if self.review_zoom_zone == "custom" and self.review_custom_coord:
                     center = self.review_custom_coord
                 elif self.review_zoom_zone == "bullseye":
                     if res and res.roi and res.roi.center:
@@ -820,7 +616,6 @@ class ReviewStep:
                         max_h=380,
                         filter_mode=self.active_review_filter,
                         show_reticle=True,
-                        diff_reference_frame=empty_ref,
                     )
                     if pix_b:
                         self.rev_detail_pic_before.set_pixbuf(pix_b)
@@ -836,7 +631,6 @@ class ReviewStep:
                         max_h=380,
                         filter_mode=self.active_review_filter,
                         show_reticle=True,
-                        diff_reference_frame=empty_ref,
                     )
                     if pix_a:
                         self.rev_detail_pic_after.set_pixbuf(pix_a)
@@ -869,19 +663,30 @@ class ReviewStep:
                     self.rev_detail_lbl_after.set_text("Calibrated values pending")
 
     def _apply_and_finish(self):
-        """Save calibrated values to persistence, apply to cameras, and return to dashboard."""
+        """Save calibrated values directly to camera hardware and enable CameraManualService boot unit."""
+        applied_nodes = []
         for dev_node, res in self.view.results.items():
             cam = next((c for c in self.view.cameras if c.dev_node == dev_node), None)
             if cam:
-                self.view.persistence.save_calibration(cam.by_path, res.optimized_settings)
+                applied_nodes.append(cam.dev_node)
                 try:
                     vdev = V4L2Device(dev_node)
                     vdev.apply_settings(res.optimized_settings)
+                    # Also persist to manual service presets
+                    CameraManualService.save_preset(dev_node, res.optimized_settings.to_dict())
                 except Exception as e:
                     logger.error("Failed to apply settings to %s: %s", dev_node, e)
 
-        self.view.persistence.set_calibration_enabled(True)
+        # Persist across reboots via the single unified SUIT camera boot service
+        all_nodes = [c.dev_node for c in self.view.cameras] if self.view.cameras else applied_nodes
+        if all_nodes:
+            CameraManualService.enable_boot_service(all_nodes)
+
         if getattr(self.view, "_autodarts_was_running", False):
             SystemdManager.start_autodarts()
             self.view._autodarts_was_running = False
+
+        if hasattr(self.view, "toast_overlay"):
+            self.view.toast_overlay.add_toast(Adw.Toast(title="Calibrated settings applied and saved to Manual Controls"))
+
         self.view._go_to_dashboard()
