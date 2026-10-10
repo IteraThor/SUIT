@@ -171,73 +171,17 @@
     .hud-header {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: center;
+      text-align: center;
+      padding: 2px 0;
     }
 
-    .hud-label {
-      font-size: 0.72rem;
+    .hud-instruction {
+      font-size: 0.74rem;
       font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
       color: var(--text-muted);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .hud-pulse-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--state-peak);
-      box-shadow: 0 0 8px var(--state-peak);
-    }
-
-    /* Dynamic State Badge */
-    .state-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 10px;
-      border-radius: 6px;
-      font-size: 0.76rem;
-      font-weight: 700;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.02em;
       text-transform: uppercase;
-      transition: all 0.2s ease;
-    }
-
-    .state-idle {
-      background: var(--state-idle-glow);
-      color: #cbd5e1;
-      border: 1px solid rgba(148, 163, 184, 0.3);
-    }
-
-    .state-improving {
-      background: var(--state-improving-glow);
-      color: var(--state-improving);
-      border: 1px solid rgba(16, 185, 129, 0.4);
-      box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
-    }
-
-    .state-peak {
-      background: var(--state-peak-glow);
-      color: var(--state-peak);
-      border: 1px solid rgba(6, 182, 212, 0.5);
-      box-shadow: 0 0 14px rgba(6, 182, 212, 0.3);
-    }
-
-    .state-overdriven {
-      background: var(--state-overdriven-glow);
-      color: var(--state-overdriven);
-      border: 1px solid rgba(245, 158, 11, 0.5);
-      box-shadow: 0 0 14px rgba(245, 158, 11, 0.3);
-      animation: pulseAlert 1.2s infinite ease-in-out;
-    }
-
-    @keyframes pulseAlert {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.75; }
     }
 
     /* Waveform Canvas */
@@ -476,11 +420,7 @@
       <!-- OSCILLOSCOPE WAVEFORM HUD OVERLAY -->
       <div class="oscilloscope-hud" id="oscilloscopeHud">
         <div class="hud-header">
-          <span class="hud-label">
-            <span class="hud-pulse-dot" id="pulseDot"></span>
-            Relative Focus Tracking
-          </span>
-          <span id="stateBadge" class="state-badge state-idle">Awaiting Calibration</span>
+          <span class="hud-instruction">Rotate focus ring slowly, look for highest peak.</span>
         </div>
 
         <!-- Oscilloscope Waveform Display -->
@@ -541,8 +481,6 @@
       const loupePanel = document.getElementById("loupePanel");
       const turnbackAlert = document.getElementById("turnbackAlert");
       const initialCta = document.getElementById("initialCta");
-      const stateBadge = document.getElementById("stateBadge");
-      const pulseDot = document.getElementById("pulseDot");
 
       const resValueEl = document.getElementById("resValue");
       const fpsValueEl = document.getElementById("fpsValue");
@@ -902,31 +840,12 @@
         currentLifecycleState = state;
 
         if (state === "INITIAL") {
-          stateBadge.className = "state-badge state-idle";
-          stateBadge.textContent = "Awaiting Calibration";
-          pulseDot.style.background = "#64748b";
-          pulseDot.style.boxShadow = "0 0 6px #64748b";
           initialCta.style.display = "flex";
           turnbackAlert.style.display = "none";
-        } else if (state === "IMPROVING") {
-          stateBadge.className = "state-badge state-improving";
-          stateBadge.textContent = "Scaling Up (Improving) ▲";
-          pulseDot.style.background = "var(--state-improving)";
-          pulseDot.style.boxShadow = "0 0 10px var(--state-improving)";
-          initialCta.style.display = "none";
-          turnbackAlert.style.display = "none";
-        } else if (state === "PEAK") {
-          stateBadge.className = "state-badge state-peak";
-          stateBadge.textContent = "Peak Sweet Spot Found ★";
-          pulseDot.style.background = "var(--state-peak)";
-          pulseDot.style.boxShadow = "0 0 12px var(--state-peak)";
+        } else if (state === "IMPROVING" || state === "PEAK") {
           initialCta.style.display = "none";
           turnbackAlert.style.display = "none";
         } else if (state === "OVERDRIVEN") {
-          stateBadge.className = "state-badge state-overdriven";
-          stateBadge.textContent = "Overdriven (Dropping) ▼";
-          pulseDot.style.background = "var(--state-overdriven)";
-          pulseDot.style.boxShadow = "0 0 12px var(--state-overdriven)";
           initialCta.style.display = "none";
           turnbackAlert.style.display = "flex";
         }
