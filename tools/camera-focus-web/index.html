@@ -490,8 +490,9 @@
       </select>
 
       <select id="resSelect" title="Select Target Resolution">
-        <option value="1280x960" selected>1280 × 960 (4:3)</option>
+        <option value="max" selected>Max Resolution (Auto)</option>
         <option value="1920x1080">1920 × 1080 (16:9)</option>
+        <option value="1280x960">1280 × 960 (4:3)</option>
         <option value="1280x720">1280 × 720 (16:9)</option>
         <option value="640x480">640 × 480 (4:3)</option>
       </select>
@@ -535,6 +536,10 @@
         <div class="hud-stats-row">
           <span class="hud-stat-label">Peak Latch</span>
           <span class="hud-stat-val" id="peakValue" style="color: var(--accent-cyan)">0.0</span>
+        </div>
+        <div class="hud-stats-row">
+          <span class="hud-stat-label">Active Stream</span>
+          <span class="hud-stat-val" id="resValue">Auto</span>
         </div>
         <div class="hud-stats-row">
           <span class="hud-stat-label">Frame Rate</span>
@@ -605,6 +610,7 @@
       const peakTick = document.getElementById("peakTick");
       const peakValueEl = document.getElementById("peakValue");
       const trendBadge = document.getElementById("trendBadge");
+      const resValueEl = document.getElementById("resValue");
       const fpsValueEl = document.getElementById("fpsValue");
       const lightingPill = document.getElementById("lightingPill");
       const targetCoordsEl = document.getElementById("targetCoords");
@@ -656,24 +662,35 @@
         }
       }
 
-      // Start video stream with fallback
+      // Start video stream with fallback (default max resolution negotiation)
       async function startStream(deviceId = null) {
         if (currentStream) {
           currentStream.getTracks().forEach(track => track.stop());
         }
 
-        const [w, h] = resSelect.value.split("x").map(Number);
-        const constraints = {
-          video: {
+        let videoConstraint = {};
+        if (resSelect.value === "max") {
+          videoConstraint = {
+            width: { ideal: 4096 },
+            height: { ideal: 2160 },
+            frameRate: { ideal: 60 }
+          };
+        } else {
+          const [w, h] = resSelect.value.split("x").map(Number);
+          videoConstraint = {
             width: { ideal: w },
             height: { ideal: h }
-          },
-          audio: false
-        };
+          };
+        }
 
         if (deviceId) {
-          constraints.video.deviceId = { ideal: deviceId };
+          videoConstraint.deviceId = { ideal: deviceId };
         }
+
+        const constraints = {
+          video: videoConstraint,
+          audio: false
+        };
 
         try {
           currentStream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -860,6 +877,9 @@
           canvas.height = vh;
           cvCanvas.width = targetBoxSize;
           cvCanvas.height = targetBoxSize;
+          if (resValueEl) {
+            resValueEl.textContent = `${vw} × ${vh}`;
+          }
         }
 
         // 1. Draw raw video feed
