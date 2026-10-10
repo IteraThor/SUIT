@@ -3,22 +3,28 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Dartboard Camera Focus Tool</title>
+  <title>Dartboard Camera Focus Tool - Oscilloscope HUD</title>
   <style>
     :root {
-      --bg-main: #090b10;
-      --bg-card: rgba(18, 22, 32, 0.88);
-      --bg-card-hover: rgba(28, 34, 48, 0.95);
-      --border-subtle: rgba(255, 255, 255, 0.09);
+      --bg-main: #07090e;
+      --bg-card: rgba(13, 17, 26, 0.82);
+      --bg-card-hover: rgba(22, 28, 42, 0.92);
+      --border-subtle: rgba(255, 255, 255, 0.08);
       --border-highlight: rgba(56, 189, 248, 0.35);
       --text-main: #f3f4f6;
-      --text-muted: #9ca3af;
-      --accent-green: #10b981;
-      --accent-green-glow: rgba(16, 185, 129, 0.22);
-      --accent-cyan: #06b6d4;
-      --accent-amber: #f59e0b;
-      --accent-amber-glow: rgba(245, 158, 11, 0.22);
-      --accent-red: #ef4444;
+      --text-muted: #94a3b8;
+      
+      /* HUD State Colors */
+      --state-idle: #64748b;
+      --state-idle-glow: rgba(100, 116, 139, 0.2);
+      --state-improving: #10b981;
+      --state-improving-glow: rgba(16, 185, 129, 0.35);
+      --state-peak: #06b6d4;
+      --state-peak-glow: rgba(6, 182, 212, 0.4);
+      --state-overdriven: #f59e0b;
+      --state-overdriven-glow: rgba(245, 158, 11, 0.35);
+      --state-alert: #ef4444;
+      
       --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     }
@@ -43,8 +49,8 @@
 
     /* Header Bar */
     header {
-      background: rgba(13, 16, 23, 0.95);
-      backdrop-filter: blur(12px);
+      background: rgba(10, 13, 20, 0.92);
+      backdrop-filter: blur(14px);
       border-bottom: 1px solid var(--border-subtle);
       padding: 10px 20px;
       display: flex;
@@ -66,7 +72,7 @@
       width: 22px;
       height: 22px;
       fill: none;
-      stroke: var(--accent-cyan);
+      stroke: var(--state-peak);
       stroke-width: 2;
     }
 
@@ -80,15 +86,15 @@
     }
 
     .brand-badge {
-      font-size: 0.7rem;
+      font-size: 0.68rem;
       font-weight: 600;
       padding: 2px 8px;
       border-radius: 9999px;
       background: rgba(6, 182, 212, 0.15);
-      color: var(--accent-cyan);
+      color: var(--state-peak);
       border: 1px solid rgba(6, 182, 212, 0.3);
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.06em;
     }
 
     .controls-group {
@@ -120,23 +126,23 @@
 
     select:focus, button:focus {
       outline: none;
-      border-color: var(--accent-cyan);
+      border-color: var(--state-peak);
       box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.2);
     }
 
     button.btn-active {
       background: rgba(16, 185, 129, 0.15);
-      color: var(--accent-green);
-      border-color: var(--accent-green);
+      color: var(--state-improving);
+      border-color: var(--state-improving);
     }
 
     button.btn-danger:hover {
       background: rgba(239, 68, 68, 0.15);
-      color: var(--accent-red);
-      border-color: var(--accent-red);
+      color: var(--state-alert);
+      border-color: var(--state-alert);
     }
 
-    /* Main Container */
+    /* Main Viewport Container */
     main {
       flex: 1;
       position: relative;
@@ -144,7 +150,7 @@
       align-items: center;
       justify-content: center;
       padding: 16px;
-      background: radial-gradient(circle at center, #131724 0%, #080a0e 100%);
+      background: radial-gradient(circle at center, #111522 0%, #06080d 100%);
       overflow: hidden;
     }
 
@@ -157,7 +163,7 @@
       aspect-ratio: 4 / 3;
       border-radius: 14px;
       overflow: hidden;
-      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--border-subtle);
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.8), 0 0 0 1px var(--border-subtle);
       background: #000;
       display: flex;
       align-items: center;
@@ -176,144 +182,202 @@
       display: block;
     }
 
-    /* HUD Overlay Top-Left */
-    .hud-panel {
+    /* =========================================================
+       OSCILLOSCOPE WAVEFORM HUD OVERLAY (Cinema / Broadcast HUD)
+       ========================================================= */
+    .oscilloscope-hud {
       position: absolute;
-      top: 18px;
-      left: 18px;
+      bottom: 20px;
+      left: 20px;
       background: var(--bg-card);
       backdrop-filter: blur(16px);
       border: 1px solid var(--border-subtle);
-      border-radius: 12px;
-      padding: 16px 20px;
-      min-width: 250px;
-      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+      border-radius: 14px;
+      padding: 16px;
+      width: 380px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.05);
       pointer-events: auto;
-      z-index: 20;
-      display: none; /* hidden until stream starts */
+      z-index: 25;
+      display: none; /* Shown after camera starts */
+      flex-direction: column;
+      gap: 10px;
     }
 
-    .hud-title {
-      font-size: 0.75rem;
+    .hud-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .hud-label {
+      font-size: 0.72rem;
+      font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--text-muted);
-      margin-bottom: 8px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .score-container {
-      display: flex;
-      align-items: baseline;
-      gap: 8px;
-      margin-bottom: 12px;
-    }
-
-    .score-value {
-      font-family: var(--font-mono);
-      font-size: 3rem;
-      font-weight: 700;
-      line-height: 1;
-      color: #fff;
-    }
-
-    .score-max {
-      font-size: 1.1rem;
-      color: var(--text-muted);
-      font-family: var(--font-mono);
-    }
-
-    .score-bar-wrapper {
-      position: relative;
-      height: 8px;
-      background: rgba(255, 255, 255, 0.1);
-      border-radius: 4px;
-      overflow: visible;
-      margin-bottom: 14px;
-    }
-
-    .score-bar-fill {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, var(--accent-cyan), var(--accent-green));
-      border-radius: 4px;
-      transition: width 0.08s ease-out;
-    }
-
-    .peak-indicator-tick {
-      position: absolute;
-      top: -4px;
-      width: 4px;
-      height: 16px;
-      background: #ffffff;
-      border-radius: 2px;
-      box-shadow: 0 0 8px rgba(255, 255, 255, 0.9);
-      transform: translateX(-50%);
-      left: 0%;
-      transition: left 0.1s ease-out;
-    }
-
-    .hud-stats-row {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      font-size: 0.85rem;
-      margin-top: 6px;
+      gap: 6px;
     }
 
-    .hud-stat-label {
-      color: var(--text-muted);
+    .hud-pulse-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--state-peak);
+      box-shadow: 0 0 8px var(--state-peak);
     }
 
-    .hud-stat-val {
-      font-family: var(--font-mono);
-      font-weight: 600;
-    }
-
-    .trend-badge {
+    /* Dynamic State Badge */
+    .state-badge {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      padding: 3px 8px;
+      gap: 6px;
+      padding: 4px 10px;
       border-radius: 6px;
+      font-size: 0.76rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      transition: all 0.2s ease;
+    }
+
+    .state-idle {
+      background: var(--state-idle-glow);
+      color: #cbd5e1;
+      border: 1px solid rgba(148, 163, 184, 0.3);
+    }
+
+    .state-improving {
+      background: var(--state-improving-glow);
+      color: var(--state-improving);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
+    }
+
+    .state-peak {
+      background: var(--state-peak-glow);
+      color: var(--state-peak);
+      border: 1px solid rgba(6, 182, 212, 0.5);
+      box-shadow: 0 0 14px rgba(6, 182, 212, 0.3);
+    }
+
+    .state-overdriven {
+      background: var(--state-overdriven-glow);
+      color: var(--state-overdriven);
+      border: 1px solid rgba(245, 158, 11, 0.5);
+      box-shadow: 0 0 14px rgba(245, 158, 11, 0.3);
+      animation: pulseAlert 1.2s infinite ease-in-out;
+    }
+
+    @keyframes pulseAlert {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.75; }
+    }
+
+    /* Waveform Canvas */
+    .waveform-container {
+      position: relative;
+      width: 100%;
+      height: 120px;
+      background: rgba(8, 10, 16, 0.9);
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.07);
+    }
+
+    canvas#oscilloscopeCanvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .hud-meta-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       font-size: 0.75rem;
-      font-weight: 600;
-      letter-spacing: 0.02em;
-    }
-
-    .trend-sharpening {
-      background: var(--accent-green-glow);
-      color: var(--accent-green);
-      border: 1px solid rgba(16, 185, 129, 0.35);
-    }
-
-    .trend-overshot {
-      background: var(--accent-amber-glow);
-      color: var(--accent-amber);
-      border: 1px solid rgba(245, 158, 11, 0.35);
-    }
-
-    .trend-stable {
-      background: rgba(255, 255, 255, 0.06);
       color: var(--text-muted);
-      border: 1px solid var(--border-subtle);
     }
 
-    /* Magnifier Picture-in-Picture */
+    .hud-meta-val {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+
+    /* Prominent Turn-Back Warning Banner */
+    .turnback-alert {
+      position: absolute;
+      top: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(245, 158, 11, 0.92);
+      backdrop-filter: blur(12px);
+      color: #000;
+      padding: 10px 22px;
+      border-radius: 10px;
+      font-size: 0.88rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 10px 30px rgba(245, 158, 11, 0.4), 0 0 0 2px rgba(255, 255, 255, 0.25);
+      z-index: 40;
+      text-transform: uppercase;
+      animation: bannerPulse 1s infinite alternate ease-in-out;
+    }
+
+    @keyframes bannerPulse {
+      0% { transform: translateX(-50%) scale(1); }
+      100% { transform: translateX(-50%) scale(1.03); }
+    }
+
+    .turnback-icon {
+      width: 22px;
+      height: 22px;
+      fill: none;
+      stroke: #000;
+      stroke-width: 2.5;
+    }
+
+    /* Initial Call-to-Action Banner */
+    .initial-cta-banner {
+      position: absolute;
+      top: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.88);
+      backdrop-filter: blur(12px);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      padding: 10px 22px;
+      border-radius: 10px;
+      font-size: 0.84rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      z-index: 35;
+      text-transform: uppercase;
+    }
+
+    /* Magnifier Loupe Picture-in-Picture */
     .loupe-panel {
       position: absolute;
-      bottom: 18px;
-      right: 18px;
+      bottom: 20px;
+      right: 20px;
       background: var(--bg-card);
       backdrop-filter: blur(16px);
       border: 1px solid var(--border-subtle);
-      border-radius: 12px;
+      border-radius: 14px;
       padding: 12px;
-      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.6);
-      z-index: 20;
-      display: none; /* hidden until stream starts */
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65);
+      z-index: 25;
+      display: none;
       flex-direction: column;
       gap: 8px;
     }
@@ -322,18 +386,19 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      font-size: 0.75rem;
+      font-size: 0.72rem;
       color: var(--text-muted);
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.06em;
+      font-weight: 600;
     }
 
     canvas#loupeCanvas {
-      width: 220px;
-      height: 220px;
+      width: 200px;
+      height: 200px;
       border-radius: 8px;
       background: #000;
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.1);
       display: block;
     }
 
@@ -341,29 +406,31 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      font-size: 0.75rem;
+      font-size: 0.72rem;
     }
 
     .lighting-pill {
-      font-size: 0.7rem;
-      padding: 2px 6px;
+      font-size: 0.68rem;
+      padding: 2px 7px;
       border-radius: 4px;
-      font-weight: 500;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
     }
 
     .lighting-optimal {
       background: rgba(16, 185, 129, 0.15);
-      color: var(--accent-green);
+      color: var(--state-improving);
     }
 
     .lighting-dark {
       background: rgba(239, 68, 68, 0.15);
-      color: var(--accent-red);
+      color: var(--state-alert);
     }
 
     .lighting-bright {
       background: rgba(245, 158, 11, 0.15);
-      color: var(--accent-amber);
+      color: var(--state-overdriven);
     }
 
     /* Initial state / No camera overlay */
@@ -376,7 +443,7 @@
       justify-content: center;
       gap: 20px;
       background: radial-gradient(circle at center, #191f2e 0%, #0a0d13 100%);
-      z-index: 30;
+      z-index: 45;
       padding: 32px;
       text-align: center;
     }
@@ -384,7 +451,7 @@
     .empty-state-icon {
       width: 64px;
       height: 64px;
-      stroke: var(--accent-cyan);
+      stroke: var(--state-peak);
       stroke-width: 1.5;
       fill: none;
       background: rgba(6, 182, 212, 0.08);
@@ -407,9 +474,9 @@
     }
 
     .empty-state-btn {
-      background: var(--accent-green);
+      background: var(--state-improving);
       color: #000;
-      font-weight: 600;
+      font-weight: 700;
       font-size: 1rem;
       padding: 12px 28px;
       border-radius: 10px;
@@ -428,40 +495,16 @@
       transform: translateY(-1px);
     }
 
-    .instructions-hint {
-      position: absolute;
-      bottom: 18px;
-      left: 18px;
-      background: rgba(0, 0, 0, 0.7);
-      backdrop-filter: blur(8px);
-      border: 1px solid var(--border-subtle);
-      border-radius: 8px;
-      padding: 8px 14px;
-      font-size: 0.78rem;
-      color: var(--text-muted);
-      z-index: 10;
-      pointer-events: none;
-      display: none;
-    }
-
     @media (max-width: 768px) {
-      .hud-panel {
-        top: 10px;
+      .oscilloscope-hud {
+        bottom: 10px;
         left: 10px;
+        width: calc(100% - 20px);
+        max-width: 320px;
         padding: 12px;
-        min-width: 190px;
-      }
-      .score-value {
-        font-size: 2.2rem;
       }
       .loupe-panel {
-        bottom: 10px;
-        right: 10px;
-        padding: 8px;
-      }
-      canvas#loupeCanvas {
-        width: 140px;
-        height: 140px;
+        display: none !important; /* Hide loupe on small screens to prioritize waveform */
       }
     }
   </style>
@@ -480,7 +523,7 @@
       </svg>
       <span class="brand-title">
         Dart Focus
-        <span class="brand-badge">Standalone</span>
+        <span class="brand-badge">Oscilloscope Mode</span>
       </span>
     </div>
 
@@ -501,8 +544,8 @@
         <span>Peaking: ON</span>
       </button>
 
-      <button id="btnResetPeak" class="btn-danger" title="Reset Peak Sharpness Record">
-        <span>Reset Peak</span>
+      <button id="btnResetPeak" class="btn-danger" title="Clear Waveform History & Reset Peak">
+        <span>Reset Wave</span>
       </button>
 
       <button id="btnFullscreen" title="Toggle Fullscreen">
@@ -516,53 +559,52 @@
       <video id="webcamVideo" playsinline autoplay muted></video>
       <canvas id="viewCanvas" width="1280" height="960"></canvas>
 
-      <!-- HUD Overlay -->
-      <div class="hud-panel" id="hudPanel">
-        <div class="hud-title">
-          <span>Focus Sharpness</span>
-          <span id="trendBadge" class="trend-badge trend-stable">● Stable</span>
+      <!-- Prominent Turn-Back Warning Overlay -->
+      <div class="turnback-alert" id="turnbackAlert">
+        <svg class="turnback-icon" viewBox="0 0 24 24">
+          <path d="M9 14L4 9l5-5"></path>
+          <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"></path>
+        </svg>
+        <span>Rotation Needed / Turn Back</span>
+      </div>
+
+      <!-- Initial Call to Action Banner -->
+      <div class="initial-cta-banner" id="initialCta">
+        <span>⟳ Rotate Focus Ring to Initialize</span>
+      </div>
+
+      <!-- OSCILLOSCOPE WAVEFORM HUD OVERLAY -->
+      <div class="oscilloscope-hud" id="oscilloscopeHud">
+        <div class="hud-header">
+          <span class="hud-label">
+            <span class="hud-pulse-dot" id="pulseDot"></span>
+            Relative Focus Tracking
+          </span>
+          <span id="stateBadge" class="state-badge state-idle">Awaiting Calibration</span>
         </div>
 
-        <div class="score-container">
-          <div class="score-value" id="scoreValue">0.0</div>
-          <div class="score-max">/ 100</div>
+        <!-- Oscilloscope Waveform Display -->
+        <div class="waveform-container">
+          <canvas id="oscilloscopeCanvas" width="348" height="120"></canvas>
         </div>
 
-        <div class="score-bar-wrapper">
-          <div class="score-bar-fill" id="scoreBarFill"></div>
-          <div class="peak-indicator-tick" id="peakTick" title="Peak Score"></div>
-        </div>
-
-        <div class="hud-stats-row">
-          <span class="hud-stat-label">Peak Latch</span>
-          <span class="hud-stat-val" id="peakValue" style="color: var(--accent-cyan)">0.0</span>
-        </div>
-        <div class="hud-stats-row">
-          <span class="hud-stat-label">Active Stream</span>
-          <span class="hud-stat-val" id="resValue">Auto</span>
-        </div>
-        <div class="hud-stats-row">
-          <span class="hud-stat-label">Frame Rate</span>
-          <span class="hud-stat-val" id="fpsValue">0 FPS</span>
+        <div class="hud-meta-row">
+          <span>Active Stream: <strong class="hud-meta-val" id="resValue">1280 × 960</strong></span>
+          <span>Frame Rate: <strong class="hud-meta-val" id="fpsValue">0 FPS</strong></span>
         </div>
       </div>
 
       <!-- Picture-in-Picture Magnifier Loupe -->
       <div class="loupe-panel" id="loupePanel">
         <div class="loupe-header">
-          <span>2.5× Loupe</span>
+          <span>2.5× Loupe (Peaking)</span>
           <span id="lightingPill" class="lighting-pill lighting-optimal">Optimal</span>
         </div>
-        <canvas id="loupeCanvas" width="220" height="220"></canvas>
+        <canvas id="loupeCanvas" width="200" height="200"></canvas>
         <div class="loupe-footer">
           <span style="color: var(--text-muted); font-size: 0.7rem;">Target Double</span>
           <span id="targetCoords" style="font-family: var(--font-mono); color: var(--text-muted); font-size: 0.7rem;">0, 0</span>
         </div>
-      </div>
-
-      <!-- Draggable Instructions -->
-      <div class="instructions-hint" id="instructionsHint">
-        💡 Click or drag the reticle to reposition the focus target area
       </div>
 
       <!-- Start Prompt / Empty State -->
@@ -573,7 +615,7 @@
         </svg>
         <h2>Dartboard Focus Calibrator</h2>
         <p>
-          Connect your USB dartboard camera, click below to allow camera access, and rotate your lens barrel until the sharpness metric reaches its peak.
+          Connect your USB camera and rotate the focus ring. The oscilloscope HUD tracks relative sharpness progression and alerts you the moment you pass the optical peak.
         </p>
         <button class="empty-state-btn" id="btnStartCamera">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -593,6 +635,8 @@
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
       const loupeCanvas = document.getElementById("loupeCanvas");
       const loupeCtx = loupeCanvas.getContext("2d");
+      const oscCanvas = document.getElementById("oscilloscopeCanvas");
+      const oscCtx = oscCanvas.getContext("2d");
 
       const cameraSelect = document.getElementById("cameraSelect");
       const resSelect = document.getElementById("resSelect");
@@ -601,15 +645,13 @@
       const btnFullscreen = document.getElementById("btnFullscreen");
       const btnStartCamera = document.getElementById("btnStartCamera");
       const emptyState = document.getElementById("emptyState");
-      const hudPanel = document.getElementById("hudPanel");
+      const oscilloscopeHud = document.getElementById("oscilloscopeHud");
       const loupePanel = document.getElementById("loupePanel");
-      const instructionsHint = document.getElementById("instructionsHint");
+      const turnbackAlert = document.getElementById("turnbackAlert");
+      const initialCta = document.getElementById("initialCta");
+      const stateBadge = document.getElementById("stateBadge");
+      const pulseDot = document.getElementById("pulseDot");
 
-      const scoreValueEl = document.getElementById("scoreValue");
-      const scoreBarFill = document.getElementById("scoreBarFill");
-      const peakTick = document.getElementById("peakTick");
-      const peakValueEl = document.getElementById("peakValue");
-      const trendBadge = document.getElementById("trendBadge");
       const resValueEl = document.getElementById("resValue");
       const fpsValueEl = document.getElementById("fpsValue");
       const lightingPill = document.getElementById("lightingPill");
@@ -620,10 +662,19 @@
       let isStreaming = false;
       let peakingEnabled = true;
 
-      let rawScore = 0.0;
-      let smoothScore = 0.0;
+      // Oscilloscope History Buffer (100 samples)
+      const MAX_WAVE_SAMPLES = 100;
+      const waveHistory = [];
       let peakScore = 0.0;
-      let lastScore = 0.0;
+      let minSessionScore = Infinity;
+      let peakSampleIndex = -1;
+      let lastRawScore = 0.0;
+      let baselineEstablished = false;
+      let initialSampleCount = 0;
+      let initialAvgScore = 0.0;
+
+      // Lifecycle States: "INITIAL" | "IMPROVING" | "PEAK" | "OVERDRIVEN"
+      let currentLifecycleState = "INITIAL";
 
       // Target ROI in normalized coordinates (0.0 to 1.0)
       let targetNormX = 0.5;
@@ -635,9 +686,21 @@
       let currentFps = 0;
       let fpsTimer = performance.now();
 
-      // Offscreen canvas for fast CV analysis
+      // Preallocated typed buffers for 60fps zero-allocation CV
+      const patchSize = targetBoxSize;
+      const patchPixels = patchSize * patchSize;
+      const staticGray = new Float32Array(patchPixels);
       const cvCanvas = document.createElement("canvas");
+      cvCanvas.width = patchSize;
+      cvCanvas.height = patchSize;
       const cvCtx = cvCanvas.getContext("2d", { willReadFrequently: true });
+      const loupeOffscreen = document.createElement("canvas");
+      loupeOffscreen.width = patchSize;
+      loupeOffscreen.height = patchSize;
+      const loupeOffCtx = loupeOffscreen.getContext("2d", { willReadFrequently: true });
+
+      let lastAnalysisTime = 0;
+      let currentLighting = "optimal";
 
       // Init or refresh cameras list
       async function populateCameras(activeDeviceId = null) {
@@ -671,20 +734,16 @@
         }
       }
 
-      // Start video stream with robust multi-camera switching
+      // Start video stream with exact device preservation
       async function startStream(targetDeviceId = null) {
         const deviceId = targetDeviceId || (cameraSelect.value && cameraSelect.value !== "" ? cameraSelect.value : null);
 
-        // 1. Cleanly stop and release existing camera handle
         if (currentStream) {
-          currentStream.getTracks().forEach(track => {
-            track.stop();
-          });
+          currentStream.getTracks().forEach(track => track.stop());
           currentStream = null;
           video.srcObject = null;
         }
 
-        // 2. Build constraints with exact deviceId to ensure correct physical camera
         let videoConstraint = {};
         if (deviceId) {
           videoConstraint.deviceId = { exact: deviceId };
@@ -716,7 +775,6 @@
         } catch (primaryErr) {
           console.warn("Primary constraints failed, falling back to camera without resolution lock:", primaryErr);
           try {
-            // Fallback: keep the exact deviceId but drop resolution constraints
             currentStream = await navigator.mediaDevices.getUserMedia({
               video: deviceId ? { deviceId: { exact: deviceId } } : true,
               audio: false
@@ -737,13 +795,11 @@
         await video.play();
 
         emptyState.style.display = "none";
-        hudPanel.style.display = "block";
+        oscilloscopeHud.style.display = "flex";
         loupePanel.style.display = "flex";
-        instructionsHint.style.display = "block";
         isStreaming = true;
-        resetPeak();
+        resetWaveform();
 
-        // Get actual active device ID from stream
         const track = currentStream.getVideoTracks()[0];
         const settings = track ? track.getSettings() : {};
         const activeId = settings.deviceId || deviceId;
@@ -751,35 +807,25 @@
         await populateCameras(activeId);
       }
 
-      // Preallocated typed buffers to prevent GC stutter
-      const patchSize = targetBoxSize;
-      const patchPixels = patchSize * patchSize;
-      const staticGray = new Float32Array(patchPixels);
-      const loupeOffscreen = document.createElement("canvas");
-      loupeOffscreen.width = patchSize;
-      loupeOffscreen.height = patchSize;
-      const loupeOffCtx = loupeOffscreen.getContext("2d", { willReadFrequently: true });
-
-      let lastAnalysisTime = 0;
-      let currentTrend = "stable";
-      let currentLighting = "optimal";
-
-      // Reset Peak Focus Score
-      function resetPeak() {
+      // Reset Oscilloscope Waveform & Peak
+      function resetWaveform() {
+        waveHistory.length = 0;
         peakScore = 0.0;
-        lastScore = 0.0;
-        smoothScore = 0.0;
-        rawScore = 0.0;
-        peakValueEl.textContent = "0.0";
-        peakTick.style.left = "0%";
+        minSessionScore = Infinity;
+        peakSampleIndex = -1;
+        lastRawScore = 0.0;
+        baselineEstablished = false;
+        initialSampleCount = 0;
+        initialAvgScore = 0.0;
+        currentLifecycleState = "INITIAL";
+        updateStateUI("INITIAL");
       }
 
-      // High-performance single-pass Focus Metrics & Peaking on 90x90 patch
+      // Single-pass Focus Sharpness Calculation (Laplacian + Sobel variance)
       function processPatch(imgData) {
         const data = imgData.data;
         let lumSum = 0;
 
-        // 1. Fast grayscale conversion into preallocated static buffer
         for (let i = 0, g = 0; i < data.length; i += 4, g++) {
           const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
           staticGray[g] = luma;
@@ -788,19 +834,18 @@
         const meanLuma = lumSum / patchPixels;
 
         let lightingState = "optimal";
-        if (meanLuma < 40) lightingState = "dark";
-        else if (meanLuma > 190) lightingState = "bright";
+        if (meanLuma < 35) lightingState = "dark";
+        else if (meanLuma > 200) lightingState = "bright";
 
         if (lightingState !== "optimal") {
           return { score: 0.0, meanLuma, lightingState };
         }
 
-        // 2. Compute Laplacian, Sobel, and Peaking in a single tight loop
         let lapSum = 0;
         let lapSqSum = 0;
         let sobelSum = 0;
         let count = 0;
-        const sqPeakingThreshold = 140 * 140; // 19,600 (eliminates Math.hypot/Math.sqrt)
+        const sqPeakingThreshold = 140 * 140;
 
         for (let y = 1; y < patchSize - 1; y++) {
           const rowPrev = (y - 1) * patchSize;
@@ -831,12 +876,12 @@
             sobelSum += gradSq;
             count++;
 
-            // Highlight wire edges on the patch directly
+            // Highlight sharp wire edges on patch
             if (peakingEnabled && gradSq > sqPeakingThreshold) {
               const idx = (rowCurr + x) * 4;
-              data[idx] = (data[idx] * 3 + 16 * 7) >> 3;      // R
-              data[idx + 1] = (data[idx + 1] * 3 + 245 * 7) >> 3; // G (Neon Emerald)
-              data[idx + 2] = (data[idx + 2] * 3 + 130 * 7) >> 3; // B
+              data[idx] = (data[idx] * 3 + 16 * 7) >> 3;
+              data[idx + 1] = (data[idx + 1] * 3 + 245 * 7) >> 3; // Neon Emerald
+              data[idx + 2] = (data[idx + 2] * 3 + 130 * 7) >> 3;
             }
           }
         }
@@ -846,23 +891,212 @@
         const lapVar = Math.max(0, (lapSqSum / count) - (lapSum / count) ** 2);
         const tenengrad = sobelSum / count;
 
-        const logLap = Math.log10(lapVar + 1e-6);
-        const logTen = Math.log10(tenengrad + 1e-6);
-
-        const normLap = Math.min(Math.max((logLap - 1.2) / (3.35 - 1.2), 0.0), 1.0);
-        const normTen = Math.min(Math.max((logTen - 2.2) / (4.70 - 2.2), 0.0), 1.0);
-
-        const calculated = (0.5 * normLap + 0.5 * normTen) * 100.0;
-        const finalScore = Math.min(Math.max(calculated, 0.0), 100.0);
+        // Raw relative sharpness metric (combining Laplacian variance + Tenengrad gradient)
+        const rawMetric = Math.sqrt(lapVar) + Math.sqrt(tenengrad);
 
         return {
-          score: finalScore,
+          score: rawMetric,
           meanLuma,
           lightingState
         };
       }
 
-      // Main Render & Analysis Loop (Smooth 60 FPS)
+      // Update Lifecycle State & UI Banner
+      function updateStateUI(state) {
+        currentLifecycleState = state;
+
+        if (state === "INITIAL") {
+          stateBadge.className = "state-badge state-idle";
+          stateBadge.textContent = "Awaiting Calibration";
+          pulseDot.style.background = "#64748b";
+          pulseDot.style.boxShadow = "0 0 6px #64748b";
+          initialCta.style.display = "flex";
+          turnbackAlert.style.display = "none";
+        } else if (state === "IMPROVING") {
+          stateBadge.className = "state-badge state-improving";
+          stateBadge.textContent = "Scaling Up (Improving) ▲";
+          pulseDot.style.background = "var(--state-improving)";
+          pulseDot.style.boxShadow = "0 0 10px var(--state-improving)";
+          initialCta.style.display = "none";
+          turnbackAlert.style.display = "none";
+        } else if (state === "PEAK") {
+          stateBadge.className = "state-badge state-peak";
+          stateBadge.textContent = "Peak Sweet Spot Found ★";
+          pulseDot.style.background = "var(--state-peak)";
+          pulseDot.style.boxShadow = "0 0 12px var(--state-peak)";
+          initialCta.style.display = "none";
+          turnbackAlert.style.display = "none";
+        } else if (state === "OVERDRIVEN") {
+          stateBadge.className = "state-badge state-overdriven";
+          stateBadge.textContent = "Overdriven (Dropping) ▼";
+          pulseDot.style.background = "var(--state-overdriven)";
+          pulseDot.style.boxShadow = "0 0 12px var(--state-overdriven)";
+          initialCta.style.display = "none";
+          turnbackAlert.style.display = "flex";
+        }
+      }
+
+      // Render Oscilloscope Waveform Curve & Peak Line
+      function renderOscilloscope() {
+        const w = oscCanvas.width;
+        const h = oscCanvas.height;
+
+        oscCtx.clearRect(0, 0, w, h);
+
+        // 1. Draw subtle tech grid background
+        oscCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+        oscCtx.lineWidth = 1;
+
+        // Horizontal grid lines
+        for (let y = 20; y < h; y += 25) {
+          oscCtx.beginPath();
+          oscCtx.moveTo(0, y);
+          oscCtx.lineTo(w, y);
+          oscCtx.stroke();
+        }
+
+        // Vertical grid lines
+        for (let x = 30; x < w; x += 40) {
+          oscCtx.beginPath();
+          oscCtx.moveTo(x, 0);
+          oscCtx.lineTo(x, h);
+          oscCtx.stroke();
+        }
+
+        if (waveHistory.length < 2) {
+          // Flat neutral line in Initial State
+          oscCtx.strokeStyle = "#475569";
+          oscCtx.lineWidth = 2;
+          oscCtx.beginPath();
+          oscCtx.moveTo(0, h * 0.7);
+          oscCtx.lineTo(w, h * 0.7);
+          oscCtx.stroke();
+          return;
+        }
+
+        // 2. Relative auto-scaling window calculation
+        let minVal = Math.min(...waveHistory);
+        let maxVal = Math.max(...waveHistory, peakScore);
+        if (maxVal - minVal < 2.0) {
+          maxVal = minVal + 5.0; // Prevent division by zero / flatline clipping
+        }
+        const valRange = maxVal - minVal;
+        const paddingBottom = 16;
+        const paddingTop = 22;
+        const usableHeight = h - paddingBottom - paddingTop;
+
+        function valToY(v) {
+          const norm = (v - minVal) / valRange;
+          return h - paddingBottom - norm * usableHeight;
+        }
+
+        // 3. Draw Peak Recorded Horizontal Ghost-Line
+        if (peakScore > 0 && baselineEstablished) {
+          const peakY = valToY(peakScore);
+
+          oscCtx.save();
+          oscCtx.setLineDash([4, 4]);
+          oscCtx.strokeStyle = "rgba(6, 182, 212, 0.65)";
+          oscCtx.lineWidth = 1.5;
+          oscCtx.beginPath();
+          oscCtx.moveTo(0, peakY);
+          oscCtx.lineTo(w, peakY);
+          oscCtx.stroke();
+
+          // Text Annotation: "PEAK RECORDED"
+          oscCtx.setLineDash([]);
+          oscCtx.fillStyle = "rgba(6, 182, 212, 0.9)";
+          oscCtx.font = "bold 9px monospace";
+          oscCtx.textAlign = "left";
+          oscCtx.fillText("PEAK RECORDED", 10, Math.max(12, peakY - 5));
+          oscCtx.restore();
+        }
+
+        // 4. Draw Oscilloscope History Curve (Right = newest, Left = oldest)
+        const stepX = w / (MAX_WAVE_SAMPLES - 1);
+        const startIndex = MAX_WAVE_SAMPLES - waveHistory.length;
+
+        // Choose wave color based on current state
+        let waveColor = "#10b981"; // Emerald green
+        let glowColor = "rgba(16, 185, 129, 0.4)";
+        let fillColor = "rgba(16, 185, 129, 0.12)";
+
+        if (currentLifecycleState === "INITIAL") {
+          waveColor = "#64748b";
+          glowColor = "rgba(100, 116, 139, 0.3)";
+          fillColor = "rgba(100, 116, 139, 0.08)";
+        } else if (currentLifecycleState === "OVERDRIVEN") {
+          waveColor = "#f59e0b"; // Alert Amber
+          glowColor = "rgba(245, 158, 11, 0.5)";
+          fillColor = "rgba(245, 158, 11, 0.15)";
+        }
+
+        oscCtx.save();
+        oscCtx.strokeStyle = waveColor;
+        oscCtx.lineWidth = 2.5;
+        oscCtx.lineJoin = "round";
+        oscCtx.lineCap = "round";
+        oscCtx.shadowColor = glowColor;
+        oscCtx.shadowBlur = 8;
+
+        oscCtx.beginPath();
+        let firstX = 0;
+        let firstY = h;
+
+        for (let i = 0; i < waveHistory.length; i++) {
+          const sample = waveHistory[i];
+          const x = (startIndex + i) * stepX;
+          const y = valToY(sample);
+
+          if (i === 0) {
+            firstX = x;
+            firstY = y;
+            oscCtx.moveTo(x, y);
+          } else {
+            oscCtx.lineTo(x, y);
+          }
+        }
+        oscCtx.stroke();
+
+        // Fill subtle gradient under curve
+        const lastX = (startIndex + waveHistory.length - 1) * stepX;
+        const lastY = valToY(waveHistory[waveHistory.length - 1]);
+
+        oscCtx.lineTo(lastX, h);
+        oscCtx.lineTo(firstX, h);
+        oscCtx.closePath();
+        const grad = oscCtx.createLinearGradient(0, paddingTop, 0, h);
+        grad.addColorStop(0, fillColor);
+        grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+        oscCtx.fillStyle = grad;
+        oscCtx.fill();
+        oscCtx.restore();
+
+        // 5. Draw Glowing Triangular Marker at the Peak sample on the curve
+        if (peakSampleIndex >= 0 && baselineEstablished) {
+          const peakRelIndex = peakSampleIndex - (waveHistory.length - MAX_WAVE_SAMPLES > 0 ? waveHistory.length - MAX_WAVE_SAMPLES : 0);
+          if (peakRelIndex >= 0 && peakRelIndex < waveHistory.length) {
+            const pkX = (startIndex + peakRelIndex) * stepX;
+            const pkY = valToY(peakScore);
+
+            oscCtx.save();
+            oscCtx.fillStyle = "#06b6d4";
+            oscCtx.shadowColor = "rgba(6, 182, 212, 0.9)";
+            oscCtx.shadowBlur = 10;
+
+            // Inverted triangle marker
+            oscCtx.beginPath();
+            oscCtx.moveTo(pkX, pkY - 2);
+            oscCtx.lineTo(pkX - 5, pkY - 9);
+            oscCtx.lineTo(pkX + 5, pkY - 9);
+            oscCtx.closePath();
+            oscCtx.fill();
+            oscCtx.restore();
+          }
+        }
+      }
+
+      // Main Render Loop (Smooth 60 FPS)
       function processFrame() {
         if (!isStreaming || video.readyState < 2) {
           requestAnimationFrame(processFrame);
@@ -882,7 +1116,7 @@
           }
         }
 
-        // 1. Draw raw video feed at native display refresh rate (60 FPS)
+        // 1. Draw raw video feed (Background) at 60 FPS
         ctx.drawImage(video, 0, 0, vw, vh);
 
         // Calculate Target ROI bounding box
@@ -891,60 +1125,68 @@
         const rx = Math.max(0, Math.min(vw - targetBoxSize, tx - targetBoxSize / 2));
         const ry = Math.max(0, Math.min(vh - targetBoxSize, ty - targetBoxSize / 2));
 
-        // 2. Throttled CV Analysis (~25-30 FPS) to eliminate CPU lag and battery drain
+        // 2. Throttled CV Focus & Waveform Tracking (~25 FPS)
         const now = performance.now();
-        if (now - lastAnalysisTime >= 35) {
+        if (now - lastAnalysisTime >= 38) {
           lastAnalysisTime = now;
           targetCoordsEl.textContent = `${rx}, ${ry}`;
 
           cvCtx.drawImage(video, rx, ry, targetBoxSize, targetBoxSize, 0, 0, targetBoxSize, targetBoxSize);
           const patchData = cvCtx.getImageData(0, 0, targetBoxSize, targetBoxSize);
           const metrics = processPatch(patchData);
-          rawScore = metrics.score;
+          const rawScore = metrics.score;
           currentLighting = metrics.lightingState;
 
-          // Smooth score display
-          smoothScore = smoothScore === 0 ? rawScore : smoothScore * 0.65 + rawScore * 0.35;
+          // Add to Oscilloscope waveform history buffer
+          if (waveHistory.length >= MAX_WAVE_SAMPLES) {
+            waveHistory.shift();
+            if (peakSampleIndex > 0) peakSampleIndex--;
+          }
+          waveHistory.push(rawScore);
 
-          // Update Peak
-          if (rawScore > peakScore) {
-            peakScore = rawScore;
+          // Track baseline vs active movement
+          if (!baselineEstablished) {
+            initialSampleCount++;
+            initialAvgScore += rawScore;
+            if (initialSampleCount >= 8) {
+              const avg = initialAvgScore / initialSampleCount;
+              minSessionScore = avg;
+              baselineEstablished = true;
+            }
           }
 
-          // Trend calculation
-          if (rawScore > lastScore + 0.8) {
-            currentTrend = "sharpening";
-          } else if (peakScore > 10 && (peakScore - rawScore) >= 3.5) {
-            currentTrend = "overshot";
-          } else if (rawScore < lastScore - 0.8) {
-            currentTrend = "overshot";
+          // Evaluate 4 Lifecycle States
+          if (!baselineEstablished || waveHistory.length < 5) {
+            updateStateUI("INITIAL");
           } else {
-            currentTrend = "stable";
+            const currentVal = rawScore;
+            const scoreDelta = currentVal - (waveHistory[waveHistory.length - 4] || currentVal);
+
+            // Peak Tracking
+            if (currentVal > peakScore) {
+              peakScore = currentVal;
+              peakSampleIndex = waveHistory.length - 1;
+              updateStateUI("IMPROVING");
+            } else if (peakScore > 0 && (peakScore - currentVal) > Math.max(3.5, peakScore * 0.08)) {
+              // User rotated past peak: Overdriven state
+              updateStateUI("OVERDRIVEN");
+            } else if (Math.abs(currentVal - peakScore) <= Math.max(1.0, peakScore * 0.03)) {
+              // At Peak sweet spot
+              updateStateUI("PEAK");
+            } else if (scoreDelta > 0.4) {
+              updateStateUI("IMPROVING");
+            }
           }
-          lastScore = rawScore;
+
+          lastRawScore = rawScore;
+
+          // Render Oscilloscope Waveform Canvas
+          renderOscilloscope();
 
           // Render Loupe Picture-in-Picture directly from processed patch
           loupeOffCtx.putImageData(patchData, 0, 0);
-          loupeCtx.imageSmoothingEnabled = false; // Crisp 1:1 pixel magnifier
+          loupeCtx.imageSmoothingEnabled = false;
           loupeCtx.drawImage(loupeOffscreen, 0, 0, targetBoxSize, targetBoxSize, 0, 0, loupeCanvas.width, loupeCanvas.height);
-
-          // Update UI stats
-          scoreValueEl.textContent = smoothScore.toFixed(1);
-          scoreBarFill.style.width = `${smoothScore}%`;
-          peakValueEl.textContent = peakScore.toFixed(1);
-          peakTick.style.left = `${peakScore}%`;
-
-          // Update Trend Pill
-          if (currentTrend === "sharpening") {
-            trendBadge.className = "trend-badge trend-sharpening";
-            trendBadge.textContent = "▲ Sharpening";
-          } else if (currentTrend === "overshot") {
-            trendBadge.className = "trend-badge trend-overshot";
-            trendBadge.textContent = "▼ Overshot";
-          } else {
-            trendBadge.className = "trend-badge trend-stable";
-            trendBadge.textContent = "● Stable";
-          }
 
           // Lighting Pill
           if (currentLighting === "optimal") {
@@ -959,8 +1201,8 @@
           }
         }
 
-        // 3. Draw Interactive Reticle on Main Canvas (smooth at 60 FPS)
-        drawReticle(ctx, rx, ry, targetBoxSize, targetBoxSize, currentTrend);
+        // 3. Draw Interactive Reticle on Main Canvas
+        drawReticle(ctx, rx, ry, targetBoxSize, targetBoxSize, currentLifecycleState);
 
         // FPS Calculation
         frameCount++;
@@ -975,12 +1217,12 @@
       }
 
       // Draw Focus Target Reticle
-      function drawReticle(context, x, y, w, h, trend) {
+      function drawReticle(context, x, y, w, h, state) {
         context.save();
 
         let color = "#38bdf8"; // Cyan default
-        if (trend === "sharpening") color = "#10b981"; // Green
-        else if (trend === "overshot") color = "#f59e0b"; // Amber
+        if (state === "IMPROVING" || state === "PEAK") color = "#10b981"; // Green
+        else if (state === "OVERDRIVEN") color = "#f59e0b"; // Amber
 
         context.strokeStyle = color;
         context.lineWidth = 2.5;
@@ -999,7 +1241,7 @@
         // Top-Right
         context.beginPath();
         context.moveTo(x + w - cornerSize, y);
-        context.lineTo(x + w, y);
+        context.lineTo(x + w);
         context.lineTo(x + w, y + cornerSize);
         context.stroke();
 
@@ -1081,7 +1323,7 @@
         }
       });
 
-      btnResetPeak.addEventListener("click", resetPeak);
+      btnResetPeak.addEventListener("click", resetWaveform);
 
       btnPeaking.addEventListener("click", () => {
         peakingEnabled = !peakingEnabled;
