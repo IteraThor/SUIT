@@ -6,19 +6,20 @@
   <title>Dartboard Camera Focus Tool</title>
   <style>
     :root {
-      --bg-main: #0a0c10;
-      --bg-card: rgba(18, 22, 32, 0.85);
+      --bg-main: #090b10;
+      --bg-card: rgba(18, 22, 32, 0.88);
       --bg-card-hover: rgba(28, 34, 48, 0.95);
-      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-subtle: rgba(255, 255, 255, 0.09);
+      --border-highlight: rgba(56, 189, 248, 0.35);
       --text-main: #f3f4f6;
       --text-muted: #9ca3af;
       --accent-green: #10b981;
-      --accent-green-glow: rgba(16, 185, 129, 0.25);
+      --accent-green-glow: rgba(16, 185, 129, 0.22);
       --accent-cyan: #06b6d4;
       --accent-amber: #f59e0b;
-      --accent-amber-glow: rgba(245, 158, 11, 0.25);
+      --accent-amber-glow: rgba(245, 158, 11, 0.22);
       --accent-red: #ef4444;
-      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     }
 
@@ -29,19 +30,20 @@
       user-select: none;
     }
 
-    body {
+    html, body {
+      width: 100%;
+      height: 100%;
       background-color: var(--bg-main);
       color: var(--text-main);
       font-family: var(--font-sans);
-      min-height: 100vh;
+      overflow: hidden;
       display: flex;
       flex-direction: column;
-      overflow-x: hidden;
     }
 
     /* Header Bar */
     header {
-      background: rgba(15, 18, 26, 0.95);
+      background: rgba(13, 16, 23, 0.95);
       backdrop-filter: blur(12px);
       border-bottom: 1px solid var(--border-subtle);
       padding: 10px 20px;
@@ -51,6 +53,7 @@
       flex-wrap: wrap;
       gap: 12px;
       z-index: 50;
+      flex-shrink: 0;
     }
 
     .brand {
@@ -79,7 +82,7 @@
     .brand-badge {
       font-size: 0.7rem;
       font-weight: 600;
-      padding: 2px 7px;
+      padding: 2px 8px;
       border-radius: 9999px;
       background: rgba(6, 182, 212, 0.15);
       color: var(--accent-cyan);
@@ -99,7 +102,7 @@
       background: var(--bg-card);
       color: var(--text-main);
       border: 1px solid var(--border-subtle);
-      padding: 7px 12px;
+      padding: 7px 14px;
       border-radius: 8px;
       font-size: 0.85rem;
       font-weight: 500;
@@ -141,16 +144,20 @@
       align-items: center;
       justify-content: center;
       padding: 16px;
-      background: radial-gradient(circle at center, #111420 0%, #080a0e 100%);
+      background: radial-gradient(circle at center, #131724 0%, #080a0e 100%);
+      overflow: hidden;
     }
 
     .viewport-wrapper {
       position: relative;
-      max-width: 100%;
-      max-height: calc(100vh - 110px);
-      border-radius: 12px;
+      width: 100%;
+      max-width: 1280px;
+      height: 100%;
+      max-height: calc(100vh - 100px);
+      aspect-ratio: 4 / 3;
+      border-radius: 14px;
       overflow: hidden;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border-subtle);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--border-subtle);
       background: #000;
       display: flex;
       align-items: center;
@@ -162,27 +169,28 @@
     }
 
     canvas#viewCanvas {
-      display: block;
-      max-width: 100%;
-      max-height: calc(100vh - 110px);
+      width: 100%;
+      height: 100%;
       object-fit: contain;
       cursor: crosshair;
+      display: block;
     }
 
     /* HUD Overlay Top-Left */
     .hud-panel {
       position: absolute;
-      top: 16px;
-      left: 16px;
+      top: 18px;
+      left: 18px;
       background: var(--bg-card);
       backdrop-filter: blur(16px);
       border: 1px solid var(--border-subtle);
       border-radius: 12px;
-      padding: 16px;
-      min-width: 240px;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      padding: 16px 20px;
+      min-width: 250px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
       pointer-events: auto;
       z-index: 20;
+      display: none; /* hidden until stream starts */
     }
 
     .hud-title {
@@ -190,7 +198,7 @@
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--text-muted);
-      margin-bottom: 6px;
+      margin-bottom: 8px;
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -200,19 +208,19 @@
       display: flex;
       align-items: baseline;
       gap: 8px;
-      margin-bottom: 10px;
+      margin-bottom: 12px;
     }
 
     .score-value {
       font-family: var(--font-mono);
-      font-size: 2.8rem;
+      font-size: 3rem;
       font-weight: 700;
       line-height: 1;
       color: #fff;
     }
 
     .score-max {
-      font-size: 1rem;
+      font-size: 1.1rem;
       color: var(--text-muted);
       font-family: var(--font-mono);
     }
@@ -223,7 +231,7 @@
       background: rgba(255, 255, 255, 0.1);
       border-radius: 4px;
       overflow: visible;
-      margin-bottom: 12px;
+      margin-bottom: 14px;
     }
 
     .score-bar-fill {
@@ -236,12 +244,12 @@
 
     .peak-indicator-tick {
       position: absolute;
-      top: -3px;
-      width: 3px;
-      height: 14px;
+      top: -4px;
+      width: 4px;
+      height: 16px;
       background: #ffffff;
       border-radius: 2px;
-      box-shadow: 0 0 6px rgba(255, 255, 255, 0.8);
+      box-shadow: 0 0 8px rgba(255, 255, 255, 0.9);
       transform: translateX(-50%);
       left: 0%;
       transition: left 0.1s ease-out;
@@ -251,7 +259,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      font-size: 0.8rem;
+      font-size: 0.85rem;
       margin-top: 6px;
     }
 
@@ -278,17 +286,17 @@
     .trend-sharpening {
       background: var(--accent-green-glow);
       color: var(--accent-green);
-      border: 1px solid rgba(16, 185, 129, 0.3);
+      border: 1px solid rgba(16, 185, 129, 0.35);
     }
 
     .trend-overshot {
       background: var(--accent-amber-glow);
       color: var(--accent-amber);
-      border: 1px solid rgba(245, 158, 11, 0.3);
+      border: 1px solid rgba(245, 158, 11, 0.35);
     }
 
     .trend-stable {
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(255, 255, 255, 0.06);
       color: var(--text-muted);
       border: 1px solid var(--border-subtle);
     }
@@ -296,16 +304,16 @@
     /* Magnifier Picture-in-Picture */
     .loupe-panel {
       position: absolute;
-      bottom: 16px;
-      right: 16px;
+      bottom: 18px;
+      right: 18px;
       background: var(--bg-card);
       backdrop-filter: blur(16px);
       border: 1px solid var(--border-subtle);
       border-radius: 12px;
       padding: 12px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.6);
       z-index: 20;
-      display: flex;
+      display: none; /* hidden until stream starts */
       flex-direction: column;
       gap: 8px;
     }
@@ -325,7 +333,7 @@
       height: 220px;
       border-radius: 8px;
       background: #000;
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.12);
       display: block;
     }
 
@@ -358,7 +366,7 @@
       color: var(--accent-amber);
     }
 
-    /* Initial state overlay */
+    /* Initial state / No camera overlay */
     .empty-state {
       position: absolute;
       inset: 0;
@@ -366,11 +374,36 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 16px;
-      background: var(--bg-main);
+      gap: 20px;
+      background: radial-gradient(circle at center, #191f2e 0%, #0a0d13 100%);
       z-index: 30;
-      padding: 24px;
+      padding: 32px;
       text-align: center;
+    }
+
+    .empty-state-icon {
+      width: 64px;
+      height: 64px;
+      stroke: var(--accent-cyan);
+      stroke-width: 1.5;
+      fill: none;
+      background: rgba(6, 182, 212, 0.08);
+      padding: 14px;
+      border-radius: 20px;
+      border: 1px solid rgba(6, 182, 212, 0.2);
+    }
+
+    .empty-state h2 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .empty-state p {
+      color: var(--text-muted);
+      max-width: 460px;
+      font-size: 0.95rem;
+      line-height: 1.6;
     }
 
     .empty-state-btn {
@@ -378,53 +411,57 @@
       color: #000;
       font-weight: 600;
       font-size: 1rem;
-      padding: 12px 24px;
+      padding: 12px 28px;
       border-radius: 10px;
       border: none;
-      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.4);
+      box-shadow: 0 4px 18px rgba(16, 185, 129, 0.4);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
     }
 
     .empty-state-btn:hover {
       background: #059669;
       color: #fff;
+      transform: translateY(-1px);
     }
 
     .instructions-hint {
       position: absolute;
-      bottom: 16px;
-      left: 16px;
-      background: rgba(0, 0, 0, 0.65);
+      bottom: 18px;
+      left: 18px;
+      background: rgba(0, 0, 0, 0.7);
       backdrop-filter: blur(8px);
       border: 1px solid var(--border-subtle);
       border-radius: 8px;
-      padding: 8px 12px;
-      font-size: 0.75rem;
+      padding: 8px 14px;
+      font-size: 0.78rem;
       color: var(--text-muted);
       z-index: 10;
       pointer-events: none;
+      display: none;
     }
 
     @media (max-width: 768px) {
       .hud-panel {
-        top: 8px;
-        left: 8px;
+        top: 10px;
+        left: 10px;
         padding: 12px;
-        min-width: 180px;
+        min-width: 190px;
       }
       .score-value {
         font-size: 2.2rem;
       }
       .loupe-panel {
-        bottom: 8px;
-        right: 8px;
+        bottom: 10px;
+        right: 10px;
         padding: 8px;
       }
       canvas#loupeCanvas {
         width: 140px;
         height: 140px;
-      }
-      .instructions-hint {
-        display: none;
       }
     }
   </style>
@@ -476,7 +513,7 @@
   <main>
     <div class="viewport-wrapper" id="viewportWrapper">
       <video id="webcamVideo" playsinline autoplay muted></video>
-      <canvas id="viewCanvas"></canvas>
+      <canvas id="viewCanvas" width="1280" height="960"></canvas>
 
       <!-- HUD Overlay -->
       <div class="hud-panel" id="hudPanel">
@@ -513,30 +550,39 @@
         </div>
         <canvas id="loupeCanvas" width="220" height="220"></canvas>
         <div class="loupe-footer">
-          <span style="color: var(--text-muted); font-size: 0.7rem;">Furthest Double / Target</span>
+          <span style="color: var(--text-muted); font-size: 0.7rem;">Target Double</span>
           <span id="targetCoords" style="font-family: var(--font-mono); color: var(--text-muted); font-size: 0.7rem;">0, 0</span>
         </div>
       </div>
 
       <!-- Draggable Instructions -->
-      <div class="instructions-hint">
-        💡 Click or drag the reticle to reposition the focus sweet spot
+      <div class="instructions-hint" id="instructionsHint">
+        💡 Click or drag the reticle to reposition the focus target area
       </div>
 
-      <!-- Permission / Start Prompt -->
+      <!-- Start Prompt / Empty State -->
       <div class="empty-state" id="emptyState">
-        <h2>Dartboard Optical Focus Calibrator</h2>
-        <p style="color: var(--text-muted); max-width: 420px; font-size: 0.9rem; line-height: 1.5;">
-          Connect your USB dartboard camera, grant camera permissions, and rotate the lens barrel until the sharpness metric peaks.
+        <svg class="empty-state-icon" viewBox="0 0 24 24">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+          <circle cx="12" cy="13" r="4"></circle>
+        </svg>
+        <h2>Dartboard Focus Calibrator</h2>
+        <p>
+          Connect your USB dartboard camera, click below to allow camera access, and rotate your lens barrel until the sharpness metric reaches its peak.
         </p>
-        <button class="empty-state-btn" id="btnStartCamera">Start Camera</button>
+        <button class="empty-state-btn" id="btnStartCamera">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+          Start Camera
+        </button>
       </div>
     </div>
   </main>
 
   <script>
     (function () {
-      // Elements
+      // DOM Elements
       const video = document.getElementById("webcamVideo");
       const canvas = document.getElementById("viewCanvas");
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -550,6 +596,9 @@
       const btnFullscreen = document.getElementById("btnFullscreen");
       const btnStartCamera = document.getElementById("btnStartCamera");
       const emptyState = document.getElementById("emptyState");
+      const hudPanel = document.getElementById("hudPanel");
+      const loupePanel = document.getElementById("loupePanel");
+      const instructionsHint = document.getElementById("instructionsHint");
 
       const scoreValueEl = document.getElementById("scoreValue");
       const scoreBarFill = document.getElementById("scoreBarFill");
@@ -565,7 +614,8 @@
       let isStreaming = false;
       let peakingEnabled = true;
 
-      let score = 0.0;
+      let rawScore = 0.0;
+      let smoothScore = 0.0;
       let peakScore = 0.0;
       let lastScore = 0.0;
 
@@ -591,7 +641,7 @@
           cameraSelect.innerHTML = "";
 
           if (videoDevices.length === 0) {
-            cameraSelect.innerHTML = '<option value="">No cameras detected</option>';
+            cameraSelect.innerHTML = '<option value="">Default Camera</option>';
             return;
           }
 
@@ -606,7 +656,7 @@
         }
       }
 
-      // Start video stream
+      // Start video stream with fallback
       async function startStream(deviceId = null) {
         if (currentStream) {
           currentStream.getTracks().forEach(track => track.stop());
@@ -622,7 +672,7 @@
         };
 
         if (deviceId) {
-          constraints.video.deviceId = { exact: deviceId };
+          constraints.video.deviceId = { ideal: deviceId };
         }
 
         try {
@@ -631,6 +681,9 @@
           await video.play();
 
           emptyState.style.display = "none";
+          hudPanel.style.display = "block";
+          loupePanel.style.display = "flex";
+          instructionsHint.style.display = "block";
           isStreaming = true;
           resetPeak();
 
@@ -639,8 +692,22 @@
             cameraSelect.value = deviceId;
           }
         } catch (err) {
-          console.error("Failed to start camera:", err);
-          alert("Could not access camera: " + err.message);
+          console.warn("Retrying camera with generic constraints:", err);
+          try {
+            currentStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            video.srcObject = currentStream;
+            await video.play();
+            emptyState.style.display = "none";
+            hudPanel.style.display = "block";
+            loupePanel.style.display = "flex";
+            instructionsHint.style.display = "block";
+            isStreaming = true;
+            resetPeak();
+            await populateCameras();
+          } catch (finalErr) {
+            console.error("Failed to start camera:", finalErr);
+            alert("Could not access camera: " + finalErr.message);
+          }
         }
       }
 
@@ -648,16 +715,17 @@
       function resetPeak() {
         peakScore = 0.0;
         lastScore = 0.0;
+        smoothScore = 0.0;
+        rawScore = 0.0;
         peakValueEl.textContent = "0.0";
         peakTick.style.left = "0%";
       }
 
-      // Laplacian + Sobel normalized focus sharpness calculation
+      // Normalized focus sharpness calculation (Laplacian + Sobel)
       function computeFocusMetrics(imageData) {
         const { data, width, height } = imageData;
         const totalPixels = width * height;
 
-        // Grayscale conversion
         const gray = new Float32Array(totalPixels);
         let lumSum = 0;
         for (let i = 0, g = 0; i < data.length; i += 4, g++) {
@@ -667,7 +735,6 @@
         }
         const meanLuma = lumSum / totalPixels;
 
-        // Lighting check
         let lightingState = "optimal";
         if (meanLuma < 40) lightingState = "dark";
         else if (meanLuma > 190) lightingState = "bright";
@@ -676,7 +743,6 @@
           return { score: 0.0, meanLuma, lightingState };
         }
 
-        // 3x3 Laplacian & Sobel operators
         let lapSum = 0;
         let lapSqSum = 0;
         let sobelSum = 0;
@@ -688,7 +754,6 @@
           const rowNext = (y + 1) * width;
 
           for (let x = 1; x < width - 1; x++) {
-            // Laplacian: [0, 1, 0, 1, -4, 1, 0, 1, 0]
             const lapVal =
               gray[rowPrev + x] +
               gray[rowCurr + (x - 1)] -
@@ -699,7 +764,6 @@
             lapSum += lapVal;
             lapSqSum += lapVal * lapVal;
 
-            // Sobel Gx and Gy
             const gx =
               -gray[rowPrev + (x - 1)] + gray[rowPrev + (x + 1)] -
               2 * gray[rowCurr + (x - 1)] + 2 * gray[rowCurr + (x + 1)] -
@@ -725,8 +789,8 @@
         const normLap = Math.min(Math.max((logLap - 1.2) / (3.35 - 1.2), 0.0), 1.0);
         const normTen = Math.min(Math.max((logTen - 2.2) / (4.70 - 2.2), 0.0), 1.0);
 
-        const rawScore = (0.5 * normLap + 0.5 * normTen) * 100.0;
-        const finalScore = Math.min(Math.max(rawScore, 0.0), 100.0);
+        const calculated = (0.5 * normLap + 0.5 * normTen) * 100.0;
+        const finalScore = Math.min(Math.max(calculated, 0.0), 100.0);
 
         return {
           score: finalScore,
@@ -735,12 +799,11 @@
         };
       }
 
-      // Draw Focus Peaking Overlay in Loupe
+      // Draw Focus Peaking in Loupe
       function renderLoupe(sourceVideo, rx, ry, rw, rh) {
         const lw = loupeCanvas.width;
         const lh = loupeCanvas.height;
 
-        // Draw zoomed crop to loupe canvas
         loupeCtx.drawImage(sourceVideo, rx, ry, rw, rh, 0, 0, lw, lh);
 
         if (!peakingEnabled) return;
@@ -753,8 +816,7 @@
           gray[g] = 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
         }
 
-        // Apply edge detection threshold and highlight sharp edges in neon green
-        const threshold = 180;
+        const threshold = 140;
         for (let y = 1; y < lh - 1; y++) {
           const rowPrev = (y - 1) * lw;
           const rowCurr = y * lw;
@@ -773,9 +835,9 @@
             const mag = Math.hypot(gx, gy);
             if (mag > threshold) {
               const idx = (rowCurr + x) * 4;
-              pixels[idx] = Math.round(pixels[idx] * 0.3 + 16 * 0.7);      // R
-              pixels[idx + 1] = Math.round(pixels[idx + 1] * 0.3 + 245 * 0.7); // G
-              pixels[idx + 2] = Math.round(pixels[idx + 2] * 0.3 + 130 * 0.7); // B
+              pixels[idx] = Math.round(pixels[idx] * 0.25 + 16 * 0.75);      // R
+              pixels[idx + 1] = Math.round(pixels[idx + 1] * 0.25 + 245 * 0.75); // G
+              pixels[idx + 2] = Math.round(pixels[idx + 2] * 0.25 + 130 * 0.75); // B
             }
           }
         }
@@ -815,23 +877,26 @@
         cvCtx.drawImage(video, rx, ry, targetBoxSize, targetBoxSize, 0, 0, targetBoxSize, targetBoxSize);
         const patchData = cvCtx.getImageData(0, 0, targetBoxSize, targetBoxSize);
         const metrics = computeFocusMetrics(patchData);
-        score = metrics.score;
+        rawScore = metrics.score;
+
+        // Smooth score display
+        smoothScore = smoothScore === 0 ? rawScore : smoothScore * 0.7 + rawScore * 0.3;
 
         // Update Peak
-        if (score > peakScore) {
-          peakScore = score;
+        if (rawScore > peakScore) {
+          peakScore = rawScore;
         }
 
         // Trend calculation
         let trend = "stable";
-        if (score > lastScore + 0.8) {
+        if (rawScore > lastScore + 0.8) {
           trend = "sharpening";
-        } else if (peakScore > 10 && (peakScore - score) >= 3.5) {
+        } else if (peakScore > 10 && (peakScore - rawScore) >= 3.5) {
           trend = "overshot";
-        } else if (score < lastScore - 0.8) {
+        } else if (rawScore < lastScore - 0.8) {
           trend = "overshot";
         }
-        lastScore = score;
+        lastScore = rawScore;
 
         // 3. Render Loupe (Picture-in-Picture)
         renderLoupe(video, rx, ry, targetBoxSize, targetBoxSize);
@@ -840,8 +905,8 @@
         drawReticle(ctx, rx, ry, targetBoxSize, targetBoxSize, trend);
 
         // 5. Update UI Stats
-        scoreValueEl.textContent = score.toFixed(1);
-        scoreBarFill.style.width = `${score}%`;
+        scoreValueEl.textContent = smoothScore.toFixed(1);
+        scoreBarFill.style.width = `${smoothScore}%`;
 
         peakValueEl.textContent = peakScore.toFixed(1);
         peakTick.style.left = `${peakScore}%`;
@@ -892,12 +957,11 @@
         else if (trend === "overshot") color = "#f59e0b"; // Amber
 
         context.strokeStyle = color;
-        context.lineWidth = 2;
+        context.lineWidth = 2.5;
         context.shadowColor = "rgba(0, 0, 0, 0.8)";
         context.shadowBlur = 6;
 
-        // Corner brackets
-        const cornerSize = 14;
+        const cornerSize = 16;
 
         // Top-Left
         context.beginPath();
@@ -909,7 +973,7 @@
         // Top-Right
         context.beginPath();
         context.moveTo(x + w - cornerSize, y);
-        context.lineTo(x + w);
+        context.lineTo(x + w, y);
         context.lineTo(x + w, y + cornerSize);
         context.stroke();
 
@@ -931,7 +995,7 @@
         const cx = x + w / 2;
         const cy = y + h / 2;
         context.beginPath();
-        context.arc(cx, cy, 3, 0, 2 * Math.PI);
+        context.arc(cx, cy, 3.5, 0, 2 * Math.PI);
         context.fillStyle = color;
         context.fill();
 
@@ -939,11 +1003,9 @@
       }
 
       // Handle Reticle Dragging & Clicking
-      function handlePointerMove(e) {
-        if (!isDragging) return;
+      function updateTargetFromPointer(clientX, clientY) {
         const rect = canvas.getBoundingClientRect();
-        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        if (rect.width === 0 || rect.height === 0) return;
 
         const normX = (clientX - rect.left) / rect.width;
         const normY = (clientY - rect.top) / rect.height;
@@ -954,18 +1016,28 @@
 
       canvas.addEventListener("mousedown", (e) => {
         isDragging = true;
-        handlePointerMove(e);
+        updateTargetFromPointer(e.clientX, e.clientY);
       });
 
-      window.addEventListener("mousemove", handlePointerMove);
+      window.addEventListener("mousemove", (e) => {
+        if (isDragging) updateTargetFromPointer(e.clientX, e.clientY);
+      });
+
       window.addEventListener("mouseup", () => { isDragging = false; });
 
       canvas.addEventListener("touchstart", (e) => {
-        isDragging = true;
-        handlePointerMove(e);
+        if (e.touches.length > 0) {
+          isDragging = true;
+          updateTargetFromPointer(e.touches[0].clientX, e.touches[0].clientY);
+        }
       }, { passive: true });
 
-      window.addEventListener("touchmove", handlePointerMove, { passive: true });
+      window.addEventListener("touchmove", (e) => {
+        if (isDragging && e.touches.length > 0) {
+          updateTargetFromPointer(e.touches[0].clientX, e.touches[0].clientY);
+        }
+      }, { passive: true });
+
       window.addEventListener("touchend", () => { isDragging = false; });
 
       // Event Listeners
