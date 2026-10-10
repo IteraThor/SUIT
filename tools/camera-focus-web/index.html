@@ -1220,6 +1220,20 @@
               loupeCtx.imageSmoothingEnabled = false;
               loupeCtx.drawImage(loupeOffscreen, 0, 0, targetBoxSize, targetBoxSize, 0, 0, loupeCanvas.width, loupeCanvas.height);
 
+              // Center reticle marker on Loupe for 1:1 visual confirmation
+              loupeCtx.save();
+              loupeCtx.strokeStyle = "rgba(56, 189, 248, 0.8)";
+              loupeCtx.lineWidth = 1.5;
+              const lcx = loupeCanvas.width / 2;
+              const lcy = loupeCanvas.height / 2;
+              loupeCtx.beginPath();
+              loupeCtx.moveTo(lcx - 8, lcy);
+              loupeCtx.lineTo(lcx + 8, lcy);
+              loupeCtx.moveTo(lcx, lcy - 8);
+              loupeCtx.lineTo(lcx, lcy + 8);
+              loupeCtx.stroke();
+              loupeCtx.restore();
+
               // Lighting Pill
               if (currentLighting === "optimal") {
                 lightingPill.className = "lighting-pill lighting-optimal";
@@ -1306,16 +1320,34 @@
         context.restore();
       }
 
-      // Handle Reticle Dragging & Clicking
+      // Handle Reticle Dragging & Clicking with Exact Aspect-Ratio Letterbox Offsets
       function updateTargetFromPointer(clientX, clientY) {
         const rect = canvas.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) return;
+        if (rect.width === 0 || rect.height === 0 || canvas.width === 0 || canvas.height === 0) return;
 
-        const normX = (clientX - rect.left) / rect.width;
-        const normY = (clientY - rect.top) / rect.height;
+        const canvasAspect = canvas.width / canvas.height;
+        const rectAspect = rect.width / rect.height;
 
-        targetNormX = Math.max(0.05, Math.min(0.95, normX));
-        targetNormY = Math.max(0.05, Math.min(0.95, normY));
+        let renderW = rect.width;
+        let renderH = rect.height;
+        let offsetX = 0;
+        let offsetY = 0;
+
+        if (rectAspect > canvasAspect) {
+          // Pillarbox (black bars on left/right)
+          renderW = rect.height * canvasAspect;
+          offsetX = (rect.width - renderW) / 2;
+        } else {
+          // Letterbox (black bars on top/bottom)
+          renderH = rect.width / canvasAspect;
+          offsetY = (rect.height - renderH) / 2;
+        }
+
+        const clickX = (clientX - rect.left - offsetX) / renderW;
+        const clickY = (clientY - rect.top - offsetY) / renderH;
+
+        targetNormX = Math.max(0.05, Math.min(0.95, clickX));
+        targetNormY = Math.max(0.05, Math.min(0.95, clickY));
       }
 
       canvas.addEventListener("mousedown", (e) => {
