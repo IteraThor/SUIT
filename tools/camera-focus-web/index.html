@@ -694,10 +694,12 @@
           videoConstraint.width = { ideal: 3840, min: 640 };
           videoConstraint.height = { ideal: 2160, min: 480 };
           videoConstraint.frameRate = { ideal: 60 };
+          videoConstraint.resizeMode = "none"; // Disable browser software downscaling
         } else {
           const [w, h] = resSelect.value.split("x").map(Number);
           videoConstraint.width = { ideal: w };
           videoConstraint.height = { ideal: h };
+          videoConstraint.resizeMode = "none";
         }
 
         try {
