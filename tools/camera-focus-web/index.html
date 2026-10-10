@@ -490,11 +490,11 @@
       </select>
 
       <select id="resSelect" title="Select Target Resolution">
-        <option value="max" selected>Max Resolution (Auto)</option>
-        <option value="1920x1080">1920 × 1080 (16:9)</option>
-        <option value="1280x960">1280 × 960 (4:3)</option>
-        <option value="1280x720">1280 × 720 (16:9)</option>
-        <option value="640x480">640 × 480 (4:3)</option>
+        <option value="1280x960" selected>1280 × 960 (Autodarts Native 4:3)</option>
+        <option value="1920x1080">1920 × 1080 (1080p FHD)</option>
+        <option value="1280x720">1280 × 720 (720p HD)</option>
+        <option value="max">Max Possible (Force 2K/4K)</option>
+        <option value="640x480">640 × 480 (Low Res)</option>
       </select>
 
       <button id="btnPeaking" class="btn-active" title="Toggle Green Focus Peaking Overlay">
@@ -690,16 +690,22 @@
           videoConstraint.deviceId = { exact: deviceId };
         }
 
-        if (resSelect.value === "max") {
-          videoConstraint.width = { ideal: 3840, min: 640 };
-          videoConstraint.height = { ideal: 2160, min: 480 };
+        if (resSelect.value === "1280x960") {
+          videoConstraint.width = { ideal: 1280, min: 1280 };
+          videoConstraint.height = { ideal: 960, min: 720 };
           videoConstraint.frameRate = { ideal: 60 };
-          videoConstraint.resizeMode = "none"; // Disable browser software downscaling
+        } else if (resSelect.value === "1920x1080") {
+          videoConstraint.width = { ideal: 1920, min: 1920 };
+          videoConstraint.height = { ideal: 1080, min: 1080 };
+          videoConstraint.frameRate = { ideal: 60 };
+        } else if (resSelect.value === "max") {
+          videoConstraint.width = { ideal: 3840, min: 1280 };
+          videoConstraint.height = { ideal: 2160, min: 720 };
+          videoConstraint.frameRate = { ideal: 60 };
         } else {
           const [w, h] = resSelect.value.split("x").map(Number);
           videoConstraint.width = { ideal: w };
           videoConstraint.height = { ideal: h };
-          videoConstraint.resizeMode = "none";
         }
 
         try {
