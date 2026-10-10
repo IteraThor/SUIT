@@ -370,67 +370,21 @@
       position: absolute;
       bottom: 20px;
       right: 20px;
-      background: var(--bg-card);
-      backdrop-filter: blur(16px);
-      border: 1px solid var(--border-subtle);
-      border-radius: 14px;
-      padding: 12px;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65);
+      background: #000;
+      border: 2px solid rgba(56, 189, 248, 0.4);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75), 0 0 15px rgba(56, 189, 248, 0.15);
       z-index: 25;
       display: none;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .loupe-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 0.72rem;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      font-weight: 600;
+      padding: 0;
     }
 
     canvas#loupeCanvas {
       width: 200px;
       height: 200px;
-      border-radius: 8px;
-      background: #000;
-      border: 1px solid rgba(255, 255, 255, 0.1);
       display: block;
-    }
-
-    .loupe-footer {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 0.72rem;
-    }
-
-    .lighting-pill {
-      font-size: 0.68rem;
-      padding: 2px 7px;
-      border-radius: 4px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-
-    .lighting-optimal {
-      background: rgba(16, 185, 129, 0.15);
-      color: var(--state-improving);
-    }
-
-    .lighting-dark {
-      background: rgba(239, 68, 68, 0.15);
-      color: var(--state-alert);
-    }
-
-    .lighting-bright {
-      background: rgba(245, 158, 11, 0.15);
-      color: var(--state-overdriven);
+      background: #000;
     }
 
     /* Initial state / No camera overlay */
@@ -592,15 +546,7 @@
 
       <!-- Picture-in-Picture Magnifier Loupe -->
       <div class="loupe-panel" id="loupePanel">
-        <div class="loupe-header">
-          <span>2.5× Loupe (Peaking)</span>
-          <span id="lightingPill" class="lighting-pill lighting-optimal">Optimal</span>
-        </div>
         <canvas id="loupeCanvas" width="200" height="200"></canvas>
-        <div class="loupe-footer">
-          <span style="color: var(--text-muted); font-size: 0.7rem;">Target Double</span>
-          <span id="targetCoords" style="font-family: var(--font-mono); color: var(--text-muted); font-size: 0.7rem;">0, 0</span>
-        </div>
       </div>
 
       <!-- Start Prompt / Empty State -->
@@ -650,8 +596,6 @@
 
       const resValueEl = document.getElementById("resValue");
       const fpsValueEl = document.getElementById("fpsValue");
-      const lightingPill = document.getElementById("lightingPill");
-      const targetCoordsEl = document.getElementById("targetCoords");
 
       // State
       let currentStream = null;
@@ -1229,7 +1173,6 @@
             const now = performance.now();
             if (now - lastAnalysisTime >= 33) {
               lastAnalysisTime = now;
-              targetCoordsEl.textContent = `${rx}, ${ry}`;
 
               cvCtx.drawImage(video, rx, ry, targetBoxSize, targetBoxSize, 0, 0, targetBoxSize, targetBoxSize);
               const patchData = cvCtx.getImageData(0, 0, targetBoxSize, targetBoxSize);
@@ -1328,18 +1271,6 @@
               loupeCtx.lineTo(lcx, lcy + 8);
               loupeCtx.stroke();
               loupeCtx.restore();
-
-              // Lighting Pill
-              if (currentLighting === "optimal") {
-                lightingPill.className = "lighting-pill lighting-optimal";
-                lightingPill.textContent = "Optimal";
-              } else if (currentLighting === "dark") {
-                lightingPill.className = "lighting-pill lighting-dark";
-                lightingPill.textContent = "Too Dark";
-              } else {
-                lightingPill.className = "lighting-pill lighting-bright";
-                lightingPill.textContent = "Overexposed";
-              }
             }
 
             // 3. Draw Interactive Reticle on Main Canvas
