@@ -1,10 +1,13 @@
 """Camera Focus Tool GTK4 / Libadwaita presentation view.
 
-Guides users through a 4-step wizard to optically focus Autodarts cameras,
-featuring real-time Cairo HUD overlays (Target Box & Dynamic Focal Line),
-sharpness score gauge, peak memory, trend warnings, and frequency-modulated audio.
+Implements the Oscilloscope Focus Method for Autodarts cameras:
+- Automatic target selection (Furthest Double, Triple 20, or custom tap).
+- Real-time Cairo Oscilloscope HUD with 100-sample relative timeline and peak latch.
+- 2.5x Loupe PIP overlay with zero clutter.
+- Overshoot / Turn Back detection and instant camera switching.
 """
 
+import math
 import threading
 import time
 import numpy as np
@@ -16,16 +19,20 @@ gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw, GLib
 
 from core.logger import get_logger
-from core.camera_focus_service import CameraFocusService, FocusTrend, FocusAnalysis, LightingState
+from core.camera_focus_service import (
+    CameraFocusService,
+    FocusTrend,
+    FocusAnalysis,
+    LightingState,
+    TargetMode,
+)
 from core.audio_tone_service import AudioToneService
 from core.autodarts_service import read_cam_config
 from core.systemd_service import SystemdService
 
 logger = get_logger("camera_focus_view")
 
-
 CAMERA_NAMES = ["Camera 1", "Camera 2", "Camera 3"]
-CAMERA_DESCRIPTIONS = [(name, "") for name in CAMERA_NAMES]
 
 
 class CameraFocusView(Adw.NavigationPage):
@@ -38,14 +45,14 @@ class CameraFocusView(Adw.NavigationPage):
 
         self.current_step = 0  # 0: Cam 1, 1: Cam 2, 2: Cam 3
         self.configured_cams = ["/dev/video0", "/dev/video2", "/dev/video4"]
+        self.raw_cams = []
         self.camera_results = [
-            {"score": 0.0, "peak": 0.0, "snapshot": None},
-            {"score": 0.0, "peak": 0.0, "snapshot": None},
-            {"score": 0.0, "peak": 0.0, "snapshot": None},
+            {"score": 0.0, "peak": 0.0, "target": "Unset"},
+            {"score": 0.0, "peak": 0.0, "target": "Unset"},
+            {"score": 0.0, "peak": 0.0, "target": "Unset"},
         ]
         self.was_autodarts_active = False
 
-        # Zoom / Magnifier settings (locked to optimal 2.5x)
         self.zoom_factor = 2.5
 
         # Live capture state
@@ -56,17 +63,17 @@ class CameraFocusView(Adw.NavigationPage):
         self._lock = threading.Lock()
         self._is_switching_camera = False
 
-        self._preview_surface: cairo.ImageSurface | None = None
         self._preview_bgra: np.ndarray | None = None
-        self._zoom_surface: cairo.ImageSurface | None = None
         self._zoom_bgra: np.ndarray | None = None
+        self._was_maximized = False
+        self.peaking_enabled = True
 
-        # Scrolled container for responsive displays
+        # Container
         scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
         scrolled.set_kinetic_scrolling(True)
         self.set_child(scrolled)
 
-        clamp = Adw.Clamp(maximum_size=980, tightening_threshold=720)
+        clamp = Adw.Clamp(maximum_size=1380, tightening_threshold=960)
         clamp.set_margin_top(8)
         clamp.set_margin_bottom(8)
         clamp.set_margin_start(10)
@@ -76,18 +83,18 @@ class CameraFocusView(Adw.NavigationPage):
         self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         clamp.set_child(self.main_box)
 
-        # Header Bar Container
+        # Header Bar
         self._build_header_card()
 
-        # Camera Tab Selector Bar (Direct 1-tap camera switching)
+        # Camera Tab Selector Bar
         self._build_camera_tab_bar()
 
-        # ViewStack for Wizard (Focus Screen vs Summary Screen)
+        # ViewStack
         self.stack = Adw.ViewStack()
         self.main_box.append(self.stack)
 
-        # Page 1: Interactive Focus Tuning Page
-        self.focus_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        # Page 1: Focus Tuning Page
+        self.focus_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.stack.add_named(self.focus_page, "cam_focus")
 
         # Page 2: Summary Page
@@ -97,16 +104,8 @@ class CameraFocusView(Adw.NavigationPage):
         self._build_focus_screen()
         self._build_summary_screen()
 
-    @property
-    def _accum_zoom_crop(self) -> np.ndarray | None:
-        return self.focus_service._accum_zoom_crop
-
-    @_accum_zoom_crop.setter
-    def _accum_zoom_crop(self, val: np.ndarray | None):
-        self.focus_service._accum_zoom_crop = val
-
     def _build_header_card(self):
-        """Build top navigation and step indicator bar."""
+        """Build top navigation and title bar."""
         header_card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         header_card.add_css_class("tile-card-compact")
         self.main_box.append(header_card)
@@ -125,7 +124,7 @@ class CameraFocusView(Adw.NavigationPage):
         text_box.append(self.lbl_step_title)
 
         self.lbl_step_desc = Gtk.Label(
-            label="Rotate camera lens slowly until sharpness score reaches peak.",
+            label="Optical focus tuning with real-time oscilloscope tracking.",
             xalign=0,
             wrap=True,
         )
@@ -142,7 +141,7 @@ class CameraFocusView(Adw.NavigationPage):
         header_card.append(self.btn_mute)
 
     def _build_camera_tab_bar(self):
-        """Build prominent direct-switching camera tabs."""
+        """Build camera selector tabs."""
         self.cam_tab_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.cam_tab_bar.add_css_class("camera-tab-bar")
         self.cam_tab_bar.set_homogeneous(True)
@@ -160,29 +159,130 @@ class CameraFocusView(Adw.NavigationPage):
             self.cam_tab_buttons.append(btn)
 
     def _build_focus_screen(self):
-        """Build the video preview canvas with overlay spinner and focus gauge card."""
-        content_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
-        content_box.set_vexpand(True)
-        self.focus_page.append(content_box)
+        """Build target selection popup overlay, video preview area, and oscilloscope HUD."""
+        # 1. Active Focus Status Banner (Shown at top when target is actively calibrated)
+        self.active_banner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.active_banner.add_css_class("tile-card-compact")
+        self.active_banner.set_visible(False)
+        self.focus_page.append(self.active_banner)
 
-        # Left: Video Feed with Cairo HUD Overlay & Async Loading Spinner
+        banner_text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        banner_text_box.set_hexpand(True)
+        self.active_banner.append(banner_text_box)
+
+        self.active_banner_title = Gtk.Label(
+            label="Rotate focus ring slowly. Look for highest peak.",
+            xalign=0,
+            wrap=True,
+        )
+        self.active_banner_title.add_css_class("title-4")
+        banner_text_box.append(self.active_banner_title)
+
+        banner_info_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        banner_text_box.append(banner_info_row)
+
+        self.target_pill = Gtk.Label(label="Target: Furthest Double", xalign=0)
+        self.target_pill.add_css_class("usb-path-tag")
+        banner_info_row.append(self.target_pill)
+
+        self.trend_badge = Gtk.Label(label="Tuning", xalign=0)
+        self.trend_badge.add_css_class("focus-trend-badge")
+        self.trend_badge.add_css_class("stable")
+        banner_info_row.append(self.trend_badge)
+
+        # Focus Peaking / Contour Filter Toggle Button
+        self.btn_toggle_peaking = Gtk.Button(label="Peaking: ON")
+        self.btn_toggle_peaking.add_css_class("suggested-action")
+        self.btn_toggle_peaking.set_valign(Gtk.Align.CENTER)
+        self.btn_toggle_peaking.set_tooltip_text("Toggle Green Focus Peaking Contour Overlay")
+        self.btn_toggle_peaking.connect("clicked", lambda b: self._on_toggle_peaking())
+        self.active_banner.append(self.btn_toggle_peaking)
+
+        self.btn_change_target = Gtk.Button(label="Change Target")
+        self.btn_change_target.add_css_class("flat")
+        self.btn_change_target.set_valign(Gtk.Align.CENTER)
+        self.btn_change_target.connect("clicked", lambda b: self._show_target_prompt())
+        self.active_banner.append(self.btn_change_target)
+
+        # 2. Main Live Video Preview Frame
         video_frame = Gtk.Frame()
         video_frame.set_hexpand(True)
         video_frame.set_vexpand(True)
         video_frame.add_css_class("focus-preview-area")
-        content_box.append(video_frame)
+        self.focus_page.append(video_frame)
 
         self.video_overlay = Gtk.Overlay()
         video_frame.set_child(self.video_overlay)
 
         self.drawing_area = Gtk.DrawingArea()
         self.drawing_area.set_draw_func(self._on_draw_preview)
-        self.drawing_area.set_size_request(300, 170)
+        self.drawing_area.set_size_request(320, 240)
         self.drawing_area.set_hexpand(True)
         self.drawing_area.set_vexpand(True)
+
+        # Interactive click gesture to place ROI anywhere on the video
+        click_gesture = Gtk.GestureClick()
+        click_gesture.connect("released", self._on_preview_clicked)
+        self.drawing_area.add_controller(click_gesture)
+
         self.video_overlay.set_child(self.drawing_area)
 
-        # Loading Spinner & Message Overlay
+        # 3. Target Selection Popup Overlay on Video Feed
+        self.target_prompt_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.target_prompt_card.add_css_class("focus-target-overlay-card")
+        self.target_prompt_card.set_halign(Gtk.Align.CENTER)
+        self.target_prompt_card.set_valign(Gtk.Align.CENTER)
+        self.target_prompt_card.set_margin_start(16)
+        self.target_prompt_card.set_margin_end(16)
+        self.target_prompt_card.set_margin_top(16)
+        self.target_prompt_card.set_margin_bottom(16)
+
+        prompt_title = Gtk.Label(label="Select Focus Target", xalign=0.5)
+        prompt_title.add_css_class("title-3")
+        self.target_prompt_card.append(prompt_title)
+
+        prompt_sub = Gtk.Label(
+            label="Choose a target to auto-align, or click anywhere directly on the video feed:",
+            xalign=0.5,
+            justify=Gtk.Justification.CENTER,
+            wrap=True,
+        )
+        prompt_sub.add_css_class("dim-label")
+        self.target_prompt_card.append(prompt_sub)
+
+        # Target selection action buttons
+        target_btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        target_btn_row.set_margin_top(6)
+        target_btn_row.set_homogeneous(True)
+        self.target_prompt_card.append(target_btn_row)
+
+        self.btn_target_furthest = Gtk.Button(label="Furthest Double (Recommended)")
+        self.btn_target_furthest.add_css_class("suggested-action")
+        self.btn_target_furthest.add_css_class("touch-btn")
+        self.btn_target_furthest.set_size_request(-1, 42)
+        self.btn_target_furthest.connect("clicked", lambda b: self._select_target_mode(TargetMode.FURTHEST_DOUBLE))
+        target_btn_row.append(self.btn_target_furthest)
+
+        self.btn_target_t20 = Gtk.Button(label="Triple 20 (T20)")
+        self.btn_target_t20.add_css_class("secondary-btn")
+        self.btn_target_t20.add_css_class("touch-btn")
+        self.btn_target_t20.set_size_request(-1, 42)
+        self.btn_target_t20.connect("clicked", lambda b: self._select_target_mode(TargetMode.T20))
+        target_btn_row.append(self.btn_target_t20)
+
+        tip_lbl = Gtk.Label(
+            label="Tip: Insert a dart into the target segment for maximum edge contrast.",
+            xalign=0.5,
+            justify=Gtk.Justification.CENTER,
+            wrap=True,
+        )
+        tip_lbl.add_css_class("dim-label")
+        tip_lbl.set_margin_top(4)
+        self.target_prompt_card.append(tip_lbl)
+
+        self.video_overlay.add_overlay(self.target_prompt_card)
+
+        # 4. Loading Spinner Overlay
         self.loading_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.loading_box.add_css_class("focus-loading-overlay")
         self.loading_box.set_valign(Gtk.Align.CENTER)
@@ -202,91 +302,58 @@ class CameraFocusView(Adw.NavigationPage):
 
         self.video_overlay.add_overlay(self.loading_box)
 
-        # Right: Sidebar containing Zoom Magnifier Card & Sharpness Gauge Card
-        sidebar_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        sidebar_box.set_size_request(220, -1)
-        content_box.append(sidebar_box)
+        # 4. Oscilloscope HUD Card (Waveform graph, peak line, and live metrics)
+        self.osc_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.osc_card.add_css_class("focus-zoom-card")
+        self.osc_card.set_visible(False)
+        self.focus_page.append(self.osc_card)
 
-        # 1. Zoom Section (Magnifier on Furthest Double Field, locked to 2.5x)
-        zoom_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        zoom_card.add_css_class("focus-zoom-card")
-        sidebar_box.append(zoom_card)
+        osc_header_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.osc_card.append(osc_header_row)
 
-        zoom_frame = Gtk.Frame()
-        zoom_frame.add_css_class("focus-zoom-frame")
-        zoom_card.append(zoom_frame)
+        osc_title = Gtk.Label(label="Relative Sharpness Timeline", xalign=0)
+        osc_title.add_css_class("title-4")
+        osc_header_row.append(osc_title)
 
-        self.zoom_drawing_area = Gtk.DrawingArea()
-        self.zoom_drawing_area.set_draw_func(self._on_draw_zoom)
-        self.zoom_drawing_area.set_size_request(160, 90)
-        self.zoom_drawing_area.set_hexpand(True)
-        self.zoom_drawing_area.set_tooltip_text("Tap to re-align target sweet spot")
-        zoom_gesture = Gtk.GestureClick()
-        zoom_gesture.connect("released", lambda *args: self._on_realign_target())
-        self.zoom_drawing_area.add_controller(zoom_gesture)
-        zoom_frame.set_child(self.zoom_drawing_area)
+        self.osc_peak_lbl = Gtk.Label(label="Peak: 0.0%", xalign=1)
+        self.osc_peak_lbl.add_css_class("dim-label")
+        self.osc_peak_lbl.set_hexpand(True)
+        self.osc_peak_lbl.set_tooltip_text("Click to reset peak")
+        osc_header_row.append(self.osc_peak_lbl)
 
-        # 2. Gauges & Controls Card
-        gauge_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        gauge_box.add_css_class("focus-gauge-card")
-        gauge_box.set_vexpand(True)
-        sidebar_box.append(gauge_box)
+        peak_click = Gtk.GestureClick()
+        peak_click.connect("released", lambda *args: self.focus_service.reset_peak())
+        self.osc_peak_lbl.add_controller(peak_click)
 
-        self.gauge_lbl = Gtk.Label(label="0.0", xalign=0)
-        self.gauge_lbl.add_css_class("focus-gauge-score")
-        self.gauge_lbl.add_css_class("score-poor")
-        gauge_box.append(self.gauge_lbl)
+        self.osc_drawing_area = Gtk.DrawingArea()
+        self.osc_drawing_area.set_draw_func(self._on_draw_oscilloscope)
+        self.osc_drawing_area.set_size_request(-1, 110)
+        self.osc_drawing_area.set_hexpand(True)
+        self.osc_card.append(self.osc_drawing_area)
 
-        # Progress bar
-        self.progress_bar = Gtk.ProgressBar()
-        self.progress_bar.set_fraction(0.0)
-        gauge_box.append(self.progress_bar)
+        # 5. Bottom Navigation / Finish Controls
+        bottom_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        bottom_bar.set_margin_top(4)
+        self.focus_page.append(bottom_bar)
 
-        # Trend & Peak Info Box
-        info_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        info_box.set_margin_top(2)
-        gauge_box.append(info_box)
+        self.btn_reset_peak = Gtk.Button(label="Reset Peak")
+        self.btn_reset_peak.add_css_class("secondary-btn")
+        self.btn_reset_peak.connect("clicked", lambda b: self.focus_service.reset_peak())
+        bottom_bar.append(self.btn_reset_peak)
 
-        self.trend_lbl = Gtk.Label(label="Tuning")
-        self.trend_lbl.add_css_class("focus-trend-badge")
-        self.trend_lbl.add_css_class("stable")
-        info_box.append(self.trend_lbl)
-
-        self.peak_lbl = Gtk.Label(label="Peak: 0.0", xalign=1)
-        self.peak_lbl.add_css_class("dim-label")
-        self.peak_lbl.set_hexpand(True)
-        self.peak_lbl.set_tooltip_text("Tap to reset peak")
-        info_box.append(self.peak_lbl)
-
-        # Tap peak label to reset peak without needing a dedicated button
-        peak_gesture = Gtk.GestureClick()
-        peak_gesture.connect("released", lambda *args: self.focus_service.reset_peak())
-        self.peak_lbl.add_controller(peak_gesture)
-        
-        # Lighting Warning Label
-        self.lighting_lbl = Gtk.Label(label="Lighting: Good", xalign=0)
-        self.lighting_lbl.add_css_class("dim-label")
-        self.lighting_lbl.set_margin_top(4)
-        gauge_box.append(self.lighting_lbl)
-
-        # Spacer to push finish button to bottom
         spacer = Gtk.Box()
-        spacer.set_vexpand(True)
-        gauge_box.append(spacer)
-
-        # Finish Action Button
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        gauge_box.append(btn_box)
+        spacer.set_hexpand(True)
+        bottom_bar.append(spacer)
 
         self.btn_finish = Gtk.Button(label="Finish")
         self.btn_finish.add_css_class("suggested-action")
         self.btn_finish.add_css_class("touch-btn")
-        self.btn_finish.set_size_request(-1, 44)
+        self.btn_finish.set_size_request(130, 42)
         self.btn_finish.connect("clicked", self._on_finish_clicked)
-        btn_box.append(self.btn_finish)
+        bottom_bar.append(self.btn_finish)
 
     def _build_summary_screen(self):
-        """Build the final 3-camera summary verification card."""
+        """Build summary verification screen."""
         summary_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
         self.summary_page.append(summary_box)
 
@@ -299,13 +366,12 @@ class CameraFocusView(Adw.NavigationPage):
         header_banner.append(lbl_sum_h)
 
         lbl_sum_desc = Gtk.Label(
-            label="Review final focus scores across all 3 cameras before resuming Autodarts.",
+            label="Review recorded sharpness across all 3 cameras before resuming Autodarts.",
             xalign=0,
         )
         lbl_sum_desc.add_css_class("dim-label")
         header_banner.append(lbl_sum_desc)
 
-        # 3 Result Tiles
         self.summary_cards_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         self.summary_cards_box.set_homogeneous(True)
         summary_box.append(self.summary_cards_box)
@@ -323,7 +389,7 @@ class CameraFocusView(Adw.NavigationPage):
             title.add_css_class("title-3")
             card.append(title)
 
-            score_lbl = Gtk.Label(label="Score: 0.0", xalign=0)
+            score_lbl = Gtk.Label(label="Status: Not tuned", xalign=0)
             score_lbl.add_css_class("title-4")
             card.append(score_lbl)
 
@@ -335,7 +401,6 @@ class CameraFocusView(Adw.NavigationPage):
             self.summary_cards_box.append(card)
             self.sum_tiles.append((score_lbl, btn_refocus))
 
-        # Bottom Finish Action Button in Summary
         self.btn_sum_finish = Gtk.Button(label="Finish")
         self.btn_sum_finish.add_css_class("suggested-action")
         self.btn_sum_finish.add_css_class("touch-btn")
@@ -344,26 +409,98 @@ class CameraFocusView(Adw.NavigationPage):
         self.btn_sum_finish.connect("clicked", self._on_finish_clicked)
         summary_box.append(self.btn_sum_finish)
 
+    def _on_toggle_peaking(self):
+        """Toggle green focus peaking edge contour overlay."""
+        self.peaking_enabled = not self.peaking_enabled
+        if hasattr(self, "btn_toggle_peaking"):
+            self.btn_toggle_peaking.set_label("Peaking: ON" if self.peaking_enabled else "Peaking: OFF")
+            if self.peaking_enabled:
+                self.btn_toggle_peaking.add_css_class("suggested-action")
+                self.btn_toggle_peaking.remove_css_class("flat")
+            else:
+                self.btn_toggle_peaking.remove_css_class("suggested-action")
+                self.btn_toggle_peaking.add_css_class("flat")
+        self.drawing_area.queue_draw()
+
+    def _select_target_mode(self, mode: TargetMode, custom_point: tuple[int, int] | None = None):
+        """Transition into active focus mode with the chosen target."""
+        with self._lock:
+            frame = self._current_frame
+            f_shape = frame.shape[:2] if frame is not None else (960, 1280)
+
+        self.focus_service.set_target_mode(mode, custom_point=custom_point, frame_shape=f_shape)
+
+        self.target_prompt_card.set_visible(False)
+        self.active_banner.set_visible(True)
+        self.osc_card.set_visible(True)
+
+        self.target_pill.set_label(f"Target: {self.focus_service.target_name}")
+        self.drawing_area.queue_draw()
+        self.osc_drawing_area.queue_draw()
+
+    def _show_target_prompt(self):
+        """Switch UI back to target selection prompt."""
+        self.focus_service.set_target_mode(TargetMode.NONE)
+        self.target_prompt_card.set_visible(True)
+        self.active_banner.set_visible(False)
+        self.osc_card.set_visible(False)
+        self.drawing_area.queue_draw()
+
+    def _on_preview_clicked(self, gesture, n_press, x, y):
+        """Handle user clicking directly on the camera preview or Loupe PIP."""
+        with self._lock:
+            bgra = self._preview_bgra
+        if bgra is None:
+            return
+
+        w = self.drawing_area.get_width()
+        h = self.drawing_area.get_height()
+
+        # Check if click was inside Loupe PIP to toggle peaking
+        pip_w, pip_h = 240, 240
+        margin = 16
+        pip_x = w - pip_w - margin
+        pip_y = h - pip_h - margin
+        if self._zoom_bgra is not None and pip_x <= x <= (pip_x + pip_w) and pip_y <= y <= (pip_y + pip_h):
+            self._on_toggle_peaking()
+            return
+
+        fh, fw = bgra.shape[:2]
+
+        scale = min(w / fw, h / fh)
+        dw = int(fw * scale)
+        dh = int(fh * scale)
+        ox = (w - dw) // 2
+        oy = (h - dh) // 2
+
+        if ox <= x <= (ox + dw) and oy <= y <= (oy + dh) and scale > 0:
+            frame_x = int((x - ox) / scale)
+            frame_y = int((y - oy) / scale)
+            self._select_target_mode(TargetMode.CUSTOM, custom_point=(frame_x, frame_y))
+
     def on_page_opened(self):
-        """Lifecycle hook when page is navigated into: opens instantly and inits in background."""
-        logger.info("CameraFocusView opened: showing instant UI and preparing hardware asynchronously")
+        """Lifecycle hook when page opens: maximize window for optimal calibration workspace."""
+        logger.info("CameraFocusView opened: maximizing window and initializing hardware asynchronously")
+        if self.window and hasattr(self.window, "is_maximized"):
+            self._was_maximized = self.window.is_maximized()
+            if hasattr(self.window, "maximize"):
+                self.window.maximize()
+
         self.stack.set_visible_child_name("cam_focus")
         self.loading_box.set_visible(True)
         self.loading_spinner.start()
         self.loading_lbl.set_label("Stopping Autodarts & Opening Camera 1...")
 
         def _bg_init():
-            # 1. Stop autodarts.service to release V4L2 device locks in background
             try:
                 self.was_autodarts_active = SystemdService.is_unit_active("autodarts.service")
                 if self.was_autodarts_active:
                     logger.info("Stopping autodarts.service to release V4L2 device locks")
                     SystemdService.stop_unit("autodarts.service")
-                    time.sleep(0.4)  # Allow process to release V4L2 file handles
+                    time.sleep(0.4)
             except Exception:
                 logger.exception("Error querying/stopping autodarts.service")
 
-            # Terminate any stray ad / autodarts processes that may hold camera devices
             try:
                 import subprocess
                 subprocess.run(["pkill", "-TERM", "-f", r"(^|/)(ad|autodarts)(\s|$)"], timeout=2)
@@ -371,7 +508,6 @@ class CameraFocusView(Adw.NavigationPage):
             except Exception:
                 pass
 
-            # 2. Discover configured cameras and available V4L2 devices
             from core.autodarts_service import parse_cam_device
             cfg = read_cam_config()
             raw_cams = cfg.get("cams", [])
@@ -380,10 +516,8 @@ class CameraFocusView(Adw.NavigationPage):
             if not self.configured_cams:
                 self.configured_cams = ["/dev/video0", "/dev/video2", "/dev/video4"]
 
-            # 3. Start audio tone service
             self.audio_service.start()
 
-            # 4. Open first camera
             dev_path = self.configured_cams[0]
             cam_uri = self.raw_cams[0] if hasattr(self, "raw_cams") and self.raw_cams else None
             self.focus_service.start_camera(dev_path, uri=cam_uri)
@@ -393,20 +527,23 @@ class CameraFocusView(Adw.NavigationPage):
         threading.Thread(target=_bg_init, daemon=True).start()
 
     def _on_init_completed(self, dev_path: str):
-        """Called on main thread once background init finishes."""
+        """Main thread callback when camera initialization finishes."""
         self.current_step = 0
         self._update_tab_buttons(0)
-
         self.loading_spinner.stop()
         self.loading_box.set_visible(False)
+        self._show_target_prompt()
         self._start_capture_thread()
 
     def on_page_closed(self):
-        """Lifecycle hook when navigating away from view."""
-        logger.info("CameraFocusView closed: releasing hardware and restoring services")
+        """Lifecycle hook when navigating away: restore previous window maximization state."""
+        logger.info("CameraFocusView closed: releasing hardware and restoring window state")
         self._stop_capture_thread()
         self.focus_service.stop_camera()
         self.audio_service.stop()
+
+        if self.window and not self._was_maximized and hasattr(self.window, "unmaximize"):
+            self.window.unmaximize()
 
         with self._lock:
             self._preview_bgra = None
@@ -414,7 +551,6 @@ class CameraFocusView(Adw.NavigationPage):
             self._current_frame = None
             self._current_analysis = None
 
-        # Restore Autodarts service asynchronously so UI navigation pops immediately
         if self.was_autodarts_active:
             def _bg_restore():
                 try:
@@ -433,16 +569,14 @@ class CameraFocusView(Adw.NavigationPage):
                 btn.remove_css_class("active-tab")
 
     def _on_cam_tab_clicked(self, idx: int):
-        """Switch active camera directly when a camera tab is tapped."""
+        """Switch active camera tab."""
         if idx == self.current_step and not self._is_switching_camera:
             return
 
         self._is_switching_camera = True
         self.current_step = idx
         self._update_tab_buttons(idx)
-        self.focus_service.reset_peak()
-        self.focus_service.unlock_target()
-        self._accum_zoom_crop = None
+        self._show_target_prompt()
 
         cam_name = CAMERA_NAMES[idx]
         self.lbl_step_title.set_label(cam_name)
@@ -458,7 +592,6 @@ class CameraFocusView(Adw.NavigationPage):
             else None
         )
 
-        # Show camera switching spinner overlay
         self.loading_lbl.set_label(f"Opening {cam_name} ({dev_path})...")
         self.loading_box.set_visible(True)
         self.loading_spinner.start()
@@ -472,19 +605,15 @@ class CameraFocusView(Adw.NavigationPage):
         threading.Thread(target=_bg_switch, daemon=True).start()
 
     def _on_cam_switch_done(self):
-        """Called on main thread once background camera switch completes."""
+        """Main thread callback when camera switch completes."""
         self._is_switching_camera = False
         self.loading_spinner.stop()
         self.loading_box.set_visible(False)
+        self._show_target_prompt()
         self._start_capture_thread()
 
-    def _load_camera_step(self, step_idx: int):
-        """Backwards-compatible camera step loader; delegates to direct tab switching."""
-        if step_idx < len(self.cam_tab_buttons):
-            self._on_cam_tab_clicked(step_idx)
-
     def _start_capture_thread(self):
-        """Spawn background worker thread for V4L2 frame acquisition and CV analysis."""
+        """Spawn worker thread for frame acquisition and analysis."""
         self._stop_capture.clear()
 
         def _worker():
@@ -494,11 +623,15 @@ class CameraFocusView(Adw.NavigationPage):
                     analysis = self.focus_service.analyze_frame(frame)
                     bgra_frame = self.focus_service.frame_to_bgra(frame)
 
-                    # Fixed zoom crop preview dimensions (thread-safe, avoids GTK widget calls)
-                    zw, zh = 280, 180
-                    bgra_zoom = self.focus_service.process_zoom_crop(
-                        frame, analysis.target_roi, zoom_factor=self.zoom_factor, out_size=(zw, zh)
-                    )
+                    bgra_zoom = None
+                    if analysis.target_mode != TargetMode.NONE:
+                        bgra_zoom = self.focus_service.process_zoom_crop(
+                            frame,
+                            analysis.target_roi,
+                            zoom_factor=self.zoom_factor,
+                            out_size=(240, 240),
+                            peaking_enabled=self.peaking_enabled,
+                        )
 
                     with self._lock:
                         self._current_frame = frame
@@ -506,106 +639,72 @@ class CameraFocusView(Adw.NavigationPage):
                         self._preview_bgra = np.ascontiguousarray(bgra_frame, dtype=np.uint8)
                         self._zoom_bgra = np.ascontiguousarray(bgra_zoom, dtype=np.uint8) if bgra_zoom is not None else None
 
-                    # Modulate parking sensor audio guidance
-                    self.audio_service.set_score(analysis.score)
+                    if analysis.target_mode != TargetMode.NONE:
+                        self.audio_service.set_score(analysis.score)
 
                     GLib.idle_add(self._update_ui_state, analysis)
-                time.sleep(0.033)  # ~30 FPS loop
+                time.sleep(0.033)
 
         self._capture_thread = threading.Thread(target=_worker, daemon=True)
         self._capture_thread.start()
 
     def _stop_capture_thread(self):
-        """Stop background worker thread."""
+        """Stop worker thread."""
         self._stop_capture.set()
         if self._capture_thread and self._capture_thread.is_alive():
             self._capture_thread.join(timeout=0.8)
         self._capture_thread = None
 
     def _update_ui_state(self, analysis: FocusAnalysis):
-        """Update GTK4 widgets from background analysis result."""
+        """Update GTK widgets with latest analysis."""
+        if analysis.target_mode == TargetMode.NONE:
+            self.drawing_area.queue_draw()
+            return False
+
         score = analysis.score
         peak = analysis.peak_score
         trend = analysis.trend
 
-        # Update Score Label & CSS Classes
-        self.gauge_lbl.set_label(f"{score:.1f}")
-        self.gauge_lbl.remove_css_class("score-good")
-        self.gauge_lbl.remove_css_class("score-fair")
-        self.gauge_lbl.remove_css_class("score-poor")
+        self.osc_peak_lbl.set_label(f"Peak: {peak:.0f}%")
 
-        if score >= 85.0:
-            self.gauge_lbl.add_css_class("score-good")
-        elif score >= 55.0:
-            self.gauge_lbl.add_css_class("score-fair")
-        else:
-            self.gauge_lbl.add_css_class("score-poor")
-
-        # Update active camera tab button with live score
         if self.current_step < len(self.cam_tab_buttons):
             cam_name = CAMERA_NAMES[self.current_step]
             self.cam_tab_buttons[self.current_step].set_label(f"{cam_name} ({score:.0f}%)")
 
-        # Update Progress Bar & Peak Label
-        self.progress_bar.set_fraction(score / 100.0)
-        self.peak_lbl.set_label(f"Peak: {peak:.1f}")
+        self.trend_badge.remove_css_class("sharpening")
+        self.trend_badge.remove_css_class("stable")
+        self.trend_badge.remove_css_class("overshot")
 
-        # Update Lighting Label
-        if analysis.lighting_state == LightingState.TOO_DARK:
-            self.lighting_lbl.set_label("Lighting: Too Dark")
-            self.lighting_lbl.remove_css_class("dim-label")
-            self.lighting_lbl.add_css_class("error")
-        elif analysis.lighting_state == LightingState.OVEREXPOSED:
-            self.lighting_lbl.set_label("Lighting: Overexposed")
-            self.lighting_lbl.remove_css_class("dim-label")
-            self.lighting_lbl.add_css_class("error")
+        if trend == FocusTrend.OVERSHOT:
+            self.trend_badge.set_label("Turn Back — Overshot")
+            self.trend_badge.add_css_class("overshot")
+        elif trend == FocusTrend.SHARPENING:
+            self.trend_badge.set_label("Sharpening")
+            self.trend_badge.add_css_class("sharpening")
         else:
-            self.lighting_lbl.set_label("Lighting: Good")
-            self.lighting_lbl.remove_css_class("error")
-            self.lighting_lbl.add_css_class("dim-label")
+            self.trend_badge.set_label("In Focus" if score >= 85.0 else "Tuning")
+            self.trend_badge.add_css_class("stable")
 
-        # Update Trend Badge
-        self.trend_lbl.remove_css_class("sharpening")
-        self.trend_lbl.remove_css_class("stable")
-        self.trend_lbl.remove_css_class("overshot")
-
-        if trend == FocusTrend.SHARPENING:
-            self.trend_lbl.set_label("Sharpening")
-            self.trend_lbl.add_css_class("sharpening")
-        elif trend == FocusTrend.OVERSHOT:
-            self.trend_lbl.set_label("Overshot — Turn Back")
-            self.trend_lbl.add_css_class("overshot")
-        else:
-            if score >= 95.0:
-                self.trend_lbl.set_label("In Focus")
-            else:
-                self.trend_lbl.set_label("Tuning")
-            self.trend_lbl.add_css_class("stable")
-
-        # Trigger canvas redraws
         self.drawing_area.queue_draw()
-        if hasattr(self, "zoom_drawing_area"):
-            self.zoom_drawing_area.queue_draw()
+        self.osc_drawing_area.queue_draw()
         return False
 
     def _on_draw_preview(self, drawing_area, cr: cairo.Context, width: int, height: int):
-        """Cairo draw function rendering live video frame with Target Box and Dynamic Focal Line."""
+        """Render live camera feed with Target ROI Reticle and 2.5x Loupe PIP."""
         with self._lock:
             bgra = self._preview_bgra
+            zoom_bgra = self._zoom_bgra
             analysis = self._current_analysis
 
-        # Clear background
         cr.set_source_rgb(0.04, 0.05, 0.06)
         cr.paint()
 
-        if bgra is None or analysis is None:
+        if bgra is None:
             cr.set_source_rgb(0.6, 0.6, 0.6)
             cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-            cr.set_font_size(16)
+            cr.set_font_size(15)
             msg = "Waiting for camera feed..."
-            if not self.focus_service.current_device:
-                msg = "Camera device not available"
-            cr.move_to(max(10, width / 2 - 100), height / 2)
+            cr.move_to(max(10, width / 2 - 90), height / 2)
             cr.show_text(msg)
             return
 
@@ -626,159 +725,228 @@ class CameraFocusView(Adw.NavigationPage):
         cr.set_source_surface(surface, 0, 0)
         cr.paint()
 
-        # 1. Draw Sweet Spot Target Box on Furthest Double Field
-        tx, ty, tw, th = analysis.target_roi
-        is_locked = analysis.score >= 85.0
-
-        if is_locked:
-            cr.set_source_rgb(0.18, 0.76, 0.49)  # Emerald green lock
-            cr.set_line_width(3.5 / scale)
-            cr.set_dash([])
-        elif analysis.score >= 55.0:
-            cr.set_source_rgba(0.96, 0.83, 0.18, 0.9)  # Amber
-            cr.set_line_width(2.5 / scale)
-            cr.set_dash([8.0 / scale, 6.0 / scale])
-        else:
-            cr.set_source_rgba(0.2, 0.52, 0.89, 0.85)  # Blue bracket
+        # 1. Render Reticle on Target ROI if target is selected
+        if analysis and analysis.target_mode != TargetMode.NONE:
+            tx, ty, tw, th = analysis.target_roi
+            cr.set_source_rgba(0.0, 0.9, 0.95, 0.9)
             cr.set_line_width(2.0 / scale)
-            cr.set_dash([8.0 / scale, 6.0 / scale])
 
-        cr.rectangle(tx, ty, tw, th)
-        cr.stroke()
+            # Corner brackets
+            blen = 16.0 / scale
+            # Top-left
+            cr.move_to(tx, ty + blen); cr.line_to(tx, ty); cr.line_to(tx + blen, ty)
+            # Top-right
+            cr.move_to(tx + tw - blen, ty); cr.line_to(tx + tw, ty); cr.line_to(tx + tw, ty + blen)
+            # Bottom-left
+            cr.move_to(tx, ty + th - blen); cr.line_to(tx, ty + th); cr.line_to(tx + blen, ty + th)
+            # Bottom-right
+            cr.move_to(tx + tw - blen, ty + th); cr.line_to(tx + tw, ty + th); cr.line_to(tx + tw, ty + th - blen)
+            cr.stroke()
 
-        # Center reticle inside target box
-        cr.set_dash([])
-        tcx, tcy = tx + tw // 2, ty + th // 2
-        cr.set_line_width(1.5 / scale)
-        cr.move_to(tcx - 14 / scale, tcy); cr.line_to(tcx + 14 / scale, tcy)
-        cr.move_to(tcx, tcy - 10 / scale); cr.line_to(tcx, tcy + 10 / scale)
-        cr.stroke()
-
-        # Clean status label above target box when locked
-        if is_locked:
-            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-            cr.set_font_size(12 / scale)
-            cr.set_source_rgba(0.0, 0.0, 0.0, 0.75)
-            cr.rectangle(tx, ty - int(24 / scale), int(105 / scale), int(20 / scale))
-            cr.fill()
-
-            cr.set_source_rgb(0.18, 0.76, 0.49)
-            cr.move_to(tx + int(6 / scale), ty - int(9 / scale))
-            cr.show_text("SWEET SPOT")
+            # Center crosshair
+            cx, cy = tx + tw // 2, ty + th // 2
+            cr.set_line_width(1.2 / scale)
+            cr.move_to(cx - 8 / scale, cy); cr.line_to(cx + 8 / scale, cy)
+            cr.move_to(cx, cy - 8 / scale); cr.line_to(cx, cy + 8 / scale)
+            cr.stroke()
 
         cr.restore()
 
-    def _on_realign_target(self):
-        """Unlocks target ROI so camera can re-lock onto sweet spot if nudged."""
-        self.focus_service.unlock_target()
-        self.focus_service.reset_peak()
-        if hasattr(self, "window") and hasattr(self.window, "show_toast"):
-            self.window.show_toast("Re-aligning furthest double target...")
+        # 2. Render 2.5x Loupe PIP in bottom-right corner (Expanded size: 240x240)
+        if zoom_bgra is not None and analysis and analysis.target_mode != TargetMode.NONE:
+            zh, zw = zoom_bgra.shape[:2]
+            zoom_surface = cairo.ImageSurface.create_for_data(
+                zoom_bgra.data, cairo.FORMAT_ARGB32, zw, zh, zw * 4
+            )
 
-    def _on_toggle_zoom(self, button=None):
-        """Maintained for backwards-compatibility; zoom locked to 2.5x."""
-        self.zoom_factor = 2.5
-        self.zoom_drawing_area.queue_draw()
+            pip_w, pip_h = 240, 240
+            margin = 16
+            pip_x = width - pip_w - margin
+            pip_y = height - pip_h - margin
 
-    def _on_draw_zoom(self, drawing_area, cr: cairo.Context, width: int, height: int):
-        """Cairo draw function rendering digitally magnified target sweet-spot with Focus Peaking."""
+            cr.save()
+            # Rounded rectangle clip for Loupe PIP
+            r = 14.0
+            cr.new_sub_path()
+            cr.arc(pip_x + pip_w - r, pip_y + r, r, -math.pi / 2, 0)
+            cr.arc(pip_x + pip_w - r, pip_y + pip_h - r, r, 0, math.pi / 2)
+            cr.arc(pip_x + r, pip_y + pip_h - r, r, math.pi / 2, math.pi)
+            cr.arc(pip_x + r, pip_y + r, r, math.pi, 3 * math.pi / 2)
+            cr.close_path()
+            cr.clip()
+
+            # Draw magnified surface
+            z_scale = max(pip_w / zw, pip_h / zh)
+            cr.translate(pip_x, pip_y)
+            cr.scale(z_scale, z_scale)
+            cr.set_source_surface(zoom_surface, 0, 0)
+            cr.paint()
+            cr.restore()
+
+            # Loupe border
+            cr.save()
+            cr.new_sub_path()
+            cr.arc(pip_x + pip_w - r, pip_y + r, r, -math.pi / 2, 0)
+            cr.arc(pip_x + pip_w - r, pip_y + pip_h - r, r, 0, math.pi / 2)
+            cr.arc(pip_x + r, pip_y + pip_h - r, r, math.pi / 2, math.pi)
+            cr.arc(pip_x + r, pip_y + r, r, math.pi, 3 * math.pi / 2)
+            cr.close_path()
+
+            if analysis.score >= 85.0:
+                cr.set_source_rgba(0.18, 0.85, 0.55, 0.95)
+                cr.set_line_width(2.5)
+            elif analysis.trend == FocusTrend.OVERSHOT:
+                cr.set_source_rgba(0.95, 0.35, 0.25, 0.95)
+                cr.set_line_width(2.0)
+            else:
+                cr.set_source_rgba(0.0, 0.85, 0.95, 0.85)
+                cr.set_line_width(2.0)
+            cr.stroke()
+
+            # Loupe badge at top-left
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+            cr.set_font_size(10)
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.75)
+            cr.rectangle(pip_x + 8, pip_y + 8, 120, 18)
+            cr.fill()
+            cr.set_source_rgba(0.0, 0.85, 0.95, 0.95)
+            cr.move_to(pip_x + 14, pip_y + 21)
+            peaking_text = "PEAKING ON" if self.peaking_enabled else "2.5× LOUPE"
+            cr.show_text(f"2.5× • {peaking_text}")
+
+            # Center crosshair inside loupe
+            lcx = pip_x + pip_w / 2.0
+            lcy = pip_y + pip_h / 2.0
+            cr.set_line_width(1.0)
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.6)
+            cr.move_to(lcx - 12, lcy); cr.line_to(lcx - 3, lcy)
+            cr.move_to(lcx + 3, lcy); cr.line_to(lcx + 12, lcy)
+            cr.move_to(lcx, lcy - 12); cr.line_to(lcx, lcy - 3)
+            cr.move_to(lcx, lcy + 3); cr.line_to(lcx, lcy + 12)
+            cr.stroke()
+            cr.restore()
+
+    def _on_draw_oscilloscope(self, drawing_area, cr: cairo.Context, width: int, height: int):
+        """Render live Cairo Oscilloscope timeline with peak latch."""
+        # Dark glass background
+        cr.set_source_rgba(0.04, 0.05, 0.07, 0.95)
+        cr.rectangle(0, 0, width, height)
+        cr.fill()
+
+        # Grid lines (25%, 50%, 75%)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.08)
+        cr.set_line_width(1.0)
+        for frac in [0.25, 0.50, 0.75]:
+            gy = height * (1.0 - frac)
+            cr.move_to(0, gy)
+            cr.line_to(width, gy)
+            cr.stroke()
+
         with self._lock:
-            bgra = self._zoom_bgra
             analysis = self._current_analysis
 
-        # Clear background
-        cr.set_source_rgb(0.04, 0.05, 0.06)
-        cr.paint()
-
-        if bgra is None or analysis is None:
-            cr.set_source_rgb(0.5, 0.5, 0.5)
+        if analysis is None or analysis.target_mode == TargetMode.NONE:
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.4)
             cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-            cr.set_font_size(12)
-            cr.move_to(max(10, width / 2 - 35), height / 2)
-            cr.show_text("Waiting...")
+            cr.set_font_size(13)
+            cr.move_to(max(10, width / 2 - 100), height / 2 + 4)
+            cr.show_text("Select target to activate oscilloscope")
             return
 
-        sh, sw = bgra.shape[:2]
-        surface = cairo.ImageSurface.create_for_data(
-            bgra.data, cairo.FORMAT_ARGB32, sw, sh, sw * 4
-        )
+        history = analysis.history
+        if not history or len(history) < 2:
+            return
 
-        # Center the magnified surface precisely so that (sw/2, sh/2) aligns with (width/2, height/2)
-        scale = max(width / sw, height / sh)
-        ox = (width - sw * scale) / 2.0
-        oy = (height - sh * scale) / 2.0
+        n = len(history)
+        pad_bottom = 10
+        pad_top = 22
+        graph_h = max(10, height - pad_top - pad_bottom)
 
-        cr.save()
-        cr.rectangle(0, 0, width, height)
-        cr.clip()
+        def get_pt(idx, val):
+            x = (idx / max(1, n - 1)) * width
+            y = height - pad_bottom - (val / 100.0) * graph_h
+            return x, y
 
-        cr.translate(ox, oy)
-        cr.scale(scale, scale)
-        cr.set_source_surface(surface, 0, 0)
-        cr.paint()
-        cr.restore()
-
-        # Center reticle / crosshair
-        mx, my = width / 2.0, height / 2.0
-        cr.set_line_width(1.5)
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.65)
-        cr.move_to(mx - 14, my)
-        cr.line_to(mx - 4, my)
-        cr.move_to(mx + 4, my)
-        cr.line_to(mx + 14, my)
-        cr.move_to(mx, my - 14)
-        cr.line_to(mx, my - 4)
-        cr.move_to(mx, my + 4)
-        cr.line_to(mx, my + 14)
-        cr.stroke()
-
-        # Status border indicator
-        score = analysis.score
-        if score >= 85.0:
-            cr.set_source_rgba(0.18, 0.76, 0.49, 0.95)  # Emerald green
-            cr.set_line_width(3.0)
-        elif score >= 55.0:
-            cr.set_source_rgba(0.96, 0.83, 0.18, 0.85)  # Amber
-            cr.set_line_width(2.0)
-        else:
-            cr.set_source_rgba(0.88, 0.11, 0.14, 0.45)  # Subtle red
+        # 1. Dotted cyan horizontal line for peak
+        peak_val = analysis.peak_score
+        if peak_val > 0:
+            py = height - pad_bottom - (peak_val / 100.0) * graph_h
+            cr.set_source_rgba(0.0, 0.85, 0.95, 0.6)
             cr.set_line_width(1.5)
+            cr.set_dash([4.0, 4.0])
+            cr.move_to(0, py)
+            cr.line_to(width, py)
+            cr.stroke()
+            cr.set_dash([])
 
-        cr.rectangle(1.5, 1.5, width - 3, height - 3)
+            # Peak marker pill
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+            cr.set_font_size(10)
+            cr.set_source_rgba(0.0, 0.85, 0.95, 0.9)
+            cr.move_to(max(8, width - 75), max(12, py - 4))
+            cr.show_text(f"PEAK {peak_val:.0f}%")
+
+        # 2. Gradient fill under curve
+        cr.move_to(0, height)
+        x0, y0 = get_pt(0, history[0])
+        cr.line_to(x0, y0)
+        for i in range(1, n):
+            xi, yi = get_pt(i, history[i])
+            cr.line_to(xi, yi)
+        cr.line_to(width, height)
+        cr.close_path()
+
+        pat = cairo.LinearGradient(0, pad_top, 0, height)
+        pat.add_color_stop_rgba(0.0, 0.0, 0.9, 0.7, 0.35)
+        pat.add_color_stop_rgba(1.0, 0.0, 0.9, 0.7, 0.02)
+        cr.set_source(pat)
+        cr.fill()
+
+        # 3. Live curve line
+        cr.set_source_rgba(0.1, 0.95, 0.7, 0.95)
+        cr.set_line_width(2.5)
+        x0, y0 = get_pt(0, history[0])
+        cr.move_to(x0, y0)
+        for i in range(1, n):
+            xi, yi = get_pt(i, history[i])
+            cr.line_to(xi, yi)
         cr.stroke()
 
-    def _on_next_clicked(self, button):
-        """Handle proceeding to the next camera or summary."""
+        # 4. Glowing head at current value
+        cx, cy = get_pt(n - 1, history[-1])
+        cr.set_source_rgba(0.1, 0.95, 0.7, 0.4)
+        cr.arc(cx, cy, 6.0, 0, 2 * math.pi)
+        cr.fill()
+        cr.set_source_rgb(1.0, 1.0, 1.0)
+        cr.arc(cx, cy, 3.0, 0, 2 * math.pi)
+        cr.fill()
+
+        # 5. Live metrics (FPS & Relative score)
+        cr.select_font_face("Monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(11)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.85)
+        cr.move_to(10, 16)
+        cr.show_text(f"{analysis.fps:.0f} FPS  |  Score: {analysis.score:.1f}%")
+
+    def _jump_to_cam(self, idx: int):
+        """Jump to refocus a specific camera."""
+        self.stack.set_visible_child_name("cam_focus")
+        self._on_cam_tab_clicked(idx)
+
+    def _on_finish_clicked(self, button):
+        """Record results and pop navigation view."""
         with self._lock:
             if self._current_analysis:
                 self.camera_results[self.current_step]["score"] = self._current_analysis.score
                 self.camera_results[self.current_step]["peak"] = self._current_analysis.peak_score
-                self.camera_results[self.current_step]["snapshot"] = (
-                    self._current_frame.copy() if self._current_frame is not None else None
-                )
+                self.camera_results[self.current_step]["target"] = self._current_analysis.target_name
 
-        self._load_camera_step(self.current_step + 1)
-
-    def _update_summary_screen(self):
-        """Update summary cards with recorded camera scores."""
-        for i, (score_lbl, _) in enumerate(self.sum_tiles):
-            res = self.camera_results[i]
-            s = res["score"]
-            status = "Optimal" if s >= 80.0 else ("Fair" if s >= 50.0 else "Needs Adjustment")
-            score_lbl.set_label(f"Score: {s:.1f} ({status})")
-
-    def _jump_to_cam(self, idx: int):
-        """Jump back to refocus a specific camera."""
-        self._load_camera_step(idx)
-
-    def _on_finish_clicked(self, button):
-        """Finish focus calibration and return to main dashboard."""
         self.on_page_closed()
         if self.window and hasattr(self.window, "nav_view"):
             self.window.nav_view.pop()
 
     def _on_mute_clicked(self, button):
-        """Toggle audio guidance mute."""
+        """Toggle audio feedback."""
         muted = not self.audio_service.is_muted()
         self.audio_service.set_muted(muted)
         icon_name = "audio-volume-muted-symbolic" if muted else "audio-volume-high-symbolic"

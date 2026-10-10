@@ -437,10 +437,69 @@ class BoardDetector:
 
         return roi
 
+    def get_t20_roi(
+        self,
+        frame_or_shape: Union[np.ndarray, Tuple[int, int]],
+        dev_node: Optional[str] = None,
+        by_path: Optional[str] = None,
+        cam_idx: Optional[int] = None,
+        center: Optional[Tuple[int, int]] = None,
+        radius: Optional[int] = None,
+        roi_size: int = 90,
+    ) -> Tuple[int, int, int, int]:
+        """Calculate bounding box (x, y, w, h) centered directly on the Triple 20 segment."""
+        key = (dev_node or (f"cam_{cam_idx}" if cam_idx else None))
+        t20_key = f"{key}_t20" if key else None
+        if t20_key and t20_key in self.locked_rois:
+            return self.locked_rois[t20_key]
+
+        if isinstance(frame_or_shape, np.ndarray):
+            h, w = frame_or_shape.shape[:2]
+            frame = frame_or_shape
+        else:
+            h, w = frame_or_shape[:2]
+            frame = None
+
+        if center is not None:
+            bx, by = center
+        else:
+            bx, by = self.locate_bullseye(
+                frame=frame, dev_node=dev_node, by_path=by_path, cam_idx=cam_idx, frame_shape=(h, w)
+            )
+
+        calib_target = None
+        h_mat = self.load_calibration_homography(w, h, dev_node=dev_node, by_path=by_path, cam_idx=cam_idx)
+        if h_mat is not None:
+            try:
+                h_inv = np.linalg.inv(h_mat)
+                t20_pt = h_inv @ np.array([500.0, 500.0 - 202.0, 1.0])
+                calib_target = (int(t20_pt[0] / t20_pt[2]), int(t20_pt[1] / t20_pt[2]))
+            except Exception:
+                pass
+
+        if calib_target is None:
+            exp_dist = int(0.116 * h)
+            target_x = bx
+            target_y = max(25, by - exp_dist)
+        else:
+            target_x, target_y = calib_target
+
+        roi_w = roi_size
+        roi_h = roi_size
+        x = max(0, min(w - roi_w, int(target_x - roi_w // 2)))
+        y = max(0, min(h - roi_h, int(target_y - roi_h // 2)))
+        roi = (x, y, roi_w, roi_h)
+
+        if t20_key and calib_target is not None:
+            self.locked_rois[t20_key] = roi
+
+        return roi
+
     def unlock_target(self, dev_node: Optional[str] = None):
         """Reset locked target ROI so furthest double can be re-detected."""
         if dev_node:
             self.locked_rois.pop(dev_node, None)
+            self.locked_rois.pop(f"{dev_node}_t20", None)
         else:
             self.locked_rois.clear()
 

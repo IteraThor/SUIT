@@ -1,19 +1,19 @@
 """Camera focus analysis service for Autodarts.
 
 Provides headless computer vision for locating dartboard geometry,
-tracking peak focus on the furthest double field, computing dynamic
-focal line progression, and managing V4L2 camera capture.
+tracking relative peak sharpness via the Oscilloscope Method,
+supporting Furthest Double, T20, and custom click ROI targeting.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 import math
+import time
 import numpy as np
 import cv2
 import threading
 
 from core.logger import get_logger
-from core.metrics import QualityEvaluator
 from core.board_detector import BoardDetector
 
 logger = get_logger("camera_focus")
@@ -31,16 +31,29 @@ class FocusTrend(Enum):
     OVERSHOT = "overshot"
 
 
+class TargetMode(Enum):
+    NONE = "none"
+    FURTHEST_DOUBLE = "furthest_double"
+    T20 = "t20"
+    CUSTOM = "custom"
+
+
 @dataclass
 class FocusAnalysis:
-    score: float
-    peak_score: float
+    score: float  # Normalized relative score 0-100
+    raw_score: float  # Raw metric value
+    peak_score: float  # Peak normalized score
+    peak_raw: float  # Peak raw metric value
     trend: FocusTrend
     target_roi: tuple[int, int, int, int]  # (x, y, width, height)
-    focal_line_y: int
-    bullseye: tuple[int, int]
-    target_name: str = "Furthest Double"
+    target_name: str
+    target_mode: TargetMode
+    bullseye: tuple[int, int] = (0, 0)
+    focal_line_y: int = 0
     lighting_state: LightingState = LightingState.OPTIMAL
+    history: list[float] = field(default_factory=list)  # 0-100 history
+    peak_history_idx: int = -1
+    fps: float = 0.0
 
 
 class CameraFocusService:
@@ -49,24 +62,70 @@ class CameraFocusService:
         self.cap: cv2.VideoCapture | None = None
         self.current_device: str | None = None
         self.current_cam_uri: str | None = None
-        self.peak_score: float = 0.0
-        self.last_score: float = 0.0
-        self.last_bullseye: tuple[int, int] | None = None
-        self.last_target_roi: tuple[int, int, int, int] | None = None
+
+        # Targeting State
+        self.target_mode: TargetMode = TargetMode.NONE
+        self.target_name: str = "Unselected"
+        self.custom_roi: tuple[int, int, int, int] | None = None
         self.locked_target_roi: tuple[int, int, int, int] | None = None
-        self.smoothed_focal_y: float | None = None
+        self.last_bullseye: tuple[int, int] | None = None
+
+        # Oscilloscope & Relative Tracking State
+        self.raw_history: list[float] = []
+        self.norm_history: list[float] = []
+        self.smoothed_raw: float = 0.0
+        self.baseline_min: float = float("inf")
+        self.baseline_max: float = 0.0
+        self.peak_raw: float = 0.0
+        self.peak_norm: float = 0.0
+        self.peak_history_idx: int = -1
+
+        self.last_sample_time: float = 0.0
+        self.sample_interval: float = 0.10  # 100ms / 10 Hz
+        self.fps_tracker: list[float] = []
+        self.current_fps: float = 0.0
+
         self._accum_zoom_crop: np.ndarray | None = None
         self._cam_lock = threading.Lock()
 
+    def set_target_mode(self, mode: TargetMode, custom_point: tuple[int, int] | None = None, frame_shape: tuple[int, int] = (960, 1280)) -> None:
+        """Set active focus target (Furthest Double, T20, or custom tap)."""
+        self.target_mode = mode
+        self.reset_peak()
+
+        if mode == TargetMode.FURTHEST_DOUBLE:
+            self.target_name = "Furthest Double"
+            self.custom_roi = None
+            self.locked_target_roi = None
+            if self.detector and self.current_device:
+                self.detector.unlock_target(self.current_device)
+        elif mode == TargetMode.T20:
+            self.target_name = "Triple 20 (T20)"
+            self.custom_roi = None
+            self.locked_target_roi = None
+            if self.detector and self.current_device:
+                self.detector.unlock_target(self.current_device)
+        elif mode == TargetMode.CUSTOM and custom_point is not None:
+            cx, cy = custom_point
+            h, w = frame_shape[:2]
+            roi_size = 90
+            x = max(0, min(w - roi_size, int(cx - roi_size // 2)))
+            y = max(0, min(h - roi_size, int(cy - roi_size // 2)))
+            self.custom_roi = (x, y, roi_size, roi_size)
+            self.locked_target_roi = self.custom_roi
+            self.target_name = "Custom Point"
+
     def start_camera(self, dev_path: str, width: int = 1280, height: int = 960, retries: int = 3, uri: str | None = None) -> bool:
-        """Open raw V4L2 camera device for high-framerate capture with retry backoff."""
+        """Open raw V4L2 camera device for capture with retry backoff."""
         with self._cam_lock:
             self._stop_camera_unlocked()
             self.reset_peak()
-            self.unlock_target()
+            self.target_mode = TargetMode.NONE
+            self.locked_target_roi = None
+            self.custom_roi = None
             self.last_bullseye = None
 
-            import os, time
+            import os
             from core.autodarts_service import parse_cam_device
 
             target_dev = parse_cam_device(dev_path)
@@ -84,7 +143,6 @@ class CameraFocusService:
                         cap.release()
                         cap = cv2.VideoCapture(target_dev)
 
-                    # Also try numeric index fallback if target is /dev/videoX
                     if not cap.isOpened() and target_dev.startswith("/dev/video"):
                         try:
                             idx = int(target_dev.replace("/dev/video", ""))
@@ -97,7 +155,6 @@ class CameraFocusService:
                             pass
 
                     if cap.isOpened():
-                        # Configure high-speed MJPG stream to preserve USB bandwidth
                         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*"MJPG"))
                         cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
@@ -146,16 +203,22 @@ class CameraFocusService:
             self._stop_camera_unlocked()
 
     def reset_peak(self) -> None:
-        """Reset the latched peak score and tracking state."""
-        self.peak_score = 0.0
-        self.last_score = 0.0
-        self.smoothed_focal_y = None
+        """Reset the latched peak score and oscilloscope tracking state."""
+        self.raw_history.clear()
+        self.norm_history.clear()
+        self.smoothed_raw = 0.0
+        self.baseline_min = float("inf")
+        self.baseline_max = 0.0
+        self.peak_raw = 0.0
+        self.peak_norm = 0.0
+        self.peak_history_idx = -1
+        self.last_sample_time = 0.0
         self._accum_zoom_crop = None
 
     def unlock_target(self) -> None:
-        """Reset locked target ROI so furthest double can be re-detected."""
+        """Reset locked target ROI so target can be re-selected."""
         self.locked_target_roi = None
-        self.last_target_roi = None
+        self.custom_roi = None
         self._accum_zoom_crop = None
         if self.detector:
             self.detector.unlock_target(self.current_device)
@@ -170,12 +233,10 @@ class CameraFocusService:
         frame: np.ndarray,
         target_roi: tuple[int, int, int, int],
         zoom_factor: float = 2.5,
-        out_size: tuple[int, int] = (260, 260)
+        out_size: tuple[int, int] = (260, 260),
+        peaking_enabled: bool = True,
     ) -> np.ndarray | None:
-        """
-        Extract digital zoom crop on target ROI with temporal accumulation
-        and Sobel focus peaking edge highlights. Returns BGRA numpy buffer.
-        """
+        """Extract clean 2.5x magnified crop on target ROI with temporal smoothing and optional focus peaking."""
         fh, fw = frame.shape[:2]
         tx, ty, tw, th = target_roi
         if tw > 0 and th > 0:
@@ -183,7 +244,7 @@ class CameraFocusService:
             cy = ty + th // 2
         else:
             cx = fw // 2
-            cy = fh // 4
+            cy = fh // 2
 
         target_w, target_h = out_size
         cw = max(20, int(target_w / zoom_factor))
@@ -210,39 +271,34 @@ class CameraFocusService:
         if crop.size == 0:
             return None
 
-        # Temporal smoothing to stabilize sensor noise
         if self._accum_zoom_crop is None or self._accum_zoom_crop.shape != crop.shape:
             self._accum_zoom_crop = crop.astype(np.float32)
         else:
             self._accum_zoom_crop = cv2.addWeighted(
-                crop.astype(np.float32), 0.35, self._accum_zoom_crop, 0.65, 0
+                crop.astype(np.float32), 0.40, self._accum_zoom_crop, 0.60, 0
             )
         clean_crop = np.clip(self._accum_zoom_crop, 0, 255).astype(np.uint8)
 
-        # Focus peaking edge filter
-        gray_crop = cv2.cvtColor(clean_crop, cv2.COLOR_BGR2GRAY)
-        gx = cv2.Sobel(gray_crop, cv2.CV_32F, 1, 0, ksize=3)
-        gy = cv2.Sobel(gray_crop, cv2.CV_32F, 0, 1, ksize=3)
-        mag = cv2.magnitude(gx, gy)
-        peak_mask = mag > 260.0
-
-        if np.any(peak_mask):
-            peaked_crop = clean_crop.copy()
-            peaked_crop[peak_mask] = cv2.addWeighted(
-                clean_crop[peak_mask], 0.35, np.full_like(clean_crop[peak_mask], [40, 255, 60]), 0.65, 0
-            )
-            render_crop = peaked_crop
+        # Focus peaking / contour edge highlights
+        if peaking_enabled:
+            gray = cv2.cvtColor(clean_crop, cv2.COLOR_BGR2GRAY)
+            gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+            gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+            mag = cv2.magnitude(gx, gy)
+            peak_mask = mag > 200.0
+            if np.any(peak_mask):
+                peaked = clean_crop.copy()
+                peaked[peak_mask] = cv2.addWeighted(
+                    clean_crop[peak_mask], 0.35, np.full_like(clean_crop[peak_mask], [40, 255, 60]), 0.65, 0
+                )
+                render_crop = peaked
+            else:
+                render_crop = clean_crop
         else:
             render_crop = clean_crop
 
         resized = cv2.resize(render_crop, out_size, interpolation=cv2.INTER_LINEAR)
         return cv2.cvtColor(resized, cv2.COLOR_BGR2BGRA)
-
-    def load_calibration_homography(self, width: int, height: int) -> np.ndarray | None:
-        """Load 3x3 homography matrix from ~/.config/autodarts/calibration.json for active camera."""
-        return self.detector.load_calibration_homography(
-            width, height, dev_node=self.current_device, by_path=self.current_cam_uri
-        )
 
     def locate_bullseye(self, image: np.ndarray, existing_calib: dict | None = None) -> tuple[int, int]:
         """Locate Bullseye coordinates using BoardDetector concentric geometry or calibration."""
@@ -264,91 +320,161 @@ class CameraFocusService:
     def get_target_roi(
         self, image: np.ndarray, bullseye: tuple[int, int], existing_calib: dict | None = None
     ) -> tuple[int, int, int, int]:
-        """Calculate bounding box centered directly on the furthest double field.
-
-        Once a target is identified via calibration or dynamic CV detection,
-        the ROI is locked to remain static so the digital zoom magnifier does not wiggle.
-        """
+        """Calculate target bounding box based on active target mode."""
         if self.locked_target_roi is not None:
             return self.locked_target_roi
 
+        h, w = image.shape[:2]
+
+        if self.target_mode == TargetMode.CUSTOM and self.custom_roi is not None:
+            self.locked_target_roi = self.custom_roi
+            return self.custom_roi
+
+        if self.target_mode == TargetMode.T20:
+            roi = self.detector.get_t20_roi(
+                image,
+                dev_node=self.current_device,
+                by_path=self.current_cam_uri,
+                center=bullseye,
+                roi_size=90,
+            )
+            self.locked_target_roi = roi
+            return roi
+
+        # Furthest double or default
         roi = self.detector.get_furthest_double_roi(
             image,
             dev_node=self.current_device,
             by_path=self.current_cam_uri,
             center=bullseye,
         )
-        self.last_target_roi = roi
         self.locked_target_roi = roi
         return roi
 
-    def compute_sharpness(self, roi: np.ndarray) -> float:
-        """Compute normalized sharpness score (0–100) tuned for 2170 CMOS sensors on dartboard wires."""
-        return QualityEvaluator.calculate_focus_score(roi)
+    @staticmethod
+    def compute_patch_sharpness(patch: np.ndarray) -> float:
+        """Compute combined Laplacian Variance + Tenengrad focus metric on patch."""
+        if patch is None or patch.size == 0:
+            return 0.0
+
+        gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY) if len(patch.shape) == 3 else patch
+        
+        lap = cv2.Laplacian(gray, cv2.CV_64F)
+        lap_var = float(lap.var())
+
+        gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+        gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        tenengrad = float(np.mean(gx**2 + gy**2))
+
+        raw = math.sqrt(max(0.0, lap_var)) + math.sqrt(max(0.0, tenengrad))
+        return raw
 
     def check_lighting_quality(self, roi: np.ndarray) -> LightingState:
-        """Evaluate if the target patch has acceptable exposure for sharpness scoring."""
+        """Evaluate if target patch has acceptable exposure."""
         if roi is None or roi.size == 0:
             return LightingState.TOO_DARK
             
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if len(roi.shape) == 3 else roi
         mean_luma = float(np.mean(gray))
         
-        if mean_luma < 45.0:
+        if mean_luma < 40.0:
             return LightingState.TOO_DARK
         elif mean_luma > 185.0:
             return LightingState.OVEREXPOSED
         return LightingState.OPTIMAL
 
-    def find_dynamic_focal_line(
-        self, image: np.ndarray, bullseye: tuple[int, int], target_roi: tuple[int, int, int, int]
-    ) -> int:
-        """Return the target sweet spot center y-coordinate on the furthest double field."""
-        _, ty, _, th = target_roi
-        return int(ty + th // 2)
-
     def analyze_frame(self, image: np.ndarray, existing_calib: dict | None = None) -> FocusAnalysis:
-        """Perform complete optical focus analysis on a camera frame."""
-        h, w = image.shape[:2]
+        """Perform real-time Oscilloscope focus analysis on camera frame."""
+        now = time.time()
+        self.fps_tracker.append(now)
+        self.fps_tracker = [t for t in self.fps_tracker if now - t <= 1.0]
+        self.current_fps = float(len(self.fps_tracker))
+
         bullseye = self.locate_bullseye(image, existing_calib)
         target_roi = self.get_target_roi(image, bullseye, existing_calib)
 
-        # Extract target ROI patch and compute sharpness score
         rx, ry, rw, rh = target_roi
         patch = image[ry : ry + rh, rx : rx + rw]
         
         lighting_state = self.check_lighting_quality(patch)
         
         if lighting_state != LightingState.OPTIMAL:
-            score = 0.0
+            raw_val = 0.0
         else:
-            score = self.compute_sharpness(patch)
+            raw_val = self.compute_patch_sharpness(patch)
 
-        # Locate current focal line
-        focal_line_y = self.find_dynamic_focal_line(image, bullseye, target_roi)
+        # Oscilloscope sampling
+        if self.smoothed_raw == 0.0:
+            self.smoothed_raw = raw_val
+        else:
+            self.smoothed_raw = self.smoothed_raw * 0.65 + raw_val * 0.35
 
-        # Peak tracking and trend evaluation
-        if score > self.peak_score:
-            self.peak_score = score
+        s_val = self.smoothed_raw
+
+        if s_val > 0.0:
+            if s_val < self.baseline_min:
+                self.baseline_min = s_val
+            if s_val > self.baseline_max:
+                self.baseline_max = s_val
+
+        if s_val > self.peak_raw:
+            self.peak_raw = s_val
+
+        # Update history
+        if (now - self.last_sample_time) >= self.sample_interval or len(self.raw_history) == 0:
+            self.last_sample_time = now
+            self.raw_history.append(s_val)
+            if len(self.raw_history) > 100:
+                self.raw_history.pop(0)
+
+            span = max(10.0, self.baseline_max - self.baseline_min)
+            self.norm_history = [
+                min(100.0, max(0.0, ((v - self.baseline_min) / span) * 100.0))
+                if span > 0 else 0.0
+                for v in self.raw_history
+            ]
+
+            if self.baseline_max > self.baseline_min:
+                self.peak_norm = min(100.0, max(0.0, ((self.peak_raw - self.baseline_min) / span) * 100.0))
+            else:
+                self.peak_norm = 0.0
+
+            if self.raw_history and self.peak_raw > 0:
+                try:
+                    self.peak_history_idx = self.raw_history.index(self.peak_raw)
+                except ValueError:
+                    self.peak_history_idx = len(self.raw_history) - 1
+            else:
+                self.peak_history_idx = -1
+
+        span = max(10.0, self.baseline_max - self.baseline_min)
+        if span > 0 and self.smoothed_raw > 0:
+            current_norm = min(100.0, max(0.0, ((self.smoothed_raw - self.baseline_min) / span) * 100.0))
+        else:
+            current_norm = 0.0
+
+        if self.peak_raw > 0 and self.smoothed_raw >= (self.peak_raw * 0.98):
             trend = FocusTrend.SHARPENING
-        elif self.peak_score > 0 and (self.peak_score - score) >= 4.0:
+        elif self.peak_raw > 0 and (self.peak_raw - self.smoothed_raw) / max(1.0, self.peak_raw) > 0.06:
             trend = FocusTrend.OVERSHOT
-        elif abs(score - self.last_score) <= 1.0:
+        else:
             trend = FocusTrend.STABLE
-        elif score < self.last_score:
-            trend = FocusTrend.OVERSHOT
-        else:
-            trend = FocusTrend.SHARPENING
 
-        self.last_score = score
+        focal_line_y = int(ry + rh // 2)
 
         return FocusAnalysis(
-            score=round(score, 1),
-            peak_score=round(self.peak_score, 1),
+            score=round(current_norm, 1),
+            raw_score=round(self.smoothed_raw, 1),
+            peak_score=round(self.peak_norm, 1),
+            peak_raw=round(self.peak_raw, 1),
             trend=trend,
             target_roi=target_roi,
-            focal_line_y=focal_line_y,
+            target_name=self.target_name,
+            target_mode=self.target_mode,
             bullseye=bullseye,
-            target_name="Furthest Double",
+            focal_line_y=focal_line_y,
             lighting_state=lighting_state,
+            history=list(self.norm_history),
+            peak_history_idx=self.peak_history_idx,
+            fps=round(self.current_fps, 1),
         )
