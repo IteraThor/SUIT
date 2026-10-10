@@ -787,6 +787,8 @@
         oscilloscopeHud.style.display = "flex";
         loupePanel.style.display = "flex";
         isStreaming = true;
+        frameCount = 0;
+        fpsTimer = performance.now();
         resetWaveform();
 
         const track = currentStream.getVideoTracks()[0];
@@ -1226,11 +1228,14 @@
             // 3. Draw Interactive Reticle on Main Canvas
             drawReticle(ctx, rx, ry, targetBoxSize, targetBoxSize, currentLifecycleState);
 
-            // FPS Calculation
+            // FPS Calculation (Updated every 500ms for fast, accurate response)
             frameCount++;
-            if (now - fpsTimer >= 1000) {
-              currentFps = Math.round((frameCount * 1000) / (now - fpsTimer));
-              fpsValueEl.textContent = `${currentFps} FPS`;
+            const fpsElapsed = now - fpsTimer;
+            if (fpsElapsed >= 500) {
+              currentFps = Math.round((frameCount * 1000) / fpsElapsed);
+              if (fpsValueEl) {
+                fpsValueEl.textContent = `${currentFps} FPS`;
+              }
               frameCount = 0;
               fpsTimer = now;
             }
