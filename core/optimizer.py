@@ -50,6 +50,7 @@ class CameraOptimizer:
         precision_mode: str = "ultra",
         progress_cb: Optional[ProgressCallback] = None,
         cancel_event: Optional[threading.Event] = None,
+        empty_baseline: Optional[np.ndarray] = None,
     ) -> Optional[OptimizationResult]:
         """Execute full calibration sequence with cancellation support."""
         is_ultra = precision_mode == "ultra"
@@ -115,7 +116,7 @@ class CameraOptimizer:
             roi = self.detector.detect_board(initial_frame, dev_node=self.device.dev_node)
             roi_overlay = self.detector.create_roi_overlay(initial_frame, roi)
             report("Detecting Board", 0.12, "Identified wire edges and segment sampling zones", frame=roi_overlay)
-            initial_metrics = self.evaluator.evaluate(initial_burst, roi)
+            initial_metrics = self.evaluator.evaluate(initial_burst, roi, empty_frame=empty_baseline)
 
             if check_abort():
                 return None
@@ -153,11 +154,12 @@ class CameraOptimizer:
             baseline_mean_lum = float(np.mean(baseline_board)) if len(baseline_board) > 0 else float(np.mean(gray_baseline))
             baseline_clip = float(np.sum(baseline_board >= 253)) / max(1, len(baseline_board)) if len(baseline_board) > 0 else 0.0
 
-            # Safe target luminance clamp
-            target_white_lum = max(150.0, min(230.0, baseline_white_lum))
+            # Safe target luminance clamp: Anti-blooming white ceiling protection (175 - 215 DN)
+            # Guarantees >=40 DN specular headroom so metallic dart barrels do not clip and bloom into Hough lines.
+            target_white_lum = max(175.0, min(215.0, baseline_white_lum))
             target_mean_lum = baseline_mean_lum
 
-            logger.info("Baseline AE Target: white=%.1f DN, mean=%.1f DN, clip=%.2f%%",
+            logger.info("Baseline AE Target: white=%.1f DN (anti-blooming capped), mean=%.1f DN, clip=%.2f%%",
                         target_white_lum, target_mean_lum, baseline_clip * 100)
 
             # Hardware control limits
@@ -171,15 +173,10 @@ class CameraOptimizer:
             max_g = gain_ctrl.max_val if gain_ctrl else 128
             gain_step = max(1, getattr(gain_ctrl, "step", 1) or 1)
 
-            # Optimal shutter speed for 30 FPS flicker-free capture (25ms - 33.3ms)
-            if exp_max >= 300:
-                nominal_shutter = 300
-            elif exp_max >= 250:
-                nominal_shutter = 250
-            else:
-                nominal_shutter = exp_max
+            # Preserve exact user exposure time (locked)
+            nominal_shutter = initial_settings.exposure_absolute if (initial_settings.exposure_absolute and initial_settings.exposure_absolute > 0) else 300
 
-            report("Stage 1 / 3", 0.18, f"Matching baseline brightness ({target_white_lum:.0f} DN) in Manual Mode...")
+            report("Stage 1 / 3", 0.18, f"Matching baseline brightness ({target_white_lum:.0f} DN) in Manual Mode (Exposure {nominal_shutter} locked)...")
 
             # Set manual mode while preserving ALL factory ISP settings (brightness, saturation, gamma, wb)
             self.device.set_control("auto_exposure", 1)  # Manual Mode
@@ -280,40 +277,10 @@ class CameraOptimizer:
             optimal_exposure = nominal_shutter
             best_gain = best_g
 
-            # If minimum gain at nominal shutter is already overexposed, reduce shutter time
-            if best_g == min_g and best_g_lum > target_white_lum + 8.0:
-                report("Stage 1 / 3 (Shutter Tuning)", 0.35, "Lighting is very bright — reducing shutter time...")
-                shutter_candidates = sorted(list(set([
-                    exp_min,
-                    max(exp_min, 50),
-                    max(exp_min, 100),
-                    max(exp_min, 150),
-                    max(exp_min, 200),
-                    max(exp_min, nominal_shutter),
-                ])), reverse=True)
-
-                for exp_v in shutter_candidates:
-                    if check_abort():
-                        return None
-                    self.device.set_control("exposure_time_absolute", exp_v)
-                    time.sleep(0.04)
-                    f = get_frame(flush=2)
-                    if f is None:
-                        continue
-                    gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
-                    u_pix = gray[roi.uniform_mask > 0]
-                    lum = float(np.percentile(u_pix, 90)) if len(u_pix) > 50 else float(np.percentile(gray, 90))
-                    if abs(lum - target_white_lum) < best_g_diff:
-                        best_g_diff = abs(lum - target_white_lum)
-                        optimal_exposure = exp_v
-                    if lum <= target_white_lum:
-                        optimal_exposure = exp_v
-                        break
-
             self.device.set_control("exposure_time_absolute", optimal_exposure)
             self.device.set_control("gain", best_gain)
             time.sleep(0.06)
-            logger.info("Locked Stage 1 physical anchor: exposure=%d, gain=%d (white=%.1f DN)",
+            logger.info("Locked Stage 1 physical anchor: exposure=%d (locked), gain=%d (white=%.1f DN)",
                         optimal_exposure, best_gain, target_white_lum)
 
             current_settings = CameraSettings(
@@ -330,34 +297,54 @@ class CameraOptimizer:
                 power_line_frequency=initial_settings.power_line_frequency,
             )
 
-            # STAGE 2: Bounded ISP Tuning around Factory Defaults
-            report("Stage 2 / 3", 0.45, f"Scanning ISP sharpness & contrast around calibrated baseline ({burst_count}-frame burst)...")
+            # STAGE 2: Bounded ISP Tuning (Gamma, Contrast, Sharpness)
+            report("Stage 2 / 3", 0.45, f"Scanning ISP gamma, contrast & sharpness ({burst_count}-frame burst)...")
 
             sharp_ctrl = initial_ctrls.get("sharpness")
             s_min = sharp_ctrl.min_val if sharp_ctrl else 0
             s_max = sharp_ctrl.max_val if sharp_ctrl else 100
-            s_base = initial_settings.sharpness if initial_settings.sharpness is not None else (sharp_ctrl.default_val if sharp_ctrl else 3)
+            s_base = initial_settings.sharpness if initial_settings.sharpness is not None else (sharp_ctrl.default_val if sharp_ctrl else 40)
 
             contrast_ctrl = initial_ctrls.get("contrast")
             c_min = contrast_ctrl.min_val if contrast_ctrl else 0
             c_max = contrast_ctrl.max_val if contrast_ctrl else 100
-            c_base = initial_settings.contrast if initial_settings.contrast is not None else (contrast_ctrl.default_val if contrast_ctrl else 32)
+            c_base = initial_settings.contrast if initial_settings.contrast is not None else (contrast_ctrl.default_val if contrast_ctrl else 34)
 
-            # Bounded window around factory default
-            s_span = max(8, int((s_max - s_min) * 0.20))
-            c_span = max(6, int((c_max - c_min) * 0.18))
+            gamma_ctrl = initial_ctrls.get("gamma")
+            g_min = gamma_ctrl.min_val if gamma_ctrl else 100
+            g_max = gamma_ctrl.max_val if gamma_ctrl else 500
+            g_base = initial_settings.gamma if initial_settings.gamma is not None else 300
 
-            coarse_s_levels = sorted(list(set([
-                max(s_min, min(s_max, s_base + offset))
-                for offset in [-s_span, -s_span // 2, 0, s_span // 2, s_span]
-            ])))
-            coarse_c_levels = sorted(list(set([
-                max(c_min, min(c_max, c_base + offset))
-                for offset in [-c_span // 2, 0, c_span // 2, c_span, int(c_span * 1.5)]
-            ])))
+            # ISP Candidate Levels: focused search around empirical high-performance zone
+            if precision_mode == "standard":
+                gamma_levels = sorted(list(set([
+                    max(g_min, min(g_max, val))
+                    for val in [300, 420, 460]
+                ])))
+                coarse_s_levels = sorted(list(set([
+                    max(s_min, min(s_max, val))
+                    for val in [60, 80]
+                ])))
+                coarse_c_levels = sorted(list(set([
+                    max(c_min, min(c_max, val))
+                    for val in [30, 34]
+                ])))
+            else:
+                gamma_levels = sorted(list(set([
+                    max(g_min, min(g_max, val))
+                    for val in [300, 380, 420, 460]
+                ])))
+                coarse_s_levels = sorted(list(set([
+                    max(s_min, min(s_max, val))
+                    for val in [50, 60, 70, 80]
+                ])))
+                coarse_c_levels = sorted(list(set([
+                    max(c_min, min(c_max, val))
+                    for val in [28, 30, 32, 34, 36]
+                ])))
 
-            total_pairs = len(coarse_s_levels) * len(coarse_c_levels)
-            pair_idx = 0
+            total_triplets = len(gamma_levels) * len(coarse_s_levels) * len(coarse_c_levels)
+            step_idx = 0
 
             best_score = -1.0
             best_settings = dataclasses.replace(current_settings)
@@ -365,68 +352,83 @@ class CameraOptimizer:
             best_burst: List[np.ndarray] = initial_burst
             best_s = s_base
             best_c = c_base
+            best_g = g_base
 
-            for s in coarse_s_levels:
+            for gam in gamma_levels:
                 if check_abort():
                     return None
-                self.device.set_control("sharpness", s)
+                self.device.set_control("gamma", gam)
 
-                for c in coarse_c_levels:
+                for s in coarse_s_levels:
                     if check_abort():
                         return None
+                    self.device.set_control("sharpness", s)
 
-                    pair_idx += 1
-                    self.device.set_control("contrast", c)
-                    time.sleep(0.04)
+                    for c in coarse_c_levels:
+                        if check_abort():
+                            return None
 
-                    burst = get_burst(count=burst_count, flush=2)
-                    if not burst:
-                        continue
+                        step_idx += 1
+                        self.device.set_control("contrast", c)
+                        time.sleep(0.04)
 
-                    gray_check = cv2.cvtColor(burst[0], cv2.COLOR_BGR2GRAY)
-                    board_px = gray_check[roi.board_mask > 0]
-                    if len(board_px) > 100:
-                        p10 = float(np.percentile(board_px, 10))
-                        curr_mean = float(np.mean(board_px))
-
-                        # Veto 1: Shadows crushed below 10 DN
-                        if p10 < 10.0:
-                            pct = 0.45 + (pair_idx / total_pairs) * 0.35
-                            report("Stage 2 / 3", pct, f"Skipped S={s}, C={c} (shadows crushed: {p10:.0f} DN)", frame=burst[0])
+                        burst = get_burst(count=burst_count, flush=2)
+                        if not burst:
                             continue
 
-                        # Veto 2: Overall board luminance dimmed by more than 5% from baseline
-                        if curr_mean < baseline_mean_lum * 0.95:
-                            pct = 0.45 + (pair_idx / total_pairs) * 0.35
-                            report("Stage 2 / 3", pct, f"Skipped S={s}, C={c} (image darkened: {curr_mean:.0f}/{baseline_mean_lum:.0f} DN)", frame=burst[0])
+                        gray_check = cv2.cvtColor(burst[0], cv2.COLOR_BGR2GRAY)
+                        board_px = gray_check[roi.board_mask > 0]
+                        if len(board_px) > 100:
+                            p10 = float(np.percentile(board_px, 10))
+                            curr_mean = float(np.mean(board_px))
+
+                            # Veto 1: True sensor zero clipping
+                            if p10 < 3.0:
+                                pct = 0.45 + (step_idx / total_triplets) * 0.40
+                                report("Stage 2 / 3", pct, f"Skipped G={gam}, S={s}, C={c} (shadows clipped: {p10:.0f} DN)", frame=burst[0])
+                                continue
+
+                            # Veto 2: Excessive image darkening
+                            if curr_mean < baseline_mean_lum * 0.70:
+                                pct = 0.45 + (step_idx / total_triplets) * 0.40
+                                report("Stage 2 / 3", pct, f"Skipped G={gam}, S={s}, C={c} (image darkened: {curr_mean:.0f}/{baseline_mean_lum:.0f} DN)", frame=burst[0])
+                                continue
+
+                        halo_val = self.evaluator.calculate_halo_overshoot(burst[0], roi.wire_mask, roi.uniform_mask)
+                        if halo_val > 0.22:
+                            pct = 0.45 + (step_idx / total_triplets) * 0.40
+                            report("Stage 2 / 3", pct, f"Skipped G={gam}, S={s}, C={c} (halo ringing: {halo_val*100:.1f}%)", frame=burst[0])
                             continue
 
-                    halo_val = self.evaluator.calculate_halo_overshoot(burst[0], roi.wire_mask, roi.uniform_mask)
-                    if halo_val > 0.22:
-                        pct = 0.45 + (pair_idx / total_pairs) * 0.35
-                        report("Stage 2 / 3", pct, f"Skipped S={s}, C={c} (halo ringing detected: {halo_val*100:.1f}%)", frame=burst[0])
-                        continue
+                        metrics = self.evaluator.evaluate(
+                            burst,
+                            roi,
+                            target_white_lum=target_white_lum,
+                            target_mean_lum=target_mean_lum,
+                            empty_frame=empty_baseline,
+                        )
 
-                    metrics = self.evaluator.evaluate(
-                        burst, roi, target_white_lum=target_white_lum, target_mean_lum=target_mean_lum
-                    )
+                        if metrics.composite_score > best_score:
+                            best_score = metrics.composite_score
+                            best_metrics = metrics
+                            best_s = s
+                            best_c = c
+                            best_g = gam
+                            best_settings = dataclasses.replace(current_settings, sharpness=s, contrast=c, gamma=gam)
+                            best_burst = burst
 
-                    if metrics.composite_score > best_score:
-                        best_score = metrics.composite_score
-                        best_metrics = metrics
-                        best_s = s
-                        best_c = c
-                        best_settings = dataclasses.replace(current_settings, sharpness=s, contrast=c)
-                        best_burst = burst
-
-                    pct = 0.45 + (pair_idx / total_pairs) * 0.35
-                    report("Stage 2 / 3", pct, f"Testing S={s}, C={c} -> Score: {metrics.composite_score}/100", frame=burst[0])
+                        pct = 0.45 + (step_idx / total_triplets) * 0.40
+                        details_text = f"Testing G={gam}, S={s}, C={c} -> Score: {metrics.composite_score}/100"
+                        if metrics.dart_separation > 0:
+                            details_text += f" (Tip: {metrics.dart_separation:.0f} DN, Glow: {metrics.sisal_glow:.1f} DN)"
+                        report("Stage 2 / 3", pct, details_text, frame=burst[0])
 
             if check_abort():
                 return None
 
             # STAGE 3: Final Verification
             report("Stage 3 / 3", 0.88, "Final verification and burst capture...")
+            self.device.set_control("gamma", best_g)
             self.device.set_control("sharpness", best_s)
             self.device.set_control("contrast", best_c)
             self.device.set_control("gain", best_gain)
@@ -436,7 +438,11 @@ class CameraOptimizer:
             final_burst = get_burst(count=burst_count, flush=3)
             if final_burst:
                 verif_metrics = self.evaluator.evaluate(
-                    final_burst, roi, target_white_lum=target_white_lum, target_mean_lum=target_mean_lum
+                    final_burst,
+                    roi,
+                    target_white_lum=target_white_lum,
+                    target_mean_lum=target_mean_lum,
+                    empty_frame=empty_baseline,
                 )
                 if verif_metrics.composite_score >= best_score * 0.85:
                     best_burst = final_burst
@@ -446,6 +452,7 @@ class CameraOptimizer:
             best_settings = dataclasses.replace(
                 current_settings,
                 gain=best_gain,
+                gamma=best_g,
                 sharpness=best_s,
                 contrast=best_c,
                 exposure_absolute=optimal_exposure,

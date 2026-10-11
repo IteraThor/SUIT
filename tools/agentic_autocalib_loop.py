@@ -181,10 +181,22 @@ class AutoCalibOrchestrator:
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Autonomous Multi-Agent Calibration Loop")
+    parser.add_argument("--iteration", type=int, default=1, help="Iteration number")
+    parser.add_argument("--hypothesis", type=str, default="Empirical multi-camera ISP calibration sweep", help="Hypothesis to test")
+    parser.add_argument("--precision", type=str, default="standard", choices=["standard", "fine", "exhaustive"], help="Precision mode")
+    parser.add_argument("--cams", type=str, default=None, help="Comma-separated camera video nodes (e.g. /dev/video2,/dev/video4)")
+    args = parser.parse_args()
+
+    cam_nodes = args.cams.split(",") if args.cams else None
+
     orchestrator = AutoCalibOrchestrator()
     out = orchestrator.run_iteration(
-        iteration_num=1,
-        hypothesis="Test quantile tone matching with dart shaft Hough extraction",
-        precision_mode="standard",
+        iteration_num=args.iteration,
+        hypothesis=args.hypothesis,
+        precision_mode=args.precision,
+        cam_nodes=cam_nodes,
     )
-    print("\nIteration 1 complete:", json.dumps(out, indent=2))
+    print(f"\nIteration {args.iteration} complete:\n", json.dumps(out, indent=2))
