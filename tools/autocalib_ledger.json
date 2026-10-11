@@ -54,5 +54,61 @@
         }
       }
     }
+  },
+  {
+    "iteration": 2,
+    "hypothesis": "Fine-grained sharpness (50-80) and contrast (28-36) sweep on Cam 4 and Cam 2",
+    "approved": true,
+    "composite_gain": 66.7,
+    "notes": "/dev/video0: Neither Hough lines nor needle contrast improved",
+    "timestamp": "2026-10-11T19:06:37.608492",
+    "parameters": null,
+    "camera_results": {
+      "/dev/video0": {
+        "exposure": 300,
+        "gain": 38,
+        "contrast": 36,
+        "sharpness": 70,
+        "gamma": 300,
+        "score": 61.4,
+        "improvement": 16.7,
+        "critic": {
+          "hough_lines": 570,
+          "longest_shaft": 419.7,
+          "sisal_floor": 5.54,
+          "specular_bloom": 0.0
+        }
+      },
+      "/dev/video2": {
+        "exposure": 300,
+        "gain": 40,
+        "contrast": 30,
+        "sharpness": 70,
+        "gamma": 380,
+        "score": 74.1,
+        "improvement": 134.5,
+        "critic": {
+          "hough_lines": 687,
+          "longest_shaft": 474.2,
+          "sisal_floor": 6.38,
+          "specular_bloom": 0.0
+        }
+      },
+      "/dev/video4": {
+        "exposure": 300,
+        "gain": 40,
+        "contrast": 36,
+        "sharpness": 70,
+        "gamma": 300,
+        "score": 54.7,
+        "improvement": 35.4,
+        "critic": {
+          "hough_lines": 457,
+          "longest_shaft": 345.4,
+          "sisal_floor": 10.34,
+          "specular_bloom": 0.0
+        }
+      }
+    }
   }
 ]
