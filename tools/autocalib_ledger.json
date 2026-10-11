@@ -148,5 +148,43 @@
         "improvement": 39.0
       }
     }
+  },
+  {
+    "iteration": 4,
+    "hypothesis": "High-contrast needle tip optimization (C=36-44, S=70-80, G=300-380) for maximum tip separation",
+    "approved": false,
+    "composite_gain": 33.3,
+    "notes": "/dev/video0: Neither Hough lines nor needle contrast improved; /dev/video4: Neither Hough lines nor needle contrast improved",
+    "timestamp": "2026-10-11 19:22:58",
+    "parameters": null,
+    "camera_results": {
+      "/dev/video0": {
+        "exposure": 300,
+        "gain": 32,
+        "contrast": 36,
+        "sharpness": 70,
+        "gamma": 300,
+        "score": 64.8,
+        "improvement": 3.7
+      },
+      "/dev/video2": {
+        "exposure": 300,
+        "gain": 31,
+        "contrast": 36,
+        "sharpness": 70,
+        "gamma": 300,
+        "score": 61.6,
+        "improvement": 30.0
+      },
+      "/dev/video4": {
+        "exposure": 300,
+        "gain": 32,
+        "contrast": 40,
+        "sharpness": 75,
+        "gamma": 300,
+        "score": 49.5,
+        "improvement": 6.0
+      }
+    }
   }
 ]
