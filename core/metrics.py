@@ -22,6 +22,10 @@ class QualityMetrics:
     highlight_clipping_ratio: float  # Fraction of clipped pixels (>253)
     shadow_clipping_ratio: float  # Fraction of crushed black pixels (<=8)
     composite_score: float  # Overall normalized score (0 - 100)
+    wire_fwhm: float = 0.0  # Full-Width at Half-Maximum of wire gradient profile in px (lower is thinner/sharper)
+    halo_overshoot: float = 0.0  # Digital unsharp ringing overshoot fraction (lower is cleaner)
+    dart_separation: float = 0.0  # Dart tip signal delta in absdiff (higher is better)
+    sisal_glow: float = 0.0  # Sisal background noise floor in absdiff (lower is better)
 
 
 class QualityEvaluator:
@@ -58,13 +62,31 @@ class QualityEvaluator:
         return float(np.clip(blended * 100.0, 0.0, 100.0))
 
     @staticmethod
-    def calculate_edge_steepness(frame: np.ndarray, wire_mask: np.ndarray) -> float:
-        """Calculate mean gradient magnitude along dartboard segment wires."""
+    def calculate_edge_steepness(frame: np.ndarray, wire_mask: np.ndarray, roi: Optional[BoardROI] = None) -> float:
+        """Calculate weighted gradient magnitude along dartboard segment wires, prioritizing Treble & Bullseye."""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
-        # Compute Scharr or Sobel gradients
         grad_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
         grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
         magnitude = np.sqrt(grad_x ** 2 + grad_y ** 2)
+
+        if roi and roi.center and roi.radius > 20:
+            h, w = gray.shape[:2]
+            cx, cy = roi.center
+            r = roi.radius
+            y_indices, x_indices = np.indices((h, w))
+            dist_from_center = np.sqrt((x_indices - cx) ** 2 + (y_indices - cy) ** 2)
+
+            # Sweet spot mask: Bullseye (0-18% radius) and Treble region (45-72% radius)
+            sweet_mask = (wire_mask > 0) & (((dist_from_center <= r * 0.18)) | ((dist_from_center >= r * 0.45) & (dist_from_center <= r * 0.72)))
+            outer_mask = (wire_mask > 0) & (~sweet_mask)
+
+            sweet_vals = magnitude[sweet_mask]
+            outer_vals = magnitude[outer_mask]
+
+            if len(sweet_vals) > 0 and len(outer_vals) > 0:
+                return float(0.65 * np.mean(sweet_vals) + 0.35 * np.mean(outer_vals))
+            elif len(sweet_vals) > 0:
+                return float(np.mean(sweet_vals))
 
         wire_pixels = magnitude[wire_mask > 0]
         if len(wire_pixels) == 0:
@@ -132,16 +154,172 @@ class QualityEvaluator:
         overshoot = max(0.0, (p95_halo - p90_sisal) / p90_sisal)
         return float(overshoot)
 
+    @staticmethod
+    def calculate_wire_fwhm(frame: np.ndarray, roi: BoardROI) -> float:
+        """Calculate mean Full-Width at Half-Maximum (FWHM) of wire edge profiles in pixels.
+
+        Extracts 1D normal profiles across the Bullseye and Treble scoring rings to measure
+        true physical edge thinness. Lower FWHM indicates a thinner, sharper wire edge.
+        """
+        if frame is None or frame.size == 0 or roi is None:
+            return 3.5  # Baseline default
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+        h, w = gray.shape[:2]
+
+        cx, cy = roi.center if roi.center else (w // 2, h // 2)
+        radius = roi.radius if (roi.radius and roi.radius > 30) else int(min(w, h) * 0.35)
+
+        # Concentric radii representing critical wire boundaries:
+        # Bullseye circle (~9% of radius), Treble inner/outer (~55-62%), Double (~96%)
+        test_radii = [
+            int(radius * 0.09),
+            int(radius * 0.55),
+            int(radius * 0.62),
+            int(radius * 0.96),
+        ]
+
+        fwhm_measurements: List[float] = []
+        half_win = 8  # profile length = 17 pixels
+
+        for r in test_radii:
+            if r <= 5:
+                continue
+            # Sample 24 angles around the ring
+            for deg in range(0, 360, 15):
+                theta = math.radians(deg)
+                cos_t = math.cos(theta)
+                sin_t = math.sin(theta)
+
+                # Center of profile along the wire ring
+                px = cx + r * cos_t
+                py = cy + r * sin_t
+
+                if px - half_win < 0 or px + half_win >= w or py - half_win < 0 or py + half_win >= h:
+                    continue
+
+                profile = []
+                for s in range(-half_win, half_win + 1):
+                    sx = int(round(px + s * cos_t))
+                    sy = int(round(py + s * sin_t))
+                    if 0 <= sx < w and 0 <= sy < h:
+                        profile.append(float(gray[sy, sx]))
+                    else:
+                        break
+
+                if len(profile) != (2 * half_win + 1):
+                    continue
+
+                arr = np.array(profile, dtype=np.float32)
+                grad = np.abs(np.diff(arr))
+                max_g = float(np.max(grad))
+
+                if max_g >= 12.0:
+                    half_max = max_g * 0.5
+                    peak_idx = int(np.argmax(grad))
+
+                    left_idx = peak_idx
+                    while left_idx > 0 and grad[left_idx] >= half_max:
+                        left_idx -= 1
+
+                    right_idx = peak_idx
+                    while right_idx < len(grad) - 1 and grad[right_idx] >= half_max:
+                        right_idx += 1
+
+                    left_pos = float(left_idx)
+                    if left_idx < peak_idx and (grad[left_idx + 1] - grad[left_idx]) > 1e-4:
+                        left_pos = left_idx + (half_max - grad[left_idx]) / (grad[left_idx + 1] - grad[left_idx])
+
+                    right_pos = float(right_idx)
+                    if right_idx > peak_idx and (grad[right_idx - 1] - grad[right_idx]) > 1e-4:
+                        right_pos = right_idx - (half_max - grad[right_idx]) / (grad[right_idx - 1] - grad[right_idx])
+
+                    fwhm_val = max(1.0, right_pos - left_pos)
+                    if fwhm_val <= 10.0:
+                        fwhm_measurements.append(fwhm_val)
+
+        if not fwhm_measurements:
+            return 3.5
+
+        return float(np.percentile(fwhm_measurements, 35))
+
+    @staticmethod
+    def calculate_dart_difference_metrics(
+        dart_frame: np.ndarray,
+        empty_frame: np.ndarray,
+        roi: Optional[BoardROI] = None,
+    ) -> Tuple[float, float, float]:
+        """Calculates dart difference metrics between dart frame and empty frame.
+
+        Returns:
+            (dart_separation, sisal_glow, separation_ratio)
+            - dart_separation: peak contrast delta at dart silhouettes in absdiff (0-255)
+            - sisal_glow: background difference noise floor in empty sisal (0-255)
+            - separation_ratio: dart_separation / max(1.0, sisal_glow)
+        """
+        gray_dart = cv2.cvtColor(dart_frame, cv2.COLOR_BGR2GRAY) if len(dart_frame.shape) == 3 else dart_frame
+        gray_empty = cv2.cvtColor(empty_frame, cv2.COLOR_BGR2GRAY) if len(empty_frame.shape) == 3 else empty_frame
+
+        if roi and roi.board_mask is not None and roi.board_mask.shape == gray_dart.shape:
+            board_mask = roi.board_mask > 0
+        else:
+            board_mask = np.ones_like(gray_dart, dtype=bool)
+
+        # Non-linear tone-curve matching between empty baseline and candidate frame
+        # (Uses 256-element quantile transfer LUT to eliminate cross-gamma curve mismatch)
+        dart_board = gray_dart[board_mask]
+        empty_board = gray_empty[board_mask]
+        if len(dart_board) > 100 and len(empty_board) > 100:
+            b_quantiles = np.percentile(empty_board, np.linspace(0, 100, 256))
+            c_quantiles = np.percentile(dart_board, np.linspace(0, 100, 256))
+            lut = np.interp(np.arange(256), b_quantiles, c_quantiles).astype(np.uint8)
+            scaled_empty = cv2.LUT(gray_empty, lut)
+        else:
+            scaled_empty = gray_empty
+
+        gray_diff = cv2.absdiff(gray_dart, scaled_empty)
+        if roi and roi.board_mask is not None and roi.board_mask.shape == gray_diff.shape:
+            masked_diff = cv2.bitwise_and(gray_diff, gray_diff, mask=roi.board_mask)
+        else:
+            masked_diff = gray_diff
+
+        _, thresh = cv2.threshold(masked_diff, 25, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        dart_contours = [c for c in contours if cv2.contourArea(c) > 60]
+        dart_contours = sorted(dart_contours, key=cv2.contourArea, reverse=True)[:3]
+
+        if dart_contours:
+            dart_mask = np.zeros_like(gray_diff)
+            cv2.drawContours(dart_mask, dart_contours, -1, 255, -1)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+            dart_dilated = cv2.dilate(dart_mask, kernel, iterations=1)
+
+            dart_pixels = masked_diff[dart_mask > 0]
+            sisal_mask = board_mask & (dart_dilated == 0)
+            sisal_pixels = masked_diff[sisal_mask]
+
+            tip_signal = float(np.percentile(dart_pixels, 95)) if len(dart_pixels) > 0 else 0.0
+            glow_noise = float(np.mean(sisal_pixels)) if len(sisal_pixels) > 0 else 0.0
+        else:
+            board_pixels = masked_diff[board_mask]
+            tip_signal = float(np.percentile(board_pixels, 98)) if len(board_pixels) > 0 else 0.0
+            glow_noise = float(np.mean(board_pixels)) if len(board_pixels) > 0 else 0.0
+
+        ratio = tip_signal / max(1.0, glow_noise)
+        return (round(tip_signal, 1), round(glow_noise, 2), round(ratio, 2))
+
     def evaluate(
         self,
         frames: List[np.ndarray],
         roi: BoardROI,
         target_white_lum: Optional[float] = None,
         target_mean_lum: Optional[float] = None,
+        empty_frame: Optional[np.ndarray] = None,
     ) -> QualityMetrics:
         """Perform comprehensive evaluation of single or multi-frame capture."""
         if not frames:
-            return QualityMetrics(0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            return QualityMetrics(0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.5, 0.0, 0.0, 0.0)
 
         if len(frames) > 1:
             # Multi-frame temporal stacking: compute noise-free pixel average
@@ -151,8 +329,9 @@ class QualityEvaluator:
 
         gray = cv2.cvtColor(main_frame, cv2.COLOR_BGR2GRAY) if len(main_frame.shape) == 3 else main_frame
 
-        # 1. Edge Steepness
-        steepness = self.calculate_edge_steepness(main_frame, roi.wire_mask)
+        # 1. Edge Steepness & Wire Thinness (FWHM) with Treble/Bull Sweet Spot Weighting
+        steepness = self.calculate_edge_steepness(main_frame, roi.wire_mask, roi=roi)
+        wire_fwhm = self.calculate_wire_fwhm(main_frame, roi)
 
         # 2. Temporal Noise
         t_noise = self.calculate_temporal_noise(frames, roi.uniform_mask)
@@ -187,7 +366,7 @@ class QualityEvaluator:
         if target_white_lum is not None:
             lum_penalty = max(0.0, 1.0 - abs(white_bed_lum - target_white_lum) / 35.0)
         else:
-            lum_penalty = max(0.0, 1.0 - abs(white_bed_lum - 195.0) / 60.0)
+            lum_penalty = max(0.0, 1.0 - abs(white_bed_lum - 205.0) / 60.0)
 
         # Highlight clipping penalty (specular wire burnout)
         hl_penalty = max(0.0, 1.0 - (hl_clipping_ratio * 18.0))
@@ -195,22 +374,22 @@ class QualityEvaluator:
         # Shadow clipping penalty (crushed dart shadow triangulation)
         sh_penalty = max(0.0, 1.0 - (sh_clipping_ratio * 14.0))
 
-        # Halo ringing penalty (scaled for metallic wire specular highlights)
-        halo_penalty = max(0.30, 1.0 - (halo_overshoot / 0.25))
+        # Halo ringing penalty (strictly penalizes unsharp-mask edge doubling)
+        halo_penalty = max(0.25, 1.0 - (halo_overshoot / 0.18) ** 2)
 
-        # Black Floor Factor:
-        if 12.0 <= p_black_floor <= 45.0:
+        # Black Floor Factor: healthy blacks down to 4.0 DN receive full score
+        if 4.0 <= p_black_floor <= 45.0:
             black_floor_factor = 1.0
-        elif p_black_floor < 12.0:
-            black_floor_factor = max(0.20, (p_black_floor / 12.0) ** 2)
+        elif p_black_floor < 4.0:
+            black_floor_factor = max(0.40, (p_black_floor / 4.0) ** 2)
         else:
             black_floor_factor = max(0.40, 1.0 - (p_black_floor - 45.0) / 40.0)
 
-        # White bed peak target: optimal 185-252 DN
-        if 185.0 <= p_white_peak <= 252.0:
+        # White bed peak target: optimal 185-245 DN (accommodates high-gamma sisal boost)
+        if 185.0 <= p_white_peak <= 245.0:
             white_peak_factor = 1.0
-        elif p_white_peak > 252.0:
-            white_peak_factor = max(0.20, 1.0 - (p_white_peak - 252.0) / 3.0)
+        elif p_white_peak > 245.0:
+            white_peak_factor = max(0.20, 1.0 - (p_white_peak - 245.0) / 8.0)
         else:
             white_peak_factor = max(0.30, (p_white_peak / 185.0) ** 2)
 
@@ -225,10 +404,23 @@ class QualityEvaluator:
 
         # Normalized Components (scaled to real-world CMOS dartboard optics):
         steep_norm = float(np.clip((steepness - 180.0) / (420.0 - 180.0), 0.0, 1.0))
+        fwhm_norm = float(np.clip((4.2 - wire_fwhm) / (4.2 - 1.6), 0.0, 1.0))
         dr_norm = float(np.clip((dynamic_range - 130.0) / (235.0 - 130.0), 0.0, 1.0))
         noise_norm = max(0.0, 1.0 - min(1.0, (t_noise - 0.5) / 3.0))
 
-        raw_score = (steep_norm * 45.0 + dr_norm * 30.0 + noise_norm * 25.0) * clip_penalty
+        # 6. Dart Silhouette Separation (if empty baseline provided)
+        dart_sep = 0.0
+        sisal_glow = 0.0
+        if empty_frame is not None:
+            dart_sep, sisal_glow, sep_ratio = self.calculate_dart_difference_metrics(main_frame, empty_frame, roi)
+            dart_sep_norm = float(np.clip((dart_sep - 80.0) / (220.0 - 80.0), 0.0, 1.0))
+            glow_norm = max(0.0, 1.0 - min(1.0, max(0.0, sisal_glow - 5.0) / 15.0))
+            # 35% dart silhouette separation, 25% sisal glow suppression, 20% wire steepness, 20% wire thinness
+            raw_score = (dart_sep_norm * 35.0 + glow_norm * 25.0 + steep_norm * 20.0 + fwhm_norm * 20.0) * clip_penalty
+        else:
+            # Composite score: 30% steepness, 25% wire thinness (FWHM), 25% dynamic range, 20% noise
+            raw_score = (steep_norm * 30.0 + fwhm_norm * 25.0 + dr_norm * 25.0 + noise_norm * 20.0) * clip_penalty
+
         composite_score = round(max(0.0, min(100.0, raw_score)), 1)
 
         return QualityMetrics(
@@ -239,4 +431,8 @@ class QualityEvaluator:
             highlight_clipping_ratio=round(hl_clipping_ratio, 4),
             shadow_clipping_ratio=round(sh_clipping_ratio, 4),
             composite_score=composite_score,
+            wire_fwhm=round(wire_fwhm, 2),
+            halo_overshoot=round(halo_overshoot, 3),
+            dart_separation=round(dart_sep, 1),
+            sisal_glow=round(sisal_glow, 2),
         )
