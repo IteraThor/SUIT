@@ -142,7 +142,7 @@ class SweepStep:
         """Transition to sweep view and run optimization in background thread."""
         if SystemdManager.is_autodarts_active():
             self.view._autodarts_was_running = True
-            SystemdManager.stop_autodarts()
+            SystemdManager.pause_autodarts()
 
         self.view.stack.set_visible_child_name("sweep")
         self.setup_sweep_columns()

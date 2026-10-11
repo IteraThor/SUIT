@@ -28,7 +28,7 @@ from core.camera_focus_service import (
 )
 from core.audio_tone_service import AudioToneService
 from core.autodarts_service import read_cam_config
-from core.systemd_service import SystemdService
+from core.systemd_service import SystemdService, SystemdManager
 
 logger = get_logger("camera_focus_view")
 
@@ -493,10 +493,8 @@ class CameraFocusView(Adw.NavigationPage):
 
         def _bg_init():
             try:
-                self.was_autodarts_active = SystemdService.is_unit_active("autodarts.service")
+                self.was_autodarts_active = SystemdManager.pause_autodarts()
                 if self.was_autodarts_active:
-                    logger.info("Stopping autodarts.service to release V4L2 device locks")
-                    SystemdService.stop_unit("autodarts.service")
                     time.sleep(0.4)
             except Exception:
                 logger.exception("Error querying/stopping autodarts.service")
@@ -551,14 +549,17 @@ class CameraFocusView(Adw.NavigationPage):
             self._current_frame = None
             self._current_analysis = None
 
-        if self.was_autodarts_active:
+        if getattr(self, "was_autodarts_active", False) or SystemdManager._autodarts_paused_by_suit:
             def _bg_restore():
                 try:
-                    logger.info("Restoring autodarts.service in background")
-                    SystemdService.start_unit("autodarts.service")
+                    logger.info("Restoring autodarts.service")
+                    SystemdManager.resume_autodarts()
                 except Exception:
                     logger.exception("Error restarting autodarts.service")
-            threading.Thread(target=_bg_restore, daemon=True).start()
+            t = threading.Thread(target=_bg_restore, daemon=False)
+            t.start()
+            self._restore_thread = t
+            self.was_autodarts_active = False
 
     def _update_tab_buttons(self, active_idx: int):
         """Update active style on camera tabs."""

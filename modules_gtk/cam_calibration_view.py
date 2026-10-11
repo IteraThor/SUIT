@@ -104,9 +104,6 @@ class CamCalibrationView(Adw.Bin):
         self.stack.set_vexpand(True)
         self.stack.set_hexpand(True)
 
-        self.page_dashboard = self.step_dashboard.build_page()
-        self.stack.add_named(self.page_dashboard, "dashboard")
-
         self.page_baseline = self.step_baseline.build_page()
         self.stack.add_named(self.page_baseline, "baseline")
 
@@ -122,19 +119,22 @@ class CamCalibrationView(Adw.Bin):
         self.toast_overlay = Adw.ToastOverlay()
         self.toast_overlay.set_child(self.stack)
         self.set_child(self.toast_overlay)
-        self.stack.set_visible_child_name("dashboard")
+        self.stack.set_visible_child_name("baseline")
 
     # =========================================================================
     # NAVIGATION HANDLERS & STEP COORDINATION
     # =========================================================================
     def _go_to_dashboard(self):
-        self.stack.set_visible_child_name("dashboard")
-        self.step_dashboard.update_dashboard()
+        """Legacy helper: return back to Camera Tools hub or restart baseline."""
+        if self.on_back and callable(self.on_back):
+            self.on_back()
+        else:
+            self._go_to_baseline(new_session=True)
 
     def _go_to_baseline(self, new_session: bool = False):
         if SystemdManager.is_autodarts_active():
             self._autodarts_was_running = True
-            SystemdManager.stop_autodarts()
+            SystemdManager.pause_autodarts()
         self.detector.unlock_target()
         if new_session:
             self.baseline_frames.clear()
@@ -143,8 +143,10 @@ class CamCalibrationView(Adw.Bin):
         self.step_baseline.prepare_page()
 
     def _go_to_setup(self):
+        if hasattr(self.step_baseline, "stop_live_stream"):
+            self.step_baseline.stop_live_stream()
         self.stack.set_visible_child_name("setup")
-        self.step_setup.setup_scope_buttons()
+        self.step_setup.prepare_page()
 
     def _start_calibration_sweep(self):
         self.step_sweep.start_calibration_sweep()
@@ -160,25 +162,26 @@ class CamCalibrationView(Adw.Bin):
     # PUBLIC API / LIFECYCLE
     # =========================================================================
     def refresh_cameras(self):
-        """Rescan system cameras and update dashboard."""
+        """Rescan system cameras."""
         self.cameras = self.topology.get_autodarts_cameras()
         self.cameras.sort(key=lambda c: c.index)
-        self.step_dashboard.update_dashboard()
 
     def on_app_close(self):
         """Cleanup running threads on application close."""
+        if hasattr(self.step_baseline, "stop_live_stream"):
+            self.step_baseline.stop_live_stream()
         if self.cancel_event:
             self.cancel_event.set()
-        if getattr(self, "_autodarts_was_running", False):
-            SystemdManager.start_autodarts()
+        if getattr(self, "_autodarts_was_running", False) or SystemdManager._autodarts_paused_by_suit:
+            SystemdManager.resume_autodarts()
             self._autodarts_was_running = False
 
 
 class CamCalibrationPage(Adw.NavigationPage):
-    """Navigation page wrapper for CAM-librator inside SUIT."""
+    """Navigation page wrapper for Camera Optimizer inside SUIT."""
 
     def __init__(self, window):
-        super().__init__(title="Camera Optimizer (Experimental)", tag="cam_calibration")
+        super().__init__(title="Camera Optimizer", tag="cam_calibration")
         self.window = window
 
         scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
@@ -209,6 +212,8 @@ class CamCalibrationPage(Adw.NavigationPage):
     def on_page_opened(self):
         if hasattr(self.view, "refresh_cameras"):
             self.view.refresh_cameras()
+        if hasattr(self.view, "_go_to_baseline"):
+            self.view._go_to_baseline(new_session=True)
 
     def on_page_closed(self):
         if hasattr(self.view, "on_app_close"):

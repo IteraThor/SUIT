@@ -1,4 +1,4 @@
-"""Camera Calibration (CAM-librator) UI Package for SUIT."""
+"""Camera Optimizer UI Package for SUIT."""
 
 from modules_gtk.cam_calibration.step_dashboard import DashboardStep
 from modules_gtk.cam_calibration.step_baseline import BaselineStep

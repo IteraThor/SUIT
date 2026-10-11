@@ -99,9 +99,9 @@ class CameraToolsView(Adw.NavigationPage):
         self.row_manual.add_suffix(chevron_manual)
         self.pref_group.add(self.row_manual)
 
-        # 3. Camera Optimizer (CAM-librator) [Experimental]
+        # 3. Camera Optimizer
         self.row_optimizer = Adw.ActionRow()
-        self.row_optimizer.set_title(GLib.markup_escape_text("Camera Optimizer (CAM-librator)"))
+        self.row_optimizer.set_title(GLib.markup_escape_text("Camera Optimizer"))
         self.row_optimizer.set_subtitle(GLib.markup_escape_text("Automated multi-camera exposure, gain, and ISP calibration wizard."))
         icon_optimizer = Gtk.Image.new_from_icon_name("applications-science-symbolic")
         icon_optimizer.set_pixel_size(24)
@@ -135,6 +135,6 @@ class CameraToolsView(Adw.NavigationPage):
             self.window.open_camera_manual_page()
 
     def _open_optimizer(self):
-        logger.debug("Opening Camera Optimizer (CAM-librator) from Camera Tools hub")
+        logger.debug("Opening Camera Optimizer from Camera Tools hub")
         if hasattr(self.window, "open_cam_calibration_page"):
             self.window.open_cam_calibration_page()
