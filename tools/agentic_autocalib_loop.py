@@ -174,7 +174,7 @@ class AutoCalibOrchestrator:
         self.ledger.record(entry)
 
         return {
-            "session_path": session_path,
+            "session_path": str(session_path),
             "verdict": asdict(verdict),
             "camera_results": cam_summary,
         }
