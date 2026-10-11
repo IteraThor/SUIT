@@ -415,8 +415,9 @@ class QualityEvaluator:
             dart_sep, sisal_glow, sep_ratio = self.calculate_dart_difference_metrics(main_frame, empty_frame, roi)
             dart_sep_norm = float(np.clip((dart_sep - 80.0) / (220.0 - 80.0), 0.0, 1.0))
             glow_norm = max(0.0, 1.0 - min(1.0, max(0.0, sisal_glow - 5.0) / 15.0))
-            # 35% dart silhouette separation, 25% sisal glow suppression, 20% wire steepness, 20% wire thinness
-            raw_score = (dart_sep_norm * 35.0 + glow_norm * 25.0 + steep_norm * 20.0 + fwhm_norm * 20.0) * clip_penalty
+            ratio_norm = float(np.clip((sep_ratio - 8.0) / (32.0 - 8.0), 0.0, 1.0))
+            # 30% tip separation, 15% tip-to-sisal contrast ratio, 20% sisal glow suppression, 18% wire steepness, 17% wire thinness
+            raw_score = (dart_sep_norm * 30.0 + ratio_norm * 15.0 + glow_norm * 20.0 + steep_norm * 18.0 + fwhm_norm * 17.0) * clip_penalty
         else:
             # Composite score: 30% steepness, 25% wire thinness (FWHM), 25% dynamic range, 20% noise
             raw_score = (steep_norm * 30.0 + fwhm_norm * 25.0 + dr_norm * 25.0 + noise_norm * 20.0) * clip_penalty
