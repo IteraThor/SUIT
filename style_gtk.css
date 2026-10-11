@@ -49,8 +49,9 @@ headerbar button.image-button {
 combobox button,
 dropdown > button {
     min-height: 40px;
-    font-size: 13px;
-    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: 10px;
 }
 
 /* Switches touch target */

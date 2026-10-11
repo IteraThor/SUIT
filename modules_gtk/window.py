@@ -199,6 +199,16 @@ class SuitWindow(Adw.ApplicationWindow):
         if not tag and hasattr(page, "get_tag"):
             tag = page.get_tag()
 
+        if tag == "camera_manual":
+            self.maximize()
+            return
+
+        if hasattr(self, "is_fullscreen") and self.is_fullscreen():
+            self.unfullscreen()
+
+        if self.is_maximized():
+            self.unmaximize()
+
         target_map = {
             "main_menu": (760, 640),
             "camera_tools": (740, 480),

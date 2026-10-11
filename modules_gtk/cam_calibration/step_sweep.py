@@ -14,6 +14,7 @@ gi.require_version("Adw", "1")
 from gi.repository import GLib, Gtk
 
 from core.optimizer import CameraOptimizer, OptimizationResult
+from core.session_exporter import SessionExporter
 from core.systemd_service import SystemdManager
 from core.v4l2_device import V4L2Device
 from modules_gtk.cv_gtk_utils import frame_to_pixbuf
@@ -42,7 +43,7 @@ class SweepStep:
 
         # Header
         top_txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        self.sweep_title_lbl = Gtk.Label(label="Step 4 of 5: Calibration in Progress...", xalign=0.0)
+        self.sweep_title_lbl = Gtk.Label(label="Step 3 of 4: Calibration in Progress...", xalign=0.0)
         self.sweep_title_lbl.add_css_class("wizard-title")
         top_txt.append(self.sweep_title_lbl)
         self.sweep_sub_lbl = Gtk.Label(
@@ -139,7 +140,6 @@ class SweepStep:
 
     def start_calibration_sweep(self):
         """Transition to sweep view and run optimization in background thread."""
-        self.view._stop_focus_stream()
         if SystemdManager.is_autodarts_active():
             self.view._autodarts_was_running = True
             SystemdManager.stop_autodarts()
@@ -191,10 +191,12 @@ class SweepStep:
                     return cb
 
                 cb = make_progress_cb(cam.dev_node, idx / total, 1.0 / total)
+                empty_ref = self.view.baseline_frames.get(cam.dev_node)
                 result = optimizer.run_optimization(
                     precision_mode=self.view.selected_precision,
                     progress_cb=cb,
                     cancel_event=self.cancel_event,
+                    empty_baseline=empty_ref,
                 )
 
                 if result:
@@ -203,6 +205,15 @@ class SweepStep:
 
             except Exception as e:
                 logger.exception("Error during sweep on %s: %s", cam.dev_node, e)
+
+        # Auto-export sample images, crops, edge maps, and JSON metrics in worker thread
+        if self.view.results and not (self.cancel_event and self.cancel_event.is_set()):
+            try:
+                exporter = SessionExporter()
+                session_path = exporter.export_session(self.view.results)
+                logger.info("Saved calibration session telemetry to %s", session_path)
+            except Exception as e:
+                logger.warning("Failed to auto-save sweep session telemetry: %s", e)
 
         GLib.idle_add(self._on_all_sweeps_finished)
 
@@ -256,28 +267,4 @@ class SweepStep:
             self.sweep_sub_lbl.set_text("All values calculated. Click 'Continue to Review'.")
             self.sweep_finish_btn.set_visible(True)
             self.sweep_cancel_btn.set_sensitive(False)
-
-            # Auto-export sample images and metrics to disk
-            try:
-                samples_dir = Path.home() / "Fedora-CAM-librator" / "samples"
-                samples_dir.mkdir(parents=True, exist_ok=True)
-                for dev_node, res in self.view.results.items():
-                    cam = next((c for c in self.view.cameras if c.dev_node == dev_node), None)
-                    if cam:
-                        cam_id = f"cam{cam.index}"
-                        if res.initial_frame is not None:
-                            cv2.imwrite(str(samples_dir / f"{cam_id}_before.jpg"), res.initial_frame)
-                        if res.optimized_frame is not None:
-                            cv2.imwrite(str(samples_dir / f"{cam_id}_after.jpg"), res.optimized_frame)
-                        with open(str(samples_dir / f"{cam_id}_metrics.txt"), "w", encoding="utf-8") as fp:
-                            fp.write(f"Camera: {dev_node}\n")
-                            fp.write(f"Gain: {res.optimized_settings.gain}\n")
-                            fp.write(f"Contrast: {res.optimized_settings.contrast}\n")
-                            fp.write(f"Sharpness: {res.optimized_settings.sharpness}\n")
-                            fp.write(f"Exposure: {res.optimized_settings.exposure_absolute}\n")
-                            fp.write(f"Quality: {res.optimized_metrics.composite_score}/100\n")
-                            fp.write(f"Improvement: +{res.improvement_percentage}%\n")
-                logger.info("Saved sweep sample images and metrics to %s", samples_dir)
-            except Exception as e:
-                logger.warning("Failed to auto-save sweep samples: %s", e)
         return False

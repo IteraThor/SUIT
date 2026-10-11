@@ -50,20 +50,15 @@ class CameraManualView(Adw.NavigationPage):
         self._loading_controls = False
         self._updating_boot_switch = False
 
-        # Container
-        scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        scrolled.set_kinetic_scrolling(True)
-        self.set_child(scrolled)
-
-        clamp = Adw.Clamp(maximum_size=980, tightening_threshold=800)
-        clamp.set_margin_top(8)
-        clamp.set_margin_bottom(8)
-        clamp.set_margin_start(10)
-        clamp.set_margin_end(10)
-        scrolled.set_child(clamp)
-
+        # Main container - expands to fill the entire maximized window
         self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        clamp.set_child(self.main_box)
+        self.main_box.set_margin_top(8)
+        self.main_box.set_margin_bottom(8)
+        self.main_box.set_margin_start(12)
+        self.main_box.set_margin_end(12)
+        self.main_box.set_hexpand(True)
+        self.main_box.set_vexpand(True)
+        self.set_child(self.main_box)
 
         # 1. Compact Top Bar: Camera Selector + Status
         self._build_top_bar()
@@ -105,6 +100,66 @@ class CameraManualView(Adw.NavigationPage):
             self.cam_buttons.append(btn)
         top_bar.append(tab_box)
 
+        # Profile Selector Box
+        profile_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        profile_box.set_valign(Gtk.Align.CENTER)
+
+        lbl_profile = Gtk.Label(label="Profile:")
+        lbl_profile.add_css_class("dim-label")
+        profile_box.append(lbl_profile)
+
+        self._profile_names: list[str] = ["Default"]
+        self.profile_string_list = Gtk.StringList.new(self._profile_names)
+        self.dropdown_profile = Gtk.DropDown.new(self.profile_string_list, None)
+        self.dropdown_profile.set_valign(Gtk.Align.CENTER)
+        self.dropdown_profile.connect("notify::selected", self._on_profile_dropdown_changed)
+        profile_box.append(self.dropdown_profile)
+
+        # Save button (updates current profile with current slider values)
+        self.btn_save_profile = Gtk.Button(label="Save")
+        self.btn_save_profile.add_css_class("touch-btn")
+        self.btn_save_profile.set_valign(Gtk.Align.CENTER)
+        self.btn_save_profile.set_tooltip_text("Save current settings to active profile")
+        self.btn_save_profile.connect("clicked", self._on_save_profile_clicked)
+        profile_box.append(self.btn_save_profile)
+
+        # New profile button (+)
+        self.btn_add_profile = Gtk.Button.new_from_icon_name("list-add-symbolic")
+        self.btn_add_profile.add_css_class("touch-btn")
+        self.btn_add_profile.set_valign(Gtk.Align.CENTER)
+        self.btn_add_profile.set_tooltip_text("Create new profile from current settings")
+        self.btn_add_profile.connect("clicked", self._on_add_profile_clicked)
+        profile_box.append(self.btn_add_profile)
+
+        # More Actions MenuButton (Rename / Delete)
+        self.btn_more_profile = Gtk.MenuButton()
+        self.btn_more_profile.set_icon_name("view-more-symbolic")
+        self.btn_more_profile.add_css_class("touch-btn")
+        self.btn_more_profile.set_valign(Gtk.Align.CENTER)
+        self.btn_more_profile.set_tooltip_text("Profile options")
+
+        more_popover = Gtk.Popover()
+        popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        popover_box.set_margin_top(6)
+        popover_box.set_margin_bottom(6)
+        popover_box.set_margin_start(6)
+        popover_box.set_margin_end(6)
+
+        btn_rename = Gtk.Button(label="Rename Profile")
+        btn_rename.connect("clicked", lambda b: (more_popover.popdown(), self._on_rename_profile_clicked()))
+        popover_box.append(btn_rename)
+
+        btn_delete = Gtk.Button(label="Delete Profile")
+        btn_delete.add_css_class("destructive-action")
+        btn_delete.connect("clicked", lambda b: (more_popover.popdown(), self._on_delete_profile_clicked()))
+        popover_box.append(btn_delete)
+
+        more_popover.set_child(popover_box)
+        self.btn_more_profile.set_popover(more_popover)
+        profile_box.append(self.btn_more_profile)
+
+        top_bar.append(profile_box)
+
         # Spacer
         spacer = Gtk.Box(hexpand=True)
         top_bar.append(spacer)
@@ -122,6 +177,14 @@ class CameraManualView(Adw.NavigationPage):
         boot_box.append(self.switch_boot)
         top_bar.append(boot_box)
 
+        # Fullscreen Toggle Button
+        self.btn_fullscreen = Gtk.Button.new_from_icon_name("view-fullscreen-symbolic")
+        self.btn_fullscreen.add_css_class("touch-btn")
+        self.btn_fullscreen.set_valign(Gtk.Align.CENTER)
+        self.btn_fullscreen.set_tooltip_text("Toggle Fullscreen")
+        self.btn_fullscreen.connect("clicked", self._on_toggle_fullscreen_clicked)
+        top_bar.append(self.btn_fullscreen)
+
         # Status label reference
         self.lbl_status = Gtk.Label(label="Live sensor adjustment")
 
@@ -138,13 +201,23 @@ class CameraManualView(Adw.NavigationPage):
             else:
                 btn.remove_css_class("suggested-action")
 
+    def _on_toggle_fullscreen_clicked(self, btn):
+        if not self.window:
+            return
+        if hasattr(self.window, "is_fullscreen") and self.window.is_fullscreen():
+            self.window.unfullscreen()
+            btn.set_icon_name("view-fullscreen-symbolic")
+        elif hasattr(self.window, "fullscreen"):
+            self.window.fullscreen()
+            btn.set_icon_name("view-restore-symbolic")
+
     def _build_split_content(self):
-        split_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        split_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         split_box.set_hexpand(True)
         split_box.set_vexpand(True)
         self.main_box.append(split_box)
 
-        # --- LEFT PANE: Preview + Action ---
+        # --- LEFT PANE: Live Video Preview (Expands to maximum available space) ---
         left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         left_box.set_hexpand(True)
         left_box.set_vexpand(True)
@@ -152,29 +225,33 @@ class CameraManualView(Adw.NavigationPage):
 
         # Live Preview Frame
         preview_frame = Gtk.Frame()
-        preview_frame.add_css_class("card")
+        preview_frame.add_css_class("focus-preview-area")
         preview_frame.set_hexpand(True)
         preview_frame.set_vexpand(True)
 
         self.preview_drawing_area = Gtk.DrawingArea()
         self.preview_drawing_area.set_draw_func(self._on_draw_preview)
-        self.preview_drawing_area.set_size_request(-1, 230)
+        self.preview_drawing_area.set_size_request(320, 240)
         self.preview_drawing_area.set_hexpand(True)
         self.preview_drawing_area.set_vexpand(True)
         preview_frame.set_child(self.preview_drawing_area)
         left_box.append(preview_frame)
 
-        # Reset Defaults button directly under preview
-        self.btn_reset = Gtk.Button(label="Reset Defaults")
-        self.btn_reset.add_css_class("secondary-btn")
-        self.btn_reset.connect("clicked", self._on_reset_clicked)
-        left_box.append(self.btn_reset)
+        # --- RIGHT PANE: Compact Sensor Controls (Fixed regular width, scrollable) ---
+        ctrl_scroll = Gtk.ScrolledWindow()
+        ctrl_scroll.set_hexpand(False)
+        ctrl_scroll.set_vexpand(True)
+        ctrl_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        ctrl_scroll.set_size_request(340, -1)
+        split_box.append(ctrl_scroll)
 
-        # --- RIGHT PANE: Compact Sensor Controls ---
-        ctrl_pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        ctrl_pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         ctrl_pane.add_css_class("tile-card-compact")
-        ctrl_pane.set_size_request(340, -1)
-        split_box.append(ctrl_pane)
+        ctrl_pane.set_margin_top(4)
+        ctrl_pane.set_margin_bottom(4)
+        ctrl_pane.set_margin_start(4)
+        ctrl_pane.set_margin_end(4)
+        ctrl_scroll.set_child(ctrl_pane)
 
         # 1. Exposure (Auto toggle + Slider)
         exp_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -193,7 +270,7 @@ class CameraManualView(Adw.NavigationPage):
         exp_hdr.append(self.switch_exp_auto)
         exp_box.append(exp_hdr)
 
-        self.scale_exp_val = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1, 5000, 10)
+        self.scale_exp_val = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1, 5000, 1)
         self.scale_exp_val.set_draw_value(True)
         self.scale_exp_val.set_value_pos(Gtk.PositionType.RIGHT)
         self.scale_exp_val.set_hexpand(True)
@@ -202,12 +279,12 @@ class CameraManualView(Adw.NavigationPage):
         ctrl_pane.append(exp_box)
 
         # 2. Gain
-        gain_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        lbl_gain = Gtk.Label(label="Gain", xalign=0, width_chars=8)
+        gain_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        lbl_gain = Gtk.Label(label="Gain", xalign=0)
         lbl_gain.add_css_class("dim-label")
         gain_box.append(lbl_gain)
 
-        self.scale_gain = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.scale_gain = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 128, 1)
         self.scale_gain.set_draw_value(True)
         self.scale_gain.set_value_pos(Gtk.PositionType.RIGHT)
         self.scale_gain.set_hexpand(True)
@@ -215,9 +292,51 @@ class CameraManualView(Adw.NavigationPage):
         gain_box.append(self.scale_gain)
         ctrl_pane.append(gain_box)
 
-        # 3. Brightness
-        bright_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        lbl_bright = Gtk.Label(label="Brightness", xalign=0, width_chars=8)
+        # 3. Sharpness
+        sharp_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        lbl_sharp = Gtk.Label(label="Sharpness", xalign=0)
+        lbl_sharp.add_css_class("dim-label")
+        sharp_box.append(lbl_sharp)
+
+        self.scale_sharpness = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.scale_sharpness.set_draw_value(True)
+        self.scale_sharpness.set_value_pos(Gtk.PositionType.RIGHT)
+        self.scale_sharpness.set_hexpand(True)
+        self.scale_sharpness.connect("value-changed", lambda s: self._queue_control_update("sharpness", int(s.get_value())))
+        sharp_box.append(self.scale_sharpness)
+        ctrl_pane.append(sharp_box)
+
+        # 4. Contrast
+        contrast_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        lbl_contrast = Gtk.Label(label="Contrast", xalign=0)
+        lbl_contrast.add_css_class("dim-label")
+        contrast_box.append(lbl_contrast)
+
+        self.scale_contrast = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.scale_contrast.set_draw_value(True)
+        self.scale_contrast.set_value_pos(Gtk.PositionType.RIGHT)
+        self.scale_contrast.set_hexpand(True)
+        self.scale_contrast.connect("value-changed", lambda s: self._queue_control_update("contrast", int(s.get_value())))
+        contrast_box.append(self.scale_contrast)
+        ctrl_pane.append(contrast_box)
+
+        # 5. Gamma
+        gamma_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        lbl_gamma = Gtk.Label(label="Gamma", xalign=0)
+        lbl_gamma.add_css_class("dim-label")
+        gamma_box.append(lbl_gamma)
+
+        self.scale_gamma = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 100, 500, 10)
+        self.scale_gamma.set_draw_value(True)
+        self.scale_gamma.set_value_pos(Gtk.PositionType.RIGHT)
+        self.scale_gamma.set_hexpand(True)
+        self.scale_gamma.connect("value-changed", lambda s: self._queue_control_update("gamma", int(s.get_value())))
+        gamma_box.append(self.scale_gamma)
+        ctrl_pane.append(gamma_box)
+
+        # 6. Brightness
+        bright_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        lbl_bright = Gtk.Label(label="Brightness", xalign=0)
         lbl_bright.add_css_class("dim-label")
         bright_box.append(lbl_bright)
 
@@ -229,21 +348,7 @@ class CameraManualView(Adw.NavigationPage):
         bright_box.append(self.scale_bright)
         ctrl_pane.append(bright_box)
 
-        # 4. Contrast
-        contrast_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        lbl_contrast = Gtk.Label(label="Contrast", xalign=0, width_chars=8)
-        lbl_contrast.add_css_class("dim-label")
-        contrast_box.append(lbl_contrast)
-
-        self.scale_contrast = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 64, 1)
-        self.scale_contrast.set_draw_value(True)
-        self.scale_contrast.set_value_pos(Gtk.PositionType.RIGHT)
-        self.scale_contrast.set_hexpand(True)
-        self.scale_contrast.connect("value-changed", lambda s: self._queue_control_update("contrast", int(s.get_value())))
-        contrast_box.append(self.scale_contrast)
-        ctrl_pane.append(contrast_box)
-
-        # 5. White Balance (Auto toggle + Slider)
+        # 7. White Balance (Auto toggle + Slider)
         wb_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         wb_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         lbl_wb = Gtk.Label(label="White Balance", xalign=0, hexpand=True)
@@ -267,6 +372,13 @@ class CameraManualView(Adw.NavigationPage):
         self.scale_wb_temp.connect("value-changed", lambda s: self._queue_control_update("white_balance_temperature", int(s.get_value())))
         wb_box.append(self.scale_wb_temp)
         ctrl_pane.append(wb_box)
+
+        # 8. Reset Defaults button
+        self.btn_reset = Gtk.Button(label="Reset Defaults")
+        self.btn_reset.add_css_class("secondary-btn")
+        self.btn_reset.set_margin_top(8)
+        self.btn_reset.connect("clicked", self._on_reset_clicked)
+        ctrl_pane.append(self.btn_reset)
 
     @property
     def current_device(self) -> str:
@@ -305,18 +417,28 @@ class CameraManualView(Adw.NavigationPage):
 
             if "gain" in ctrls:
                 data = ctrls["gain"]
-                self.scale_gain.set_range(data.get("min", 0), data.get("max", 100))
+                self.scale_gain.set_range(data.get("min", 0), data.get("max", 128))
                 self.scale_gain.set_value(data.get("value", 0))
+
+            if "sharpness" in ctrls:
+                data = ctrls["sharpness"]
+                self.scale_sharpness.set_range(data.get("min", 0), data.get("max", 100))
+                self.scale_sharpness.set_value(data.get("value", 40))
+
+            if "contrast" in ctrls:
+                data = ctrls["contrast"]
+                self.scale_contrast.set_range(data.get("min", 0), data.get("max", 100))
+                self.scale_contrast.set_value(data.get("value", 32))
+
+            if "gamma" in ctrls:
+                data = ctrls["gamma"]
+                self.scale_gamma.set_range(data.get("min", 100), data.get("max", 500))
+                self.scale_gamma.set_value(data.get("value", 300))
 
             if "brightness" in ctrls:
                 data = ctrls["brightness"]
                 self.scale_bright.set_range(data.get("min", -64), data.get("max", 64))
                 self.scale_bright.set_value(data.get("value", 0))
-
-            if "contrast" in ctrls:
-                data = ctrls["contrast"]
-                self.scale_contrast.set_range(data.get("min", 0), data.get("max", 64))
-                self.scale_contrast.set_value(data.get("value", 32))
 
             wb_auto_key = "white_balance_automatic" if "white_balance_automatic" in ctrls else "white_balance_temperature_auto"
             if wb_auto_key in ctrls:
@@ -488,10 +610,165 @@ class CameraManualView(Adw.NavigationPage):
             cr.paint()
             cr.restore()
 
+    # --- Profile Management Callbacks ---
+
+    def _refresh_profiles_dropdown(self, select_name: str | None = None):
+        self._updating_profiles = True
+        try:
+            self._profile_names = CameraManualService.get_profile_names()
+            active_name = select_name or CameraManualService.get_active_profile_name()
+            if active_name not in self._profile_names:
+                active_name = "Default"
+
+            new_sl = Gtk.StringList.new(self._profile_names)
+            self.dropdown_profile.set_model(new_sl)
+            self.profile_string_list = new_sl
+
+            idx = self._profile_names.index(active_name) if active_name in self._profile_names else 0
+            self.dropdown_profile.set_selected(idx)
+
+            is_custom = (active_name != "Default")
+            self.btn_save_profile.set_sensitive(is_custom)
+            self.btn_more_profile.set_sensitive(is_custom)
+        finally:
+            self._updating_profiles = False
+
+    def _on_profile_dropdown_changed(self, dropdown, gparam):
+        if getattr(self, "_updating_profiles", False):
+            return
+        selected_item = dropdown.get_selected_item()
+        if not selected_item:
+            return
+        name = selected_item.get_string()
+        active_name = CameraManualService.get_active_profile_name()
+        if name == active_name:
+            return
+
+        ok = CameraManualService.apply_profile(name, self.configured_cams)
+        if ok:
+            is_custom = (name != "Default")
+            self.btn_save_profile.set_sensitive(is_custom)
+            self.btn_more_profile.set_sensitive(is_custom)
+            self._load_current_camera_controls()
+            if hasattr(self.window, "show_toast"):
+                self.window.show_toast(f"Profile '{name}' applied.")
+
+    def _on_save_profile_clicked(self, btn):
+        active_name = CameraManualService.get_active_profile_name()
+        if active_name == "Default":
+            return
+        settings = CameraManualService.get_current_settings_for_cameras(self.configured_cams)
+        ok = CameraManualService.save_profile(active_name, settings, set_active=True)
+        if ok:
+            if getattr(self, "switch_boot", None) and self.switch_boot.get_active():
+                CameraManualService.update_boot_service_if_enabled(self.configured_cams)
+            if hasattr(self.window, "show_toast"):
+                self.window.show_toast(f"Profile '{active_name}' saved.")
+
+    def _on_add_profile_clicked(self, btn):
+        dialog = Adw.AlertDialog(
+            heading="New Camera Profile",
+            body="Enter a name for the new profile using current settings:",
+        )
+        entry = Gtk.Entry(placeholder_text="e.g. Evening, Match")
+        entry.set_activates_default(True)
+        dialog.set_extra_child(entry)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("save", "Create")
+        dialog.set_response_appearance("save", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("save")
+        dialog.set_close_response("cancel")
+
+        def on_response(dlg, response):
+            if response == "save":
+                name = entry.get_text().strip()
+                if not name or name == "Default":
+                    if hasattr(self.window, "show_toast"):
+                        self.window.show_toast("Invalid profile name.")
+                    return
+                settings = CameraManualService.get_current_settings_for_cameras(self.configured_cams)
+                ok = CameraManualService.save_profile(name, settings, set_active=True)
+                if ok:
+                    self._refresh_profiles_dropdown(select_name=name)
+                    if hasattr(self.window, "show_toast"):
+                        self.window.show_toast(f"Profile '{name}' created.")
+
+        dialog.connect("response", on_response)
+        parent = self.window if isinstance(self.window, Gtk.Window) else self.get_root()
+        dialog.present(parent)
+
+    def _on_rename_profile_clicked(self):
+        active_name = CameraManualService.get_active_profile_name()
+        if active_name == "Default":
+            return
+
+        dialog = Adw.AlertDialog(
+            heading="Rename Profile",
+            body=f"Enter a new name for profile '{active_name}':",
+        )
+        entry = Gtk.Entry(text=active_name)
+        entry.set_activates_default(True)
+        dialog.set_extra_child(entry)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("rename", "Rename")
+        dialog.set_response_appearance("rename", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("rename")
+        dialog.set_close_response("cancel")
+
+        def on_response(dlg, response):
+            if response == "rename":
+                new_name = entry.get_text().strip()
+                if not new_name or new_name in ("Default", active_name):
+                    return
+                ok = CameraManualService.rename_profile(active_name, new_name)
+                if ok:
+                    self._refresh_profiles_dropdown(select_name=new_name)
+                    if hasattr(self.window, "show_toast"):
+                        self.window.show_toast(f"Profile renamed to '{new_name}'.")
+
+        dialog.connect("response", on_response)
+        parent = self.window if isinstance(self.window, Gtk.Window) else self.get_root()
+        dialog.present(parent)
+
+    def _on_delete_profile_clicked(self):
+        active_name = CameraManualService.get_active_profile_name()
+        if active_name == "Default":
+            return
+
+        dialog = Adw.AlertDialog(
+            heading="Delete Profile",
+            body=f"Are you sure you want to delete '{active_name}'?",
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("delete", "Delete")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+
+        def on_response(dlg, response):
+            if response == "delete":
+                ok = CameraManualService.delete_profile(active_name)
+                if ok:
+                    CameraManualService.apply_profile("Default", self.configured_cams)
+                    self._refresh_profiles_dropdown(select_name="Default")
+                    self._load_current_camera_controls()
+                    if hasattr(self.window, "show_toast"):
+                        self.window.show_toast(f"Profile '{active_name}' deleted.")
+
+        dialog.connect("response", on_response)
+        parent = self.window if isinstance(self.window, Gtk.Window) else self.get_root()
+        dialog.present(parent)
+
     # --- Navigation Lifecycle ---
 
     def on_page_opened(self):
         logger.info("CameraManualView opened")
+        if self.window:
+            if hasattr(self.window, "is_maximized"):
+                self._was_maximized = self.window.is_maximized()
+            if hasattr(self.window, "maximize"):
+                self.window.maximize()
+
         # Check if Autodarts is active and pause it to avoid device lock conflicts
         try:
             if SystemdService.is_active("autodarts.service"):
@@ -505,6 +782,7 @@ class CameraManualView(Adw.NavigationPage):
         except Exception:
             logger.exception("Error checking autodarts.service state")
 
+        self._refresh_profiles_dropdown()
         self._start_capture()
         self._load_current_camera_controls()
 
@@ -518,6 +796,12 @@ class CameraManualView(Adw.NavigationPage):
 
     def on_page_closed(self):
         logger.info("CameraManualView closed: releasing camera")
+        if self.window:
+            if hasattr(self.window, "is_fullscreen") and self.window.is_fullscreen():
+                self.window.unfullscreen()
+            if hasattr(self, "_was_maximized") and not self._was_maximized and hasattr(self.window, "unmaximize"):
+                self.window.unmaximize()
+
         self._stop_capture.set()
         if self._capture_thread and self._capture_thread.is_alive():
             self._capture_thread.join(timeout=1.0)
