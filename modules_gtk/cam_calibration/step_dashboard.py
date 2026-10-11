@@ -80,6 +80,9 @@ class DashboardStep:
 
     def update_dashboard(self):
         """Update dashboard table with current hardware values."""
+        if not hasattr(self, "dash_cards_box") or self.dash_cards_box is None:
+            return
+
         while child := self.dash_cards_box.get_first_child():
             self.dash_cards_box.remove(child)
 

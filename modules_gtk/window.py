@@ -108,6 +108,27 @@ class SuitWindow(Adw.ApplicationWindow):
         # Background pre-warm heavy dependencies (OpenCV, GStreamer, CameraFocusView)
         self._start_background_prewarm()
 
+        # Handle window close request to cleanly tear down active page & services
+        self.connect("close-request", self._on_close_request)
+
+    def _on_close_request(self, *args):
+        """Lifecycle hook when window close is requested: cleanly teardown active page."""
+        logger.info("Window close requested: running active page cleanup")
+        page = self.nav_view.get_visible_page()
+        if page and hasattr(page, "on_page_closed"):
+            try:
+                page.on_page_closed()
+            except Exception:
+                logger.exception("Error executing on_page_closed on window close")
+
+        # Give any restore thread a brief moment to finish before window destruction
+        if page and hasattr(page, "_restore_thread"):
+            t = getattr(page, "_restore_thread")
+            if t and t.is_alive():
+                t.join(timeout=1.0)
+
+        return False
+
     def _start_background_prewarm(self):
         """Asynchronously pre-warm heavy dependencies (OpenCV, GStreamer, CameraFocusView)
         so that tapping the Camera Focus menu card is instantaneous on the first click."""

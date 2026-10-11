@@ -41,6 +41,15 @@ class SuitGtkApplication(Adw.Application):
             self.window = SuitWindow(self)
         self.window.present()
 
+    def do_shutdown(self):
+        logger.info("Shutting down SUIT for Fedora GTK4 Application")
+        try:
+            from core.systemd_service import SystemdManager
+            SystemdManager.ensure_autodarts_restored_on_exit()
+        except Exception:
+            logger.exception("Error restoring services during application shutdown")
+        Adw.Application.do_shutdown(self)
+
 def main():
     app = SuitGtkApplication()
     return app.run(sys.argv)

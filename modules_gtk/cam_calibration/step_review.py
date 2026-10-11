@@ -29,9 +29,9 @@ class ReviewStep:
     def __init__(self, view: CamCalibrationView):
         self.view = view
         self.review_selected_cam: Optional[str] = None
-        self.review_zoom_zone: str = "sweet_spot"
+        self.review_zoom_zone: str = "center"
         self.review_custom_coord: Optional[Tuple[int, int]] = None
-        self.review_zoom_factor: float = 2.5
+        self.review_zoom_factor: float = 1.0
         self.active_review_mode: str = "after"
         self.active_review_filter: str = "normal"
         self._magnifier_crop_coords: Dict[str, Tuple[int, int, int, int]] = {}
@@ -55,7 +55,7 @@ class ReviewStep:
         top_bar.set_valign(Gtk.Align.CENTER)
 
         top_txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        title = Gtk.Label(label="Review & Comparison", xalign=0.0)
+        title = Gtk.Label(label="Step 4 of 4: Review & Comparison", xalign=0.0)
         title.add_css_class("heading")
         top_txt.append(title)
         self.review_sub_lbl = Gtk.Label(
@@ -138,42 +138,19 @@ class ReviewStep:
         self.review_detail_box.set_vexpand(True)
         self.review_detail_box.set_hexpand(True)
 
-        # Detail Toolbar (Target Zones, Zoom, Filter)
+        # Detail Toolbar (Zoom & Filter)
         detail_tb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         detail_tb.set_halign(Gtk.Align.CENTER)
         detail_tb.set_valign(Gtk.Align.CENTER)
 
-        # Target Zone Group
-        zone_lbl = Gtk.Label(label="Target:")
-        zone_lbl.add_css_class("dim-label")
-        detail_tb.append(zone_lbl)
-
-        zone_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
-        self.rev_zone_buttons.clear()
-        for z_val, z_lbl in [
-            ("sweet_spot", "Sweet Spot"),
-            ("bullseye", "Bullseye"),
-            ("treble", "Treble"),
-            ("center", "Full Board"),
-        ]:
-            z_btn = Gtk.Button(label=z_lbl)
-            z_btn.add_css_class("compact-btn")
-            z_btn.connect("clicked", self._make_zone_handler(z_val))
-            zone_box.append(z_btn)
-            self.rev_zone_buttons[z_val] = z_btn
-        detail_tb.append(zone_box)
-
-        sep_d1 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        detail_tb.append(sep_d1)
-
         # Zoom Factor Group
-        zoom_lbl = Gtk.Label(label="Zoom:")
+        zoom_lbl = Gtk.Label(label="View:")
         zoom_lbl.add_css_class("dim-label")
         detail_tb.append(zoom_lbl)
 
         zoom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self.rev_zoom_buttons.clear()
-        for zoom_f, z_lbl in [(1.5, "1.5x"), (2.5, "2.5x"), (4.0, "4.0x")]:
+        for zoom_f, z_lbl in [(1.0, "Full Board"), (1.5, "1.5x"), (2.5, "2.5x")]:
             zf_btn = Gtk.Button(label=z_lbl)
             zf_btn.add_css_class("compact-btn")
             zf_btn.connect("clicked", self._make_zoom_factor_handler(zoom_f))
@@ -181,8 +158,8 @@ class ReviewStep:
             self.rev_zoom_buttons[zoom_f] = zf_btn
         detail_tb.append(zoom_box)
 
-        sep_d2 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        detail_tb.append(sep_d2)
+        sep_d = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        detail_tb.append(sep_d)
 
         # Filter Group in Detail Mode (Normal vs Edges)
         det_filt_lbl = Gtk.Label(label="Filter:")
@@ -404,7 +381,7 @@ class ReviewStep:
     def select_review_camera(self, dev_node: Optional[str]):
         self.review_selected_cam = dev_node
         self.review_custom_coord = None
-        self.review_zoom_zone = "sweet_spot"
+        self.review_zoom_zone = "center"
 
         for node, btn in self.rev_cam_nav_buttons.items():
             if node == dev_node:
@@ -668,8 +645,8 @@ class ReviewStep:
         if all_nodes:
             CameraManualService.enable_boot_service(all_nodes)
 
-        if getattr(self.view, "_autodarts_was_running", False):
-            SystemdManager.start_autodarts()
+        if getattr(self.view, "_autodarts_was_running", False) or SystemdManager._autodarts_paused_by_suit:
+            SystemdManager.resume_autodarts()
             self.view._autodarts_was_running = False
 
         if hasattr(self.view, "toast_overlay"):

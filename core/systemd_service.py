@@ -1,3 +1,4 @@
+import atexit
 import subprocess
 import gi
 gi.require_version("Gio", "2.0")
@@ -204,6 +205,8 @@ class SystemdService:
 class SystemdManager:
     """Controls system services to release camera locks (CAM-librator interface)."""
 
+    _autodarts_paused_by_suit: bool = False
+
     @staticmethod
     def is_autodarts_active() -> bool:
         """Check if autodarts.service is currently running."""
@@ -220,6 +223,35 @@ class SystemdManager:
         """Start autodarts.service after calibration completes."""
         logger.info("Restarting autodarts.service...")
         return SystemdService.start_unit("autodarts.service")
+
+    @classmethod
+    def pause_autodarts(cls) -> bool:
+        """Pause autodarts.service if active, tracking that SUIT paused it."""
+        if cls.is_autodarts_active():
+            cls._autodarts_paused_by_suit = True
+            logger.info("Pausing autodarts.service to release camera locks (tracked by SUIT)")
+            return cls.stop_autodarts()
+        return False
+
+    @classmethod
+    def resume_autodarts(cls) -> bool:
+        """Resume autodarts.service if it was previously paused by SUIT."""
+        if cls._autodarts_paused_by_suit:
+            cls._autodarts_paused_by_suit = False
+            logger.info("Resuming autodarts.service previously paused by SUIT")
+            return cls.start_autodarts()
+        return False
+
+    @classmethod
+    def ensure_autodarts_restored_on_exit(cls) -> None:
+        """Process exit safety net: ensure autodarts is started if paused by SUIT."""
+        if cls._autodarts_paused_by_suit:
+            logger.info("Emergency exit cleanup: restoring autodarts.service before exit")
+            cls.resume_autodarts()
+
+
+# Register process termination cleanup
+atexit.register(SystemdManager.ensure_autodarts_restored_on_exit)
 
 
 

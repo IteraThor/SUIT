@@ -18,7 +18,7 @@ from gi.repository import Gtk, Adw, GLib
 from core.logger import get_logger
 from core.camera_manual_service import CameraManualService
 from core.autodarts_service import read_cam_config
-from core.systemd_service import SystemdService
+from core.systemd_service import SystemdService, SystemdManager
 
 logger = get_logger("camera_manual_view")
 
@@ -771,16 +771,15 @@ class CameraManualView(Adw.NavigationPage):
 
         # Check if Autodarts is active and pause it to avoid device lock conflicts
         try:
-            if SystemdService.is_active("autodarts.service"):
-                self.was_autodarts_active = True
-                logger.info("Pausing autodarts.service to release V4L2 device locks")
-                SystemdService.stop_service("autodarts.service")
+            self.was_autodarts_active = SystemdManager.pause_autodarts()
+            if self.was_autodarts_active:
+                logger.info("Paused autodarts.service to release V4L2 device locks")
                 if hasattr(self.window, "show_toast"):
                     self.window.show_toast("Autodarts paused.")
             else:
                 self.was_autodarts_active = False
         except Exception:
-            logger.exception("Error checking autodarts.service state")
+            logger.exception("Error checking/pausing autodarts.service state")
 
         self._refresh_profiles_dropdown()
         self._start_capture()
@@ -807,9 +806,11 @@ class CameraManualView(Adw.NavigationPage):
             self._capture_thread.join(timeout=1.0)
 
         # Restore autodarts service if it was running before
-        if self.was_autodarts_active:
+        if getattr(self, "was_autodarts_active", False) or SystemdManager._autodarts_paused_by_suit:
             logger.info("Restoring autodarts.service")
             def _restore():
-                SystemdService.start_service("autodarts.service")
-            threading.Thread(target=_restore, daemon=True).start()
+                SystemdManager.resume_autodarts()
+            t = threading.Thread(target=_restore, daemon=False)
+            t.start()
+            self._restore_thread = t
             self.was_autodarts_active = False
