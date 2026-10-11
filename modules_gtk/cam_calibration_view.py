@@ -35,7 +35,6 @@ from core.systemd_service import SystemdManager
 from core.v4l2_device import V4L2Device
 from core.v4l2_topology import CameraDevice, V4L2Topology
 from modules_gtk.cam_calibration.step_baseline import BaselineStep
-from modules_gtk.cam_calibration.step_dashboard import DashboardStep
 from modules_gtk.cam_calibration.step_review import ReviewStep
 from modules_gtk.cam_calibration.step_setup import SetupStep
 from modules_gtk.cam_calibration.step_sweep import SweepStep
@@ -88,7 +87,6 @@ class CamCalibrationView(Adw.Bin):
         self._autodarts_was_running: bool = False
 
         # Step controllers
-        self.step_dashboard = DashboardStep(self)
         self.step_baseline = BaselineStep(self)
         self.step_setup = SetupStep(self)
         self.step_sweep = SweepStep(self)
