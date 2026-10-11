@@ -332,15 +332,15 @@ class CameraOptimizer:
             else:
                 gamma_levels = sorted(list(set([
                     max(g_min, min(g_max, val))
-                    for val in [220, 260, 300, 360, 420, 460]
+                    for val in [300, 340, 380]
                 ])))
                 coarse_s_levels = sorted(list(set([
                     max(s_min, min(s_max, val))
-                    for val in [65, 70, 75]
+                    for val in [70, 75, 80]
                 ])))
                 coarse_c_levels = sorted(list(set([
                     max(c_min, min(c_max, val))
-                    for val in [30, 32, 34, 36]
+                    for val in [36, 40, 44]
                 ])))
 
             total_triplets = len(gamma_levels) * len(coarse_s_levels) * len(coarse_c_levels)
