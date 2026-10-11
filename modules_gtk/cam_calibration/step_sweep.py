@@ -205,6 +205,7 @@ class SweepStep:
 
             except Exception as e:
                 logger.exception("Error during sweep on %s: %s", cam.dev_node, e)
+                GLib.idle_add(self._on_cam_sweep_failed, cam.dev_node, str(e))
 
         # Auto-export sample images, crops, edge maps, and JSON metrics in worker thread
         if self.view.results and not (self.cancel_event and self.cancel_event.is_set()):
@@ -218,7 +219,7 @@ class SweepStep:
         GLib.idle_add(self._on_all_sweeps_finished)
 
     def _on_cam_sweep_start(self, dev_node: str, cam_num: int, total: int):
-        self.sweep_title_lbl.set_text(f"Step 4 of 5: Calibrating (Camera {cam_num} of {total})...")
+        self.sweep_title_lbl.set_text(f"Step 3 of 4: Calibrating (Camera {cam_num} of {total})...")
         for node, w in self.sweep_cam_widgets.items():
             if node == dev_node:
                 w["card"].add_css_class("active-calibrating")
@@ -255,12 +256,27 @@ class SweepStep:
                 w["picture"].set_pixbuf(pix)
         return False
 
+    def _on_cam_sweep_failed(self, dev_node: str, err_msg: str):
+        if dev_node in self.sweep_cam_widgets:
+            w = self.sweep_cam_widgets[dev_node]
+            w["card"].remove_css_class("active-calibrating")
+            w["badge"].set_text("Failed")
+            w["badge"].set_css_classes(["status-pill-bad"])
+            w["status_lbl"].set_text(f"Error: {err_msg[:40]}")
+        return False
+
     def _on_all_sweeps_finished(self):
         self.sweep_running = False
         if self.cancel_event and self.cancel_event.is_set():
             self.sweep_title_lbl.set_text("Calibration Cancelled")
             self.sweep_sub_lbl.set_text("Cameras have been restored to initial state.")
             GLib.timeout_add(1500, lambda: self.view._go_to_dashboard())
+        elif not self.view.results:
+            self.sweep_progress_bar.set_fraction(1.0)
+            self.sweep_title_lbl.set_text("Calibration Failed")
+            self.sweep_sub_lbl.set_text("No camera optimization data could be computed.")
+            self.sweep_finish_btn.set_visible(False)
+            self.sweep_cancel_btn.set_sensitive(True)
         else:
             self.sweep_progress_bar.set_fraction(1.0)
             self.sweep_title_lbl.set_text("Calibration Successfully Completed!")

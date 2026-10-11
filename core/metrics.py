@@ -257,6 +257,16 @@ class QualityEvaluator:
             - sisal_glow: background difference noise floor in empty sisal (0-255)
             - separation_ratio: dart_separation / max(1.0, sisal_glow)
         """
+        if empty_frame is None or empty_frame.size == 0 or dart_frame is None or dart_frame.size == 0:
+            return 0.0, 0.0, 0.0
+
+        if empty_frame.shape[:2] != dart_frame.shape[:2]:
+            empty_frame = cv2.resize(
+                empty_frame,
+                (dart_frame.shape[1], dart_frame.shape[0]),
+                interpolation=cv2.INTER_LINEAR,
+            )
+
         gray_dart = cv2.cvtColor(dart_frame, cv2.COLOR_BGR2GRAY) if len(dart_frame.shape) == 3 else dart_frame
         gray_empty = cv2.cvtColor(empty_frame, cv2.COLOR_BGR2GRAY) if len(empty_frame.shape) == 3 else empty_frame
 
