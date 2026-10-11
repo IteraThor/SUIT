@@ -181,8 +181,9 @@ class BaselineStep:
         self._is_streaming = False
         self._stop_stream.set()
         if self._stream_thread and self._stream_thread.is_alive():
-            self._stream_thread.join(timeout=1.0)
+            self._stream_thread.join(timeout=2.0)
             self._stream_thread = None
+        time.sleep(0.3)
 
     def _live_stream_worker(self):
         """Capture live preview frames continuously from connected cameras."""
@@ -273,11 +274,14 @@ class BaselineStep:
 
             for cam in self.view.cameras:
                 if cam.dev_node in latest and latest[cam.dev_node] is not None:
-                    captured[cam.dev_node] = latest[cam.dev_node]
+                    f = latest[cam.dev_node]
+                    if f.shape[:2] != (960, 1280):
+                        f = cv2.resize(f, (1280, 960), interpolation=cv2.INTER_LINEAR)
+                    captured[cam.dev_node] = f
                 else:
                     try:
                         vdev = V4L2Device(cam.dev_node)
-                        f = vdev.capture_frame(warmup_frames=2)
+                        f = vdev.capture_frame(width=1280, height=960, warmup_frames=2)
                         if f is not None:
                             captured[cam.dev_node] = f
                     except Exception as e:

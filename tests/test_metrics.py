@@ -100,6 +100,17 @@ class TestMetrics(unittest.TestCase):
         _, glow, _ = self.evaluator.calculate_dart_difference_metrics(gamma_lifted, self.frame, roi)
         self.assertLess(glow, 6.0)
 
+    def test_calculate_dart_difference_metrics_mismatched_resolution(self):
+        roi = self.detector.detect_board(self.frame)
+        dart_frame = self.frame.copy()
+        empty_half = cv2.resize(self.frame, (500, 500))
+        tip_signal, glow_noise, ratio = self.evaluator.calculate_dart_difference_metrics(dart_frame, empty_half, roi)
+        self.assertGreaterEqual(tip_signal, 0.0)
+        self.assertGreaterEqual(glow_noise, 0.0)
+
+        metrics = self.evaluator.evaluate([dart_frame], roi, empty_frame=empty_half)
+        self.assertGreater(metrics.composite_score, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
