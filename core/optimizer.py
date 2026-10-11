@@ -332,15 +332,15 @@ class CameraOptimizer:
             else:
                 gamma_levels = sorted(list(set([
                     max(g_min, min(g_max, val))
-                    for val in [300, 380, 420, 460]
+                    for val in [220, 260, 300, 360, 420, 460]
                 ])))
                 coarse_s_levels = sorted(list(set([
                     max(s_min, min(s_max, val))
-                    for val in [50, 60, 70, 80]
+                    for val in [65, 70, 75]
                 ])))
                 coarse_c_levels = sorted(list(set([
                     max(c_min, min(c_max, val))
-                    for val in [28, 30, 32, 34, 36]
+                    for val in [30, 32, 34, 36]
                 ])))
 
             total_triplets = len(gamma_levels) * len(coarse_s_levels) * len(coarse_c_levels)
@@ -389,7 +389,7 @@ class CameraOptimizer:
                                 continue
 
                             # Veto 2: Excessive image darkening
-                            if curr_mean < baseline_mean_lum * 0.70:
+                            if curr_mean < baseline_mean_lum * 0.65:
                                 pct = 0.45 + (step_idx / total_triplets) * 0.40
                                 report("Stage 2 / 3", pct, f"Skipped G={gam}, S={s}, C={c} (image darkened: {curr_mean:.0f}/{baseline_mean_lum:.0f} DN)", frame=burst[0])
                                 continue
