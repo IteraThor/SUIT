@@ -10,9 +10,13 @@ import glob
 import json
 import os
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Any, Optional
+
+# Ensure repository root is on sys.path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import cv2
 import numpy as np
@@ -43,6 +47,7 @@ class CalibrationLedger:
     def record(self, entry: LedgerEntry):
         entries = self.load_all()
         entries.append(entry)
+        os.makedirs(os.path.dirname(os.path.abspath(self.ledger_path)), exist_ok=True)
         with open(self.ledger_path, "w") as f:
             json.dump([asdict(e) for e in entries], f, indent=2)
 
