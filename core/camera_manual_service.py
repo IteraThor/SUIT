@@ -77,7 +77,7 @@ class CameraManualService:
                 parts.append(f"white_balance_temperature={ctrls['white_balance_temperature'].get('value', 4600)}")
 
         # Additional standard controls
-        for k in ("gain", "brightness", "contrast"):
+        for k in ("gain", "sharpness", "contrast", "gamma", "brightness", "saturation", "power_line_frequency"):
             if k in ctrls and "value" in ctrls[k]:
                 parts.append(f"{k}={ctrls[k]['value']}")
 
@@ -169,44 +169,196 @@ WantedBy=default.target
             logger.exception("Failed updating camera boot service")
             return False
 
-    @classmethod
-    def save_preset(cls, device_path: str, settings: dict, config_path: Path | None = None) -> bool:
-        """Deprecated: Save a set of control adjustments for a device into configuration."""
-        target = config_path or DEFAULT_CONFIG_PATH
-        try:
-            data = cls.load_presets(config_path=target)
-            data[device_path] = settings
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with open(target, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            logger.info("Saved camera preset for %s to %s", device_path, target)
-            return True
-        except Exception:
-            logger.exception("Failed saving camera preset to %s", target)
-            return False
+    # =========================================================================
+    # PROFILE MANAGEMENT APIs
+    # =========================================================================
 
     @classmethod
-    def load_presets(cls, config_path: Path | None = None) -> dict:
-        """Deprecated: Load saved camera presets from configuration."""
+    def get_profiles_data(cls, config_path: Path | None = None) -> dict:
+        """Load full profiles document."""
         target = config_path or DEFAULT_CONFIG_PATH
         if target.exists():
             try:
                 with open(target, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        # Migrate flat dictionary structure if needed
+                        if "profiles" not in data and any(k.startswith("/dev/video") for k in data.keys()):
+                            cams_dict = {k: v for k, v in data.items() if not k.startswith("_")}
+                            return {
+                                "_active_profile": "CAM-librator",
+                                "profiles": {
+                                    "CAM-librator": cams_dict
+                                }
+                            }
+                        return data
             except Exception:
-                logger.exception("Failed loading camera presets from %s", target)
-        return {}
+                logger.exception("Failed loading camera profiles from %s", target)
+        return {"_active_profile": "Default", "profiles": {}}
 
     @classmethod
-    def apply_saved_presets(cls, config_path: Path | None = None) -> bool:
-        """Deprecated: Apply all saved presets to their respective devices."""
-        presets = cls.load_presets(config_path=config_path)
-        if not presets:
+    def get_profile_names(cls, config_path: Path | None = None) -> list[str]:
+        """List all available profile names with 'Default' always first."""
+        data = cls.get_profiles_data(config_path)
+        names = ["Default"]
+        custom = [k for k in data.get("profiles", {}).keys() if k != "Default"]
+        return names + sorted(custom)
+
+    @classmethod
+    def get_active_profile_name(cls, config_path: Path | None = None) -> str:
+        """Get the currently selected profile name."""
+        data = cls.get_profiles_data(config_path)
+        return data.get("_active_profile", "Default")
+
+    @classmethod
+    def get_current_settings_for_cameras(cls, cameras: list[str]) -> dict[str, dict]:
+        """Query current control values for all given cameras."""
+        res = {}
+        for dev in cameras:
+            ctrls = cls.get_camera_controls(dev)
+            if ctrls:
+                settings = {}
+                for k, v in ctrls.items():
+                    if isinstance(v, dict) and "value" in v:
+                        settings[k] = v["value"]
+                if settings:
+                    res[dev] = settings
+        return res
+
+    @classmethod
+    def save_profile(cls, name: str, camera_settings: dict, config_path: Path | None = None, set_active: bool = True) -> bool:
+        """Save/overwrite a named multi-camera profile."""
+        if not name or name.strip() == "" or name.strip() == "Default":
+            return False
+        name = name.strip()
+        target = config_path or DEFAULT_CONFIG_PATH
+        try:
+            data = cls.get_profiles_data(target)
+            if "profiles" not in data:
+                data["profiles"] = {}
+            data["profiles"][name] = camera_settings
+            if set_active:
+                data["_active_profile"] = name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            logger.info("Saved camera profile '%s' to %s", name, target)
+            return True
+        except Exception:
+            logger.exception("Failed saving camera profile '%s' to %s", name, target)
+            return False
+
+    @classmethod
+    def rename_profile(cls, old_name: str, new_name: str, config_path: Path | None = None) -> bool:
+        """Rename an existing custom profile."""
+        if old_name == "Default" or not new_name or new_name.strip() in ("", "Default", old_name):
+            return False
+        new_name = new_name.strip()
+        target = config_path or DEFAULT_CONFIG_PATH
+        try:
+            data = cls.get_profiles_data(target)
+            profiles = data.get("profiles", {})
+            if old_name in profiles:
+                profiles[new_name] = profiles.pop(old_name)
+                if data.get("_active_profile") == old_name:
+                    data["_active_profile"] = new_name
+                with open(target, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                return True
+        except Exception:
+            logger.exception("Failed renaming profile '%s' to '%s'", old_name, new_name)
+        return False
+
+    @classmethod
+    def delete_profile(cls, name: str, config_path: Path | None = None) -> bool:
+        """Delete a custom profile (Default cannot be deleted)."""
+        if name == "Default":
+            return False
+        target = config_path or DEFAULT_CONFIG_PATH
+        try:
+            data = cls.get_profiles_data(target)
+            profiles = data.get("profiles", {})
+            if name in profiles:
+                del profiles[name]
+                if data.get("_active_profile") == name:
+                    data["_active_profile"] = "Default"
+                with open(target, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                return True
+        except Exception:
+            logger.exception("Failed deleting profile '%s'", name)
+        return False
+
+    @classmethod
+    def apply_profile(cls, name: str, cameras: list[str], config_path: Path | None = None) -> bool:
+        """Apply a profile across all given cameras and set it active."""
+        target = config_path or DEFAULT_CONFIG_PATH
+        data = cls.get_profiles_data(target)
+
+        if name == "Default":
+            for dev in cameras:
+                cls.reset_defaults(dev)
+            data["_active_profile"] = "Default"
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with open(target, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+            except Exception:
+                pass
+            cls.update_boot_service_if_enabled(cameras)
             return True
 
-        overall_ok = True
-        for dev, settings in presets.items():
-            for ctrl_name, val in settings.items():
-                if not cls.set_control(dev, ctrl_name, val):
-                    overall_ok = False
-        return overall_ok
+        profiles = data.get("profiles", {})
+        if name not in profiles:
+            return False
+
+        prof_cams = profiles[name]
+        for dev in cameras:
+            settings = prof_cams.get(dev)
+            if settings:
+                vdev = V4L2Device(dev)
+                vdev.set_controls_dict(settings)
+            else:
+                cls.reset_defaults(dev)
+
+        data["_active_profile"] = name
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+        cls.update_boot_service_if_enabled(cameras)
+        return True
+
+    @classmethod
+    def clear_presets(cls, config_path: Path | None = None) -> bool:
+        """Clear all saved camera profiles and reset active profile to Default."""
+        target = config_path or DEFAULT_CONFIG_PATH
+        try:
+            if target.exists():
+                target.unlink()
+            return True
+        except Exception:
+            logger.exception("Failed clearing camera presets from %s", target)
+            return False
+
+    # Backwards compatibility methods
+    @classmethod
+    def save_preset(cls, device_path: str, settings: dict, config_path: Path | None = None) -> bool:
+        target = config_path or DEFAULT_CONFIG_PATH
+        data = cls.get_profiles_data(target)
+        active_name = data.get("_active_profile", "CAM-librator")
+        if active_name == "Default":
+            active_name = "CAM-librator"
+        cams = data.get("profiles", {}).get(active_name, {})
+        cams[device_path] = settings
+        return cls.save_profile(active_name, cams, config_path=target, set_active=True)
+
+    @classmethod
+    def load_presets(cls, config_path: Path | None = None) -> dict:
+        data = cls.get_profiles_data(config_path)
+        active_name = data.get("_active_profile", "Default")
+        if active_name == "Default":
+            return {}
+        return data.get("profiles", {}).get(active_name, {})

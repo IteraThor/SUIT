@@ -1,12 +1,11 @@
 """Camera Calibration GTK4 / Libadwaita View Coordinator.
 
 Coordinates the streamlined multi-step fullscreen wizard:
-1. Dashboard (Table of standard vs calibrated values + master toggle switch + start button)
-2. Pre-Check (Simultaneous 3-camera live focus check on furthest double field)
-3. Baseline (Untouched auto-exposure snapshot capture)
-4. Setup (Scope: all vs single, Precision: standard vs deep)
-5. Sweep (Simultaneous 3-camera live calibration preview with progress and abort)
-6. Review (Simultaneous 3-camera A/B comparison with edge & contrast filters)
+1. Dashboard (Overview of standard vs calibrated values + load on boot switch + start button)
+2. Baseline (Untouched auto-exposure snapshot capture)
+3. Setup (Scope: all vs single, Precision: standard vs deep)
+4. Sweep (Simultaneous 3-camera live calibration preview with progress and abort)
+5. Review (Simultaneous 3-camera A/B comparison with edge & noise filters)
 """
 
 from __future__ import annotations
@@ -37,7 +36,6 @@ from core.v4l2_device import V4L2Device
 from core.v4l2_topology import CameraDevice, V4L2Topology
 from modules_gtk.cam_calibration.step_baseline import BaselineStep
 from modules_gtk.cam_calibration.step_dashboard import DashboardStep
-from modules_gtk.cam_calibration.step_focus import FocusStep
 from modules_gtk.cam_calibration.step_review import ReviewStep
 from modules_gtk.cam_calibration.step_setup import SetupStep
 from modules_gtk.cam_calibration.step_sweep import SweepStep
@@ -69,9 +67,10 @@ def compute_suit_sharpness(patch: np.ndarray) -> float:
 class CamCalibrationView(Adw.Bin):
     """Multi-Step Fullscreen Camera Calibration Wizard Coordinator."""
 
-    def __init__(self, on_back_callback=None):
+    def __init__(self, on_back_callback=None, on_open_manual_callback=None):
         super().__init__()
         self.on_back = on_back_callback
+        self.on_open_manual = on_open_manual_callback
         self.topology = V4L2Topology()
         self.detector = BoardDetector()
         self.diagnostics = HardwareDiagnostics(self.detector)
@@ -90,7 +89,6 @@ class CamCalibrationView(Adw.Bin):
 
         # Step controllers
         self.step_dashboard = DashboardStep(self)
-        self.step_focus = FocusStep(self)
         self.step_baseline = BaselineStep(self)
         self.step_setup = SetupStep(self)
         self.step_sweep = SweepStep(self)
@@ -108,9 +106,6 @@ class CamCalibrationView(Adw.Bin):
 
         self.page_dashboard = self.step_dashboard.build_page()
         self.stack.add_named(self.page_dashboard, "dashboard")
-
-        self.page_focus = self.step_focus.build_page()
-        self.stack.add_named(self.page_focus, "focus")
 
         self.page_baseline = self.step_baseline.build_page()
         self.stack.add_named(self.page_baseline, "baseline")
@@ -133,36 +128,21 @@ class CamCalibrationView(Adw.Bin):
     # NAVIGATION HANDLERS & STEP COORDINATION
     # =========================================================================
     def _go_to_dashboard(self):
-        self._stop_focus_stream()
         self.stack.set_visible_child_name("dashboard")
         self.step_dashboard.update_dashboard()
 
-    def _go_to_focus(self):
+    def _go_to_baseline(self, new_session: bool = False):
         if SystemdManager.is_autodarts_active():
             self._autodarts_was_running = True
             SystemdManager.stop_autodarts()
         self.detector.unlock_target()
-        # Reset all cameras to standard factory auto mode for Focus Check & Baseline
-        for cam in self.cameras:
-            try:
-                vdev = V4L2Device(cam.dev_node)
-                vdev.reset_to_defaults()
-            except Exception as e:
-                logger.warning("Failed to reset camera %s on focus start: %s", cam.dev_node, e)
-        self.stack.set_visible_child_name("focus")
-        self.step_focus.setup_focus_columns()
-        self.step_focus.start_focus_stream()
-
-    def _go_to_baseline(self):
-        if SystemdManager.is_autodarts_active():
-            self._autodarts_was_running = True
-            SystemdManager.stop_autodarts()
-        self._stop_focus_stream()
+        if new_session:
+            self.baseline_frames.clear()
+            self.results.clear()
         self.stack.set_visible_child_name("baseline")
-        self.step_baseline.capture_and_display_baseline()
+        self.step_baseline.prepare_page()
 
     def _go_to_setup(self):
-        self._stop_focus_stream()
         self.stack.set_visible_child_name("setup")
         self.step_setup.setup_scope_buttons()
 
@@ -170,12 +150,8 @@ class CamCalibrationView(Adw.Bin):
         self.step_sweep.start_calibration_sweep()
 
     def _go_to_review(self):
-        self._stop_focus_stream()
         self.stack.set_visible_child_name("review")
         self.step_review.setup_review_columns()
-
-    def _stop_focus_stream(self):
-        self.step_focus.stop_focus_stream()
 
     def _apply_and_finish(self):
         self.step_review._apply_and_finish()
@@ -191,7 +167,6 @@ class CamCalibrationView(Adw.Bin):
 
     def on_app_close(self):
         """Cleanup running threads on application close."""
-        self._stop_focus_stream()
         if self.cancel_event:
             self.cancel_event.set()
         if getattr(self, "_autodarts_was_running", False):
@@ -217,12 +192,19 @@ class CamCalibrationPage(Adw.NavigationPage):
         clamp.set_margin_end(10)
         scrolled.set_child(clamp)
 
-        self.view = CamCalibrationView(on_back_callback=self._on_back)
+        self.view = CamCalibrationView(
+            on_back_callback=self._on_back,
+            on_open_manual_callback=self._on_open_manual,
+        )
         clamp.set_child(self.view)
 
     def _on_back(self):
         if hasattr(self.window, "nav_view"):
             self.window.nav_view.pop()
+
+    def _on_open_manual(self):
+        if hasattr(self.window, "open_camera_manual_page"):
+            self.window.open_camera_manual_page()
 
     def on_page_opened(self):
         if hasattr(self.view, "refresh_cameras"):

@@ -11,10 +11,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk
 
-from core.cv_utils import (
-    apply_edge_contrast_filter,
-    apply_noise_inspector_filter,
-)
+from core.cv_utils import apply_edge_contrast_filter, apply_difference_filter
 from core.systemd_service import SystemdManager
 from core.v4l2_device import V4L2Device
 from core.camera_manual_service import CameraManualService
@@ -47,114 +44,116 @@ class ReviewStep:
         self.rev_zoom_buttons: Dict[float, Gtk.Button] = {}
 
     def build_page(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.set_margin_top(10)
-        box.set_margin_bottom(12)
-        box.set_margin_start(16)
-        box.set_margin_end(16)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_top(6)
+        box.set_margin_bottom(8)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
 
-        # Header & Controls Row
-        top_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        # Unified Header & Controls Top Bar
+        top_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        top_bar.set_valign(Gtk.Align.CENTER)
 
-        top_txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        title = Gtk.Label(label="Step 5 of 5: Review & Comparison", xalign=0.0)
-        title.add_css_class("wizard-title")
+        top_txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        title = Gtk.Label(label="Review & Comparison", xalign=0.0)
+        title.add_css_class("heading")
         top_txt.append(title)
         self.review_sub_lbl = Gtk.Label(
             label="Direct A/B comparison and magnified inspection.",
             xalign=0.0,
         )
-        self.review_sub_lbl.set_wrap(True)
-        self.review_sub_lbl.add_css_class("wizard-subtitle")
+        self.review_sub_lbl.add_css_class("dim-label")
         top_txt.append(self.review_sub_lbl)
         top_bar.append(top_txt)
 
-        # Top Right: Camera Selector Buttons (Overview vs Cam 1 vs Cam 2 vs Cam 3)
+        spacer = Gtk.Box(hexpand=True)
+        top_bar.append(spacer)
+
+        # Camera Selector Tabs (All Cameras vs Cam 1 vs Cam 2 vs Cam 3)
         self.rev_cam_selector_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        self.rev_cam_selector_box.set_hexpand(True)
-        self.rev_cam_selector_box.set_halign(Gtk.Align.END)
         self.rev_cam_selector_box.set_valign(Gtk.Align.CENTER)
         top_bar.append(self.rev_cam_selector_box)
+
+        # Overview A/B Toggle & Filter Controls (compact in top bar)
+        self.ov_ctrls_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.ov_ctrls_box.set_valign(Gtk.Align.CENTER)
+
+        # A/B Toggle Box
+        ov_ab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        self.rev_btn_after = Gtk.Button(label="After")
+        self.rev_btn_after.add_css_class("compact-btn")
+        self.rev_btn_after.set_tooltip_text("Show calibrated settings")
+        self.rev_btn_after.connect("clicked", lambda _: self.set_review_mode("after"))
+        ov_ab_box.append(self.rev_btn_after)
+
+        self.rev_btn_before = Gtk.Button(label="Before")
+        self.rev_btn_before.add_css_class("compact-btn")
+        self.rev_btn_before.set_tooltip_text("Show default hardware settings")
+        self.rev_btn_before.connect("clicked", lambda _: self.set_review_mode("before"))
+        ov_ab_box.append(self.rev_btn_before)
+        self.ov_ctrls_box.append(ov_ab_box)
+
+        # Filter Buttons (Normal vs Edges vs Heatmap)
+        ov_filt_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        self.ov_filt_buttons.clear()
+        for f_val, f_lbl in [
+            ("normal", "Normal"),
+            ("edge", "Edges"),
+            ("diff", "Heatmap"),
+        ]:
+            btn = Gtk.Button(label=f_lbl)
+            btn.add_css_class("compact-btn")
+            btn.connect("clicked", self._make_filter_handler(f_val))
+            ov_filt_box.append(btn)
+            self.ov_filt_buttons[f_val] = btn
+        self.ov_ctrls_box.append(ov_filt_box)
+
+        top_bar.append(self.ov_ctrls_box)
         box.append(top_bar)
 
         # View Stack: Switch between "overview" (3 columns) and "detail" (side-by-side magnified)
         self.review_view_stack = Gtk.Stack()
         self.review_view_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.review_view_stack.set_vexpand(True)
+        self.review_view_stack.set_hexpand(True)
 
         # -------------------------------------------------------------
         # 1. OVERVIEW VIEW (3 Columns)
         # -------------------------------------------------------------
-        self.review_overview_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-
-        # Overview Top Controls (A/B Toggle + Filters)
-        ov_ctrls_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        ov_ctrls_box.set_halign(Gtk.Align.FILL)
-
-        ov_row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        ov_row1.set_halign(Gtk.Align.END)
-        ov_ctrls_box.append(ov_row1)
-
-        ov_ab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        self.rev_btn_after = Gtk.Button(label="After (Calibrated)")
-        self.rev_btn_after.add_css_class("compact-btn")
-        self.rev_btn_after.connect("clicked", lambda _: self.set_review_mode("after"))
-        ov_ab_box.append(self.rev_btn_after)
-
-        self.rev_btn_before = Gtk.Button(label="Before (Default)")
-        self.rev_btn_before.add_css_class("compact-btn")
-        self.rev_btn_before.connect("clicked", lambda _: self.set_review_mode("before"))
-        ov_ab_box.append(self.rev_btn_before)
-        ov_row1.append(ov_ab_box)
-
-        # Filter Buttons in Overview
-        ov_row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        ov_row2.set_halign(Gtk.Align.END)
-        self.ov_filt_buttons.clear()
-        for f_val, f_lbl in [
-            ("normal", "Normal"),
-            ("edge", "Edges & Wire"),
-            ("noise", "Noise Analysis"),
-        ]:
-            btn = Gtk.Button(label=f_lbl)
-            btn.add_css_class("compact-btn")
-            btn.connect("clicked", self._make_filter_handler(f_val))
-            ov_row2.append(btn)
-            self.ov_filt_buttons[f_val] = btn
-        ov_ctrls_box.append(ov_row2)
-        self.review_overview_box.append(ov_ctrls_box)
+        self.review_overview_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.review_overview_box.set_vexpand(True)
+        self.review_overview_box.set_hexpand(True)
 
         # 3 Columns Container
-        self.review_columns_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12, homogeneous=True)
+        self.review_columns_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, homogeneous=True)
         self.review_columns_box.set_vexpand(True)
+        self.review_columns_box.set_hexpand(True)
         self.review_overview_box.append(self.review_columns_box)
         self.review_view_stack.add_named(self.review_overview_box, "overview")
 
         # -------------------------------------------------------------
         # 2. DETAIL VIEW (Side-by-Side Magnifier Before vs After)
         # -------------------------------------------------------------
-        self.review_detail_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.review_detail_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.review_detail_box.set_vexpand(True)
+        self.review_detail_box.set_hexpand(True)
 
-        # Detail Toolbar (Zones, Zoom Level, Filters)
-        detail_tb = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        # Detail Toolbar (Target Zones, Zoom, Filter)
+        detail_tb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        detail_tb.set_halign(Gtk.Align.CENTER)
         detail_tb.set_valign(Gtk.Align.CENTER)
-
-        detail_row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        detail_row1.set_halign(Gtk.Align.CENTER)
-        detail_tb.append(detail_row1)
 
         # Target Zone Group
         zone_lbl = Gtk.Label(label="Target:")
-        zone_lbl.add_css_class("caption")
-        detail_row1.append(zone_lbl)
+        zone_lbl.add_css_class("dim-label")
+        detail_tb.append(zone_lbl)
 
-        zone_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        zone_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self.rev_zone_buttons.clear()
         for z_val, z_lbl in [
             ("sweet_spot", "Sweet Spot"),
             ("bullseye", "Bullseye"),
-            ("treble", "Treble Ring"),
+            ("treble", "Treble"),
             ("center", "Full Board"),
         ]:
             z_btn = Gtk.Button(label=z_lbl)
@@ -162,17 +161,17 @@ class ReviewStep:
             z_btn.connect("clicked", self._make_zone_handler(z_val))
             zone_box.append(z_btn)
             self.rev_zone_buttons[z_val] = z_btn
-        detail_row1.append(zone_box)
+        detail_tb.append(zone_box)
 
         sep_d1 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        detail_row1.append(sep_d1)
+        detail_tb.append(sep_d1)
 
         # Zoom Factor Group
         zoom_lbl = Gtk.Label(label="Zoom:")
-        zoom_lbl.add_css_class("caption")
-        detail_row1.append(zoom_lbl)
+        zoom_lbl.add_css_class("dim-label")
+        detail_tb.append(zoom_lbl)
 
-        zoom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        zoom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self.rev_zoom_buttons.clear()
         for zoom_f, z_lbl in [(1.5, "1.5x"), (2.5, "2.5x"), (4.0, "4.0x")]:
             zf_btn = Gtk.Button(label=z_lbl)
@@ -180,42 +179,44 @@ class ReviewStep:
             zf_btn.connect("clicked", self._make_zoom_factor_handler(zoom_f))
             zoom_box.append(zf_btn)
             self.rev_zoom_buttons[zoom_f] = zf_btn
-        detail_row1.append(zoom_box)
+        detail_tb.append(zoom_box)
 
-        detail_row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        detail_row2.set_halign(Gtk.Align.CENTER)
-        detail_tb.append(detail_row2)
+        sep_d2 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        detail_tb.append(sep_d2)
 
-        # Filter Group in Detail Mode
+        # Filter Group in Detail Mode (Normal vs Edges)
         det_filt_lbl = Gtk.Label(label="Filter:")
-        det_filt_lbl.add_css_class("caption")
-        detail_row2.append(det_filt_lbl)
+        det_filt_lbl.add_css_class("dim-label")
+        detail_tb.append(det_filt_lbl)
 
-        det_filt_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        det_filt_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self.det_filt_buttons.clear()
         for f_val, f_lbl in [
             ("normal", "Normal"),
-            ("edge", "Edges & Wire"),
-            ("noise", "Noise Analysis"),
+            ("edge", "Edges"),
+            ("diff", "Heatmap"),
         ]:
             btn = Gtk.Button(label=f_lbl)
             btn.add_css_class("compact-btn")
             btn.connect("clicked", self._make_filter_handler(f_val))
             det_filt_box.append(btn)
             self.det_filt_buttons[f_val] = btn
-        detail_row2.append(det_filt_box)
+        detail_tb.append(det_filt_box)
 
         self.review_detail_box.append(detail_tb)
 
         # Side-by-Side Dual Column Box
-        side_by_side_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12, homogeneous=True)
+        side_by_side_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, homogeneous=True)
         side_by_side_box.set_vexpand(True)
+        side_by_side_box.set_hexpand(True)
 
         # Left Column: Before (Default) Card
-        self.rev_detail_card_before = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.rev_detail_card_before = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.rev_detail_card_before.add_css_class("cam-column-card")
+        self.rev_detail_card_before.set_vexpand(True)
+        self.rev_detail_card_before.set_hexpand(True)
 
-        hdr_before = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        hdr_before = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         title_before = Gtk.Label(label="Before (Default)", xalign=0.0)
         title_before.add_css_class("heading")
         hdr_before.append(title_before)
@@ -229,7 +230,6 @@ class ReviewStep:
 
         self.rev_detail_pic_before = Gtk.Picture()
         self.rev_detail_pic_before.set_can_shrink(True)
-        self.rev_detail_pic_before.set_size_request(160, 110)
         self.rev_detail_pic_before.set_hexpand(True)
         self.rev_detail_pic_before.set_vexpand(True)
         click_before = Gtk.GestureClick()
@@ -237,16 +237,18 @@ class ReviewStep:
         self.rev_detail_pic_before.add_controller(click_before)
         self.rev_detail_card_before.append(self.rev_detail_pic_before)
 
-        self.rev_detail_lbl_before = Gtk.Label(label="Default values", xalign=0.0)
+        self.rev_detail_lbl_before = Gtk.Label(label="Default values", xalign=0.5)
         self.rev_detail_lbl_before.add_css_class("caption")
         self.rev_detail_card_before.append(self.rev_detail_lbl_before)
         side_by_side_box.append(self.rev_detail_card_before)
 
         # Right Column: After (Calibrated) Card
-        self.rev_detail_card_after = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.rev_detail_card_after = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.rev_detail_card_after.add_css_class("cam-column-card")
+        self.rev_detail_card_after.set_vexpand(True)
+        self.rev_detail_card_after.set_hexpand(True)
 
-        hdr_after = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        hdr_after = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.rev_detail_title_after = Gtk.Label(label="After (Calibrated)", xalign=0.0)
         self.rev_detail_title_after.add_css_class("heading")
         hdr_after.append(self.rev_detail_title_after)
@@ -260,7 +262,6 @@ class ReviewStep:
 
         self.rev_detail_pic_after = Gtk.Picture()
         self.rev_detail_pic_after.set_can_shrink(True)
-        self.rev_detail_pic_after.set_size_request(160, 110)
         self.rev_detail_pic_after.set_hexpand(True)
         self.rev_detail_pic_after.set_vexpand(True)
         click_after = Gtk.GestureClick()
@@ -268,36 +269,28 @@ class ReviewStep:
         self.rev_detail_pic_after.add_controller(click_after)
         self.rev_detail_card_after.append(self.rev_detail_pic_after)
 
-        self.rev_detail_lbl_after = Gtk.Label(label="Calibrated parameters", xalign=0.0)
+        self.rev_detail_lbl_after = Gtk.Label(label="Calibrated parameters", xalign=0.5)
         self.rev_detail_lbl_after.add_css_class("caption")
         self.rev_detail_lbl_after.add_css_class("accent")
         self.rev_detail_card_after.append(self.rev_detail_lbl_after)
         side_by_side_box.append(self.rev_detail_card_after)
 
         self.review_detail_box.append(side_by_side_box)
-
-        # Helper note
-        hint_lbl = Gtk.Label(label="Click anywhere on the image to pan the magnifying glass.", xalign=0.5)
-        hint_lbl.set_wrap(True)
-        hint_lbl.add_css_class("caption")
-        hint_lbl.set_opacity(0.7)
-        self.review_detail_box.append(hint_lbl)
-
         self.review_view_stack.add_named(self.review_detail_box, "detail")
         box.append(self.review_view_stack)
 
         # Bottom Bar: Discard vs Apply
-        bottom_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
-        bottom_bar.set_margin_top(10)
+        bottom_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        bottom_bar.set_margin_top(4)
 
         discard_btn = Gtk.Button(label="Discard")
-        discard_btn.add_css_class("compact-btn")
+        discard_btn.add_css_class("touch-btn")
         discard_btn.connect("clicked", lambda _: self.view._go_to_dashboard())
         bottom_bar.append(discard_btn)
 
         apply_btn = Gtk.Button(label="Save & Apply Settings")
         apply_btn.add_css_class("suggested-action")
-        apply_btn.add_css_class("compact-btn")
+        apply_btn.add_css_class("touch-btn")
         apply_btn.set_hexpand(True)
         apply_btn.set_halign(Gtk.Align.END)
         apply_btn.connect("clicked", lambda _: self._apply_and_finish())
@@ -320,7 +313,7 @@ class ReviewStep:
         self.rev_cam_nav_buttons[None] = btn_all
 
         for cam in self.view.cameras:
-            b = Gtk.Button(label=f"Camera {cam.index}")
+            b = Gtk.Button(label=f"Cam {cam.index}")
             b.add_css_class("compact-btn")
             b.connect("clicked", self._make_cam_select_handler(cam.dev_node))
             self.rev_cam_selector_box.append(b)
@@ -333,9 +326,10 @@ class ReviewStep:
         self.review_cam_widgets.clear()
 
         for cam in self.view.cameras:
-            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             card.add_css_class("cam-column-card")
             card.set_vexpand(True)
+            card.set_hexpand(True)
 
             hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             title = Gtk.Label(label=f"Camera {cam.index}", xalign=0.0)
@@ -349,54 +343,44 @@ class ReviewStep:
             hdr.append(badge)
             card.append(hdr)
 
-            # Picture container
+            # Picture container (Expanding to fill card)
             pic = Gtk.Picture()
             pic.set_can_shrink(True)
-            pic.set_size_request(160, 110)
             pic.set_hexpand(True)
             pic.set_vexpand(True)
             card.append(pic)
 
-            # Parameter Delta Grid
+            # Compact Parameter Delta Summary (2x2 grid)
             res = self.view.results.get(cam.dev_node)
             grid = Gtk.Grid()
-            grid.set_column_spacing(8)
-            grid.set_row_spacing(4)
-            grid.set_margin_top(4)
+            grid.set_column_spacing(6)
+            grid.set_row_spacing(2)
+            grid.set_margin_top(2)
 
-            def add_param(row: int, name: str, val_before: str, val_after: str):
+            def add_param(col: int, row: int, name: str, val_before: str, val_after: str):
                 nl = Gtk.Label(label=name, xalign=0.0)
                 nl.add_css_class("caption")
-                grid.attach(nl, 0, row, 1, 1)
+                grid.attach(nl, col * 2, row, 1, 1)
 
-                vl = Gtk.Label(label=f"{val_before} → {val_after}", xalign=1.0)
+                vl = Gtk.Label(label=f"{val_before}→{val_after}", xalign=1.0)
                 vl.set_hexpand(True)
                 vl.add_css_class("caption")
                 vl.add_css_class("accent")
-                grid.attach(vl, 1, row, 1, 1)
+                grid.attach(vl, col * 2 + 1, row, 1, 1)
 
             if res:
                 s_i = res.initial_settings
                 s_o = res.optimized_settings
-                m_i = res.initial_metrics
-                m_o = res.optimized_metrics
-                add_param(0, "Exposure:", f"{s_i.exposure_absolute * 0.1:.1f}ms", f"{s_o.exposure_absolute * 0.1:.1f}ms")
-                add_param(1, "Gain:", str(s_i.gain), str(s_o.gain))
-                add_param(2, "Contrast:", str(s_i.contrast), str(s_o.contrast))
-                add_param(3, "Sharpness:", str(s_i.sharpness), str(s_o.sharpness))
-                if m_i and m_o:
-                    n_delta = ((m_i.temporal_noise - m_o.temporal_noise) / max(0.01, m_i.temporal_noise)) * 100.0
-                    n_sign = "-" if n_delta >= 0 else "+"
-                    add_param(4, "Noise:", f"{m_i.temporal_noise:.1f}", f"{n_sign}{abs(n_delta):.0f}%")
+                add_param(0, 0, "Exp:", f"{s_i.exposure_absolute * 0.1:.1f}ms", f"{s_o.exposure_absolute * 0.1:.1f}ms")
+                add_param(1, 0, "Gain:", str(s_i.gain), str(s_o.gain))
+                add_param(0, 1, "Contrast:", str(s_i.contrast), str(s_o.contrast))
+                add_param(1, 1, "Sharp:", str(s_i.sharpness), str(s_o.sharpness))
             card.append(grid)
 
-            # Inspect Detail Button
-            inspect_btn = Gtk.Button(label="Inspect Details")
-            inspect_btn.add_css_class("compact-btn")
-            inspect_btn.add_css_class("pill")
-            inspect_btn.set_halign(Gtk.Align.CENTER)
-            inspect_btn.connect("clicked", self._make_cam_select_handler(cam.dev_node))
-            card.append(inspect_btn)
+            # Clicking card zooms into details for that camera
+            card_click = Gtk.GestureClick()
+            card_click.connect("pressed", lambda g, n, x, y, node=cam.dev_node: self.select_review_camera(node))
+            card.add_controller(card_click)
 
             self.review_cam_widgets[cam.dev_node] = {
                 "badge": badge,
@@ -431,11 +415,15 @@ class ReviewStep:
         if dev_node is None:
             self.review_view_stack.set_visible_child_name("overview")
             self.review_sub_lbl.set_text("Direct A/B comparison across all cameras.")
+            if hasattr(self, "ov_ctrls_box"):
+                self.ov_ctrls_box.set_visible(True)
         else:
             self.review_view_stack.set_visible_child_name("detail")
             cam = next((c for c in self.view.cameras if c.dev_node == dev_node), None)
             cam_title = f"Camera {cam.index}" if cam else dev_node
             self.review_sub_lbl.set_text(f"Magnified Side-by-Side Inspection ({cam_title}).")
+            if hasattr(self, "ov_ctrls_box"):
+                self.ov_ctrls_box.set_visible(False)
 
         self._update_zone_button_styles()
         self.refresh_review_pictures()
@@ -559,12 +547,12 @@ class ReviewStep:
 
             if self.active_review_filter == "edge":
                 filtered = apply_edge_contrast_filter(frame)
-            elif self.active_review_filter == "noise":
-                filtered = apply_noise_inspector_filter(frame)
+            elif self.active_review_filter == "diff" and base_frame is not None:
+                filtered = apply_difference_filter(base_frame, frame)
             else:
                 filtered = frame
 
-            pix = frame_to_pixbuf(filtered, max_w=480, max_h=300)
+            pix = frame_to_pixbuf(filtered, max_w=640, max_h=440)
             w = self.review_cam_widgets[cam.dev_node]
             if pix:
                 w["picture"].set_pixbuf(pix)
@@ -612,10 +600,11 @@ class ReviewStep:
                         before_frame,
                         center=center,
                         zoom_factor=self.review_zoom_factor,
-                        max_w=580,
-                        max_h=380,
+                        max_w=640,
+                        max_h=440,
                         filter_mode=self.active_review_filter,
                         show_reticle=True,
+                        diff_reference_frame=base_frame,
                     )
                     if pix_b:
                         self.rev_detail_pic_before.set_pixbuf(pix_b)
@@ -627,10 +616,11 @@ class ReviewStep:
                         after_frame,
                         center=center,
                         zoom_factor=self.review_zoom_factor,
-                        max_w=580,
-                        max_h=380,
+                        max_w=640,
+                        max_h=440,
                         filter_mode=self.active_review_filter,
                         show_reticle=True,
+                        diff_reference_frame=base_frame,
                     )
                     if pix_a:
                         self.rev_detail_pic_after.set_pixbuf(pix_a)
@@ -640,12 +630,7 @@ class ReviewStep:
                 if res:
                     s_init = res.initial_settings
                     s_opt = res.optimized_settings
-                    m_init = res.initial_metrics
-                    m_opt = res.optimized_metrics
                     sign = "+" if res.improvement_percentage >= 0 else ""
-
-                    noise_delta = ((m_init.temporal_noise - m_opt.temporal_noise) / max(0.01, m_init.temporal_noise)) * 100.0 if m_init else 0.0
-                    noise_sign = "-" if noise_delta >= 0 else "+"
 
                     self.rev_detail_badge_before.set_text("Default")
                     self.rev_detail_badge_before.set_css_classes(["status-pill-warn"])
@@ -656,11 +641,12 @@ class ReviewStep:
                     self.rev_detail_badge_after.set_text(f"{sign}{res.improvement_percentage:.0f}% Sharper")
                     self.rev_detail_badge_after.set_css_classes(["status-pill-ok" if res.improvement_percentage >= 0 else "status-pill-warn"])
                     self.rev_detail_lbl_after.set_text(
-                        f"Exposure: {s_opt.exposure_absolute * 0.1:.1f}ms | Gain: {s_opt.gain} | Contrast: {s_opt.contrast} | Sharpness: {s_opt.sharpness} | Noise: {noise_sign}{abs(noise_delta):.0f}%"
+                        f"Exposure: {s_opt.exposure_absolute * 0.1:.1f}ms | Gain: {s_opt.gain} | Contrast: {s_opt.contrast} | Sharpness: {s_opt.sharpness}"
                     )
                 else:
                     self.rev_detail_lbl_before.set_text("Default values unchanged")
                     self.rev_detail_lbl_after.set_text("Calibrated values pending")
+        return False
 
     def _apply_and_finish(self):
         """Save calibrated values directly to camera hardware and enable CameraManualService boot unit."""
@@ -690,3 +676,9 @@ class ReviewStep:
             self.view.toast_overlay.add_toast(Adw.Toast(title="Calibrated settings applied and saved to Manual Controls"))
 
         self.view._go_to_dashboard()
+
+        # Open Manual Controls Menu
+        if hasattr(self.view, "on_open_manual") and callable(self.view.on_open_manual):
+            self.view.on_open_manual()
+        elif hasattr(self.view, "window") and hasattr(self.view.window, "open_camera_manual_page"):
+            self.view.window.open_camera_manual_page()

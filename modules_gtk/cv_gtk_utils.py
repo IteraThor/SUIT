@@ -7,7 +7,7 @@ import numpy as np
 
 import gi
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import GdkPixbuf
+from gi.repository import GdkPixbuf, GLib
 
 from core.cv_utils import (
     apply_difference_filter,
@@ -46,8 +46,8 @@ def frame_to_pixbuf(
     resized = cv2.resize(cropped, (nw, nh), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR)
     rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
 
-    return GdkPixbuf.Pixbuf.new_from_data(
-        rgb.tobytes(),
+    return GdkPixbuf.Pixbuf.new_from_bytes(
+        GLib.Bytes.new(rgb.tobytes()),
         GdkPixbuf.Colorspace.RGB,
         False,
         8,
@@ -119,8 +119,8 @@ def extract_magnified_pixbuf(
         cv2.drawMarker(resized, (rcx, rcy), (0, 255, 200), markerType=cv2.MARKER_CROSS, markerSize=18, thickness=1, line_type=cv2.LINE_AA)
 
     rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-    pix = GdkPixbuf.Pixbuf.new_from_data(
-        rgb.tobytes(),
+    pix = GdkPixbuf.Pixbuf.new_from_bytes(
+        GLib.Bytes.new(rgb.tobytes()),
         GdkPixbuf.Colorspace.RGB,
         False,
         8,

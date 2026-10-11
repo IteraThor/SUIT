@@ -9,3 +9,4 @@ scripts/
 core/private/
 modules_gtk/private/
 private/
+data/

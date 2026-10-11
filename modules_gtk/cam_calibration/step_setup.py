@@ -31,7 +31,7 @@ class SetupStep:
 
         # Header
         top_txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        title = Gtk.Label(label="Step 3 of 5: Calibration Setup", xalign=0.0)
+        title = Gtk.Label(label="Step 2 of 4: Calibration Setup", xalign=0.0)
         title.add_css_class("wizard-title")
         top_txt.append(title)
         sub = Gtk.Label(
@@ -80,16 +80,31 @@ class SetupStep:
         pref_group.add(self.prec_row)
         box.append(pref_group)
 
+        # Dart Target Setup Group
+        dart_group = Adw.PreferencesGroup()
+        dart_group.set_title("Target Setup")
+
+        dart_row = Adw.ActionRow(
+            title="Insert Darts in Board",
+            subtitle="Insert three darts, one at T20, and then one above and one below into S20.",
+        )
+        dart_badge = Gtk.Label(label="Required")
+        dart_badge.add_css_class("status-pill-accent")
+        dart_badge.set_valign(Gtk.Align.CENTER)
+        dart_row.add_suffix(dart_badge)
+        dart_group.add(dart_row)
+        box.append(dart_group)
+
         # Bottom Bar
         bottom_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
-        bottom_bar.set_margin_top(20)
+        bottom_bar.set_margin_top(16)
 
         back_btn = Gtk.Button(label="Back to Baseline")
         back_btn.add_css_class("pill")
         back_btn.connect("clicked", lambda _: self.view._go_to_baseline())
         bottom_bar.append(back_btn)
 
-        start_btn = Gtk.Button(label="Start Optimization Now")
+        start_btn = Gtk.Button(label="Darts Inserted — Start Calibration")
         start_btn.add_css_class("suggested-action")
         start_btn.add_css_class("pill")
         start_btn.add_css_class("big-cta-button")
