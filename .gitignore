@@ -10,3 +10,5 @@ core/private/
 modules_gtk/private/
 private/
 data/
+tools/*.py
+tools/*.json
