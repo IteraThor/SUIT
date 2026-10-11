@@ -1,0 +1,58 @@
+[
+  {
+    "iteration": 1,
+    "hypothesis": "Quantile tone-matched ISP optimization targeting Autodarts Hough line continuity and zero blooming",
+    "approved": true,
+    "composite_gain": 100.0,
+    "notes": "Clean multi-camera pass",
+    "timestamp": "2026-10-11T18:49:26.991147",
+    "parameters": null,
+    "camera_results": {
+      "/dev/video0": {
+        "exposure": 300,
+        "gain": 38,
+        "contrast": 34,
+        "sharpness": 80,
+        "gamma": 300,
+        "score": 60.3,
+        "improvement": 14.2,
+        "critic": {
+          "hough_lines": 563,
+          "longest_shaft": 427.8,
+          "sisal_floor": 7.34,
+          "specular_bloom": 0.0
+        }
+      },
+      "/dev/video2": {
+        "exposure": 300,
+        "gain": 40,
+        "contrast": 30,
+        "sharpness": 60,
+        "gamma": 420,
+        "score": 72.3,
+        "improvement": 119.8,
+        "critic": {
+          "hough_lines": 732,
+          "longest_shaft": 497.0,
+          "sisal_floor": 6.08,
+          "specular_bloom": 0.0
+        }
+      },
+      "/dev/video4": {
+        "exposure": 300,
+        "gain": 40,
+        "contrast": 34,
+        "sharpness": 60,
+        "gamma": 300,
+        "score": 54.9,
+        "improvement": -4.2,
+        "critic": {
+          "hough_lines": 339,
+          "longest_shaft": 381.5,
+          "sisal_floor": 9.84,
+          "specular_bloom": 0.0
+        }
+      }
+    }
+  }
+]
