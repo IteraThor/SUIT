@@ -110,5 +110,43 @@
         }
       }
     }
+  },
+  {
+    "iteration": 3,
+    "hypothesis": "Wide gamma spectrum [220..460] at Sharpness 70 with relaxed midtone dynamic range",
+    "approved": false,
+    "composite_gain": 33.3,
+    "notes": "/dev/video0: Neither Hough lines nor needle contrast improved; /dev/video4: Neither Hough lines nor needle contrast improved",
+    "timestamp": "2026-10-11 19:15:08",
+    "parameters": null,
+    "camera_results": {
+      "/dev/video0": {
+        "exposure": 300,
+        "gain": 38,
+        "contrast": 36,
+        "sharpness": 75,
+        "gamma": 220,
+        "score": 63.1,
+        "improvement": 20.0
+      },
+      "/dev/video2": {
+        "exposure": 300,
+        "gain": 40,
+        "contrast": 30,
+        "sharpness": 65,
+        "gamma": 300,
+        "score": 71.1,
+        "improvement": 97.5
+      },
+      "/dev/video4": {
+        "exposure": 300,
+        "gain": 40,
+        "contrast": 36,
+        "sharpness": 70,
+        "gamma": 220,
+        "score": 57.7,
+        "improvement": 39.0
+      }
+    }
   }
 ]
