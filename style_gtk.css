@@ -647,6 +647,13 @@ button.compact-btn,
     opacity: 0.75;
 }
 
+.wizard-subtitle-danger {
+    font-size: 0.95em;
+    font-weight: 700;
+    color: @destructive_color;
+    opacity: 1.0;
+}
+
 .metric-badge {
     background-color: alpha(@theme_fg_color, 0.06);
     border-radius: 8px;

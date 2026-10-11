@@ -52,7 +52,8 @@ class BaselineStep:
             label="Ensure no darts are in the board.",
             xalign=0.0,
         )
-        sub.add_css_class("wizard-subtitle")
+        sub.add_css_class("wizard-subtitle-danger")
+        sub.add_css_class("error")
         top_txt.append(sub)
         box.append(top_txt)
 
