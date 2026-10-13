@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from core.logger import get_logger
@@ -87,7 +88,7 @@ class CameraManualService:
     def generate_service_unit_content(cls, cameras: list[str]) -> str:
         """Generate systemd user service unit content for camera settings on boot."""
         exec_lines = []
-        v4l2_bin = "/usr/bin/v4l2-ctl"
+        v4l2_bin = shutil.which("v4l2-ctl") or "/usr/bin/v4l2-ctl"
         for dev in cameras:
             ctrls_str = cls.get_camera_control_settings_string(dev)
             if ctrls_str:

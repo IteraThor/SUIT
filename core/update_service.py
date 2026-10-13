@@ -176,23 +176,31 @@ class UpdateService:
 
     @classmethod
     def ensure_dependencies(cls) -> None:
-        """Check for essential packages like python3-opencv and install if missing."""
+        """Check for essential packages like python3-opencv and v4l-utils and install if missing."""
+        missing = []
         try:
             import cv2  # noqa: F401
             import numpy  # noqa: F401
         except ImportError:
+            missing.append("python3-opencv")
+
+        import shutil
+        if not shutil.which("v4l2-ctl"):
+            missing.append("v4l-utils")
+
+        if missing:
             try:
                 from core.privileges import check_sudo_privileges
                 if check_sudo_privileges():
-                    logger.info("Installing missing python3-opencv package via DNF")
+                    logger.info("Installing missing packages via DNF: %s", missing)
                     subprocess.run(
-                        ["sudo", "dnf", "install", "-y", "--setopt=install_weak_deps=False", "python3-opencv"],
+                        ["sudo", "dnf", "install", "-y", "--setopt=install_weak_deps=False"] + missing,
                         capture_output=True,
                         text=True,
                         timeout=180
                     )
             except Exception:
-                logger.exception("Failed installing python3-opencv during update")
+                logger.exception("Failed installing missing dependencies during update: %s", missing)
 
     @classmethod
     def restart_application(cls, project_dir: Path | None = None):

@@ -25,6 +25,7 @@ sudo dnf install -y --setopt=install_weak_deps=False \
     python3-evdev \
     python3-qrcode \
     python3-opencv \
+    v4l-utils \
     git
 
 # 4. Create Application and Desktop Launchers
