@@ -17,12 +17,10 @@ from gi.repository import Gtk, Adw, GLib
 
 from core.logger import get_logger
 from core.camera_manual_service import CameraManualService
-from core.autodarts_service import read_cam_config
+from core.v4l2_topology import V4L2Topology, CameraDevice
 from core.systemd_service import SystemdService, SystemdManager
 
 logger = get_logger("camera_manual_view")
-
-CAMERA_NAMES = ["Camera 1", "Camera 2", "Camera 3"]
 
 
 class CameraManualView(Adw.NavigationPage):
@@ -30,6 +28,7 @@ class CameraManualView(Adw.NavigationPage):
         super().__init__(title="Camera Manual Mode", tag="camera_manual")
         self.window = window
 
+        self.topology = V4L2Topology()
         self.current_cam_idx = 0
         self.configured_cams = self._resolve_configured_cameras()
         self.was_autodarts_active = False
@@ -67,38 +66,60 @@ class CameraManualView(Adw.NavigationPage):
         self._build_split_content()
 
     def _resolve_configured_cameras(self) -> list[str]:
-        cams = []
         try:
-            cfg = read_cam_config()
-            if cfg and "cameras" in cfg:
-                for entry in cfg["cameras"]:
-                    if isinstance(entry, dict) and "device" in entry:
-                        cams.append(entry["device"])
-                    elif isinstance(entry, str):
-                        cams.append(entry)
+            cams = [c.dev_node for c in self.topology.scan_cameras()]
+            if cams:
+                return cams
         except Exception:
-            logger.debug("Failed reading camera config, using defaults")
+            logger.debug("Failed scanning cameras, using defaults")
 
-        while len(cams) < 3:
-            default_nodes = ["/dev/video0", "/dev/video2", "/dev/video4"]
-            cams.append(default_nodes[len(cams)])
-        return cams[:3]
+        return ["/dev/video0", "/dev/video2", "/dev/video4"]
+
+    def _build_camera_tabs(self):
+        while child := self.tab_box.get_first_child():
+            self.tab_box.remove(child)
+        self.cam_buttons = []
+
+        if not self.configured_cams:
+            btn = Gtk.Button(label="No Cameras")
+            btn.add_css_class("touch-btn")
+            btn.set_sensitive(False)
+            self.tab_box.append(btn)
+            self.cam_buttons.append(btn)
+            return
+
+        for i, _ in enumerate(self.configured_cams):
+            label = f"Camera {i + 1}"
+            btn = Gtk.Button(label=label)
+            btn.add_css_class("touch-btn")
+            btn.connect("clicked", lambda b, idx=i: self._on_select_camera(idx))
+            self.tab_box.append(btn)
+            self.cam_buttons.append(btn)
+
+        self._update_tab_buttons(self.current_cam_idx)
+
+    def _refresh_cameras(self):
+        try:
+            found = [c.dev_node for c in self.topology.scan_cameras()]
+            if found:
+                self.configured_cams = found
+        except Exception:
+            logger.debug("Error rescanning cameras in CameraManualView")
+
+        if self.current_cam_idx >= len(self.configured_cams):
+            self.current_cam_idx = 0
+        self._build_camera_tabs()
 
     def _build_top_bar(self):
         top_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         top_bar.set_margin_bottom(2)
 
         # Camera Switcher Buttons
-        tab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        tab_box.set_homogeneous(True)
+        self.tab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.tab_box.set_homogeneous(True)
         self.cam_buttons = []
-        for i, name in enumerate(CAMERA_NAMES):
-            btn = Gtk.Button(label=name)
-            btn.add_css_class("touch-btn")
-            btn.connect("clicked", lambda b, idx=i: self._on_select_camera(idx))
-            tab_box.append(btn)
-            self.cam_buttons.append(btn)
-        top_bar.append(tab_box)
+        self._build_camera_tabs()
+        top_bar.append(self.tab_box)
 
         # Profile Selector Box
         profile_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -781,6 +802,7 @@ class CameraManualView(Adw.NavigationPage):
         except Exception:
             logger.exception("Error checking/pausing autodarts.service state")
 
+        self._refresh_cameras()
         self._refresh_profiles_dropdown()
         self._start_capture()
         self._load_current_camera_controls()

@@ -161,7 +161,7 @@ class CamCalibrationView(Adw.Bin):
     # =========================================================================
     def refresh_cameras(self):
         """Rescan system cameras."""
-        self.cameras = self.topology.get_autodarts_cameras()
+        self.cameras = self.topology.scan_cameras()
         self.cameras.sort(key=lambda c: c.index)
 
     def on_app_close(self):
