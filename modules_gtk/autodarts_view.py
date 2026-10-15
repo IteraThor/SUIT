@@ -12,7 +12,8 @@ from core.logger import get_logger
 from core.systemd_service import SystemdService
 from core.autodarts_service import (
     get_autodarts_cli_binary, is_autodarts_installed,
-    install_autodarts, uninstall_autodarts
+    install_autodarts, uninstall_autodarts,
+    is_service_enabled, set_service_enabled
 )
 from modules_gtk.async_utils import run_async
 from modules_gtk.ui_helpers import create_button_with_icon
@@ -30,6 +31,7 @@ class AutodartsView(Adw.NavigationPage):
         self.is_busy = False
         self._child_pid = None
         self._console_active = False
+        self._updating_autostart = False
 
         # Main layout container
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -99,6 +101,14 @@ class AutodartsView(Adw.NavigationPage):
         # -------------------------------------------------------------
         self.exp_tools = Adw.ExpanderRow(title="Tools and Maintenance")
         self.exp_tools.set_expanded(False)
+
+        # Start on Boot Switch
+        self.row_autostart = Adw.SwitchRow(
+            title="Start on Boot",
+            subtitle="Launch automatically when system starts"
+        )
+        self.row_autostart.connect("notify::active", self._on_autostart_toggled)
+        self.exp_tools.add_row(self.row_autostart)
 
         # Terminal Console Restart Action
         row_console = Adw.ActionRow(
@@ -201,9 +211,45 @@ class AutodartsView(Adw.NavigationPage):
             self.btn_overlay_start.set_visible(False)
             if hasattr(self, "btn_restart_console"):
                 self.btn_restart_console.set_sensitive(False)
+            if hasattr(self, "row_autostart"):
+                self.row_autostart.set_sensitive(False)
         else:
             if hasattr(self, "btn_restart_console"):
                 self.btn_restart_console.set_sensitive(True)
+            if hasattr(self, "row_autostart"):
+                self.row_autostart.set_sensitive(True)
+                self._update_autostart_row()
+
+    def _update_autostart_row(self):
+        def worker():
+            return is_service_enabled()
+
+        def on_done(enabled):
+            self._updating_autostart = True
+            try:
+                self.row_autostart.set_active(enabled)
+            finally:
+                self._updating_autostart = False
+
+        run_async(worker, on_done=on_done)
+
+    def _on_autostart_toggled(self, row, pspec):
+        if self._updating_autostart:
+            return
+        active = row.get_active()
+
+        def worker():
+            return set_service_enabled(active)
+
+        def on_done(ok):
+            if ok:
+                msg = "Autodarts set to start on boot." if active else "Autodarts autostart disabled."
+                self.window.show_toast(msg)
+            else:
+                self.window.show_toast("Failed updating boot startup setting.")
+                self._update_autostart_row()
+
+        run_async(worker, on_done=on_done)
 
     def _spawn_console(self, force=False):
         binary = get_autodarts_cli_binary()

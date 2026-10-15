@@ -167,12 +167,31 @@ class UpdateService:
 
             logger.info("Successfully updated SUIT from origin main")
             cls.ensure_dependencies()
+            cls.ensure_autodarts_service()
             return True, "SUIT updated successfully."
         except subprocess.TimeoutExpired:
             return False, "Update timed out. Please check internet connection."
         except Exception as e:
             logger.exception("Update execution failed")
             return False, f"Update failed: {str(e)}"
+
+    @classmethod
+    def ensure_autodarts_service(cls) -> None:
+        """Ensure Autodarts systemd service is provisioned and enabled if Autodarts is installed."""
+        try:
+            from core.autodarts_service import (
+                is_autodarts_installed,
+                is_service_enabled,
+                set_service_enabled,
+                ensure_service_unit
+            )
+            if is_autodarts_installed():
+                ensure_service_unit()
+                if not is_service_enabled():
+                    logger.info("Post-update: enabling autodarts.service for boot startup")
+                    set_service_enabled(True)
+        except Exception as e:
+            logger.warning("Post-update autodarts service check notice: %s", e)
 
     @classmethod
     def ensure_dependencies(cls) -> None:
