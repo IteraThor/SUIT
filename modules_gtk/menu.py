@@ -218,46 +218,91 @@ class MainMenuView(Adw.NavigationPage):
         self.btn_update.set_child(box)
 
     def _on_check_updates(self, btn):
-        logger.info("Check for updates triggered")
+        logger.info("Check for updates and requirements triggered")
         self._set_update_button_loading(True, "Checking for Updates...")
 
         def worker():
-            return UpdateService.check_update()
+            missing_reqs = UpdateService.check_requirements()
+            update_info = UpdateService.check_update()
+            return {"missing_reqs": missing_reqs, "update_info": update_info}
 
-        def on_done(info):
+        def on_done(res):
             self._set_update_button_loading(False)
-            if info.get("error"):
-                self.window.show_toast(info["error"])
+            missing_reqs = res.get("missing_reqs", [])
+            info = res.get("update_info", {})
+
+            if missing_reqs:
+                self._show_missing_requirements_dialog(missing_reqs, next_info=info)
                 return
 
-            if not info.get("has_update"):
-                self.window.show_toast("SUIT for Fedora is up to date.")
-                return
-
-            count = info.get("commits_behind", 1)
-            msg = info.get("latest_message", "")
-
-            body_text = f"A new version of SUIT is available ({count} update{'s' if count != 1 else ''})."
-            if msg:
-                body_text += f"\n\nLatest: {msg}"
-            body_text += "\n\nInstall the latest updates now?"
-
-            dialog = Adw.AlertDialog(
-                heading="Update Available",
-                body=body_text
-            )
-            dialog.add_response("cancel", "Later")
-            dialog.add_response("update", "Update Now")
-            dialog.set_response_appearance("update", Adw.ResponseAppearance.SUGGESTED)
-
-            def on_response(d, response):
-                if response == "update":
-                    self._perform_update()
-
-            dialog.connect("response", on_response)
-            dialog.present(self.window)
+            self._process_update_info(info)
 
         run_async(worker, on_done=on_done)
+
+    def _show_missing_requirements_dialog(self, missing_reqs: list[str], next_info: dict | None = None):
+        pkgs_formatted = "\n".join(f"• {pkg}" for pkg in missing_reqs)
+        dialog = Adw.AlertDialog(
+            heading="Requirements Not Installed",
+            body=f"The following required packages are not installed:\n\n{pkgs_formatted}\n\nInstall missing requirements now?"
+        )
+        dialog.add_response("cancel", "Later")
+        dialog.add_response("install", "Install")
+        dialog.set_response_appearance("install", Adw.ResponseAppearance.SUGGESTED)
+
+        def on_response(d, response):
+            if response == "install":
+                self._perform_install_requirements(missing_reqs, next_info=next_info)
+
+        dialog.connect("response", on_response)
+        dialog.present(self.window)
+
+    def _perform_install_requirements(self, missing_reqs: list[str], next_info: dict | None = None):
+        self.window.show_toast("Installing requirements...")
+        self._set_update_button_loading(True, "Installing...")
+
+        def worker():
+            return UpdateService.install_requirements(missing_reqs)
+
+        def on_done(res):
+            self._set_update_button_loading(False)
+            ok, msg = res
+            self.window.show_toast(msg)
+            if ok and next_info:
+                self._process_update_info(next_info)
+
+        run_async(worker, on_done=on_done)
+
+    def _process_update_info(self, info: dict):
+        if info.get("error"):
+            self.window.show_toast(info["error"])
+            return
+
+        if not info.get("has_update"):
+            self.window.show_toast("SUIT for Fedora is up to date.")
+            return
+
+        count = info.get("commits_behind", 1)
+        msg = info.get("latest_message", "")
+
+        body_text = f"A new version of SUIT is available ({count} update{'s' if count != 1 else ''})."
+        if msg:
+            body_text += f"\n\nLatest: {msg}"
+        body_text += "\n\nInstall the latest updates now?"
+
+        dialog = Adw.AlertDialog(
+            heading="Update Available",
+            body=body_text
+        )
+        dialog.add_response("cancel", "Later")
+        dialog.add_response("update", "Update Now")
+        dialog.set_response_appearance("update", Adw.ResponseAppearance.SUGGESTED)
+
+        def on_response(d, response):
+            if response == "update":
+                self._perform_update()
+
+        dialog.connect("response", on_response)
+        dialog.present(self.window)
 
     def _perform_update(self):
         self.window.show_toast("Downloading and applying update...")
