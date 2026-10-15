@@ -94,11 +94,10 @@ class CameraManualService:
             if ctrls_str:
                 exec_lines.append(f"ExecStart=-{v4l2_bin} -d {dev} --set-ctrl={ctrls_str}")
 
-        exec_section = "\n".join(exec_lines) if exec_lines else f"ExecStart=-{v4l2_bin} --version"
+        exec_section = "\n".join(exec_lines) if exec_lines else "ExecStart=/bin/true"
         return f"""[Unit]
 Description=SUIT Camera Settings on Boot
 Before=autodarts.service
-After=default.target
 
 [Service]
 Type=oneshot

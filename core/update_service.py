@@ -194,32 +194,66 @@ class UpdateService:
             logger.warning("Post-update autodarts service check notice: %s", e)
 
     @classmethod
-    def ensure_dependencies(cls) -> None:
-        """Check for essential packages like python3-opencv and v4l-utils and install if missing."""
+    def check_requirements(cls) -> list[str]:
+        """Check for essential SUIT dependencies and return list of missing DNF package names."""
         missing = []
-        try:
-            import cv2  # noqa: F401
-            import numpy  # noqa: F401
-        except ImportError:
-            missing.append("python3-opencv")
-
         import shutil
+        import importlib.util
+
         if not shutil.which("v4l2-ctl"):
             missing.append("v4l-utils")
 
+        if not importlib.util.find_spec("cv2"):
+            missing.append("python3-opencv")
+
+        if not importlib.util.find_spec("evdev"):
+            missing.append("python3-evdev")
+
+        if not importlib.util.find_spec("qrcode"):
+            missing.append("python3-qrcode")
+
+        if not shutil.which("git"):
+            missing.append("git")
+
+        return missing
+
+    @classmethod
+    def install_requirements(cls, packages: list[str] | None = None) -> tuple[bool, str]:
+        """Install missing requirement packages via DNF."""
+        to_install = packages if packages is not None else cls.check_requirements()
+        if not to_install:
+            return True, "All requirements are already installed."
+
+        try:
+            from core.privileges import check_sudo_privileges
+            if check_sudo_privileges():
+                cmd = ["sudo", "dnf", "install", "-y", "--setopt=install_weak_deps=False"] + to_install
+                logger.info("Installing requirements via passwordless sudo: %s", cmd)
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            else:
+                pkexec_cmd = f"pkexec dnf install -y --setopt=install_weak_deps=False {' '.join(to_install)}"
+                logger.info("Installing requirements via pkexec: %s", pkexec_cmd)
+                res = subprocess.run(pkexec_cmd, shell=True, capture_output=True, text=True, timeout=180)
+
+            if res.returncode == 0:
+                logger.info("Successfully installed requirement packages: %s", to_install)
+                return True, "Requirements installed successfully."
+            else:
+                err = res.stderr.strip() or "Installation failed."
+                logger.error("Failed installing requirements: %s", err)
+                return False, f"Installation failed: {err}"
+        except subprocess.TimeoutExpired:
+            return False, "Installation timed out."
+        except Exception as e:
+            logger.exception("Error installing requirements")
+            return False, f"Installation failed: {e}"
+
+    @classmethod
+    def ensure_dependencies(cls) -> None:
+        """Check for essential packages and install if missing."""
+        missing = cls.check_requirements()
         if missing:
-            try:
-                from core.privileges import check_sudo_privileges
-                if check_sudo_privileges():
-                    logger.info("Installing missing packages via DNF: %s", missing)
-                    subprocess.run(
-                        ["sudo", "dnf", "install", "-y", "--setopt=install_weak_deps=False"] + missing,
-                        capture_output=True,
-                        text=True,
-                        timeout=180
-                    )
-            except Exception:
-                logger.exception("Failed installing missing dependencies during update: %s", missing)
+            cls.install_requirements(missing)
 
     @classmethod
     def restart_application(cls, project_dir: Path | None = None):
