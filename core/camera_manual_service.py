@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -167,6 +168,42 @@ WantedBy=default.target
             return True
         except Exception:
             logger.exception("Failed updating camera boot service")
+            return False
+
+    @classmethod
+    def heal_boot_service_if_needed(cls, service_path: Path | None = None) -> bool:
+        """Inspect suit-camera-settings.service and auto-repair ordering cycles or defects.
+
+        Prior to commit 7555d79, suit-camera-settings.service contained 'After=default.target'
+        combined with 'Before=autodarts.service', causing a transaction cycle that prevented
+        autodarts.service from starting on boot.
+        """
+        target = service_path or cls.USER_UNIT_PATH
+        if not target.exists():
+            return False
+
+        try:
+            content = target.read_text(encoding="utf-8")
+            healed = False
+
+            # Check for legacy cyclic ordering
+            if "After=default.target" in content:
+                content = re.sub(r"(?m)^After=default\.target\r?\n?", "", content)
+                healed = True
+
+            # Ensure Before=autodarts.service is present so camera controls apply before Autodarts
+            if "[Unit]" in content and "Before=autodarts.service" not in content:
+                content = content.replace("[Unit]", "[Unit]\nBefore=autodarts.service")
+                healed = True
+
+            if healed:
+                target.write_text(content, encoding="utf-8")
+                subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, timeout=5)
+                logger.info("Auto-repaired %s: eliminated systemd boot ordering cycle", target)
+                return True
+            return False
+        except Exception:
+            logger.exception("Failed checking/healing camera boot service")
             return False
 
     # =========================================================================

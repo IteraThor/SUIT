@@ -32,7 +32,13 @@ sudo dnf install -y --setopt=install_weak_deps=False \
 echo "[2/3] Generating desktop and menu launchers..."
 python3 "${SCRIPT_DIR}/create_launcher.py"
 
-# 4. Success confirmation
+# 5. Synchronize active display & touch autostarts
+if [ -f "$HOME/.suit_rotation_config.json" ]; then
+    echo "  - Synchronizing display & touch autostart..."
+    python3 -c "import sys; sys.path.insert(0, '${SCRIPT_DIR}'); from core.display_service import DisplayService; DisplayService.ensure_autostart()" 2>/dev/null || true
+fi
+
+# 6. Success confirmation
 echo "[3/3] Installation completed successfully!"
 echo "========================================="
 echo "SUIT is now installed and ready to use."

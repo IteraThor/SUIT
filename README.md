@@ -18,21 +18,24 @@ Launch **SUIT for Fedora** directly from your application menu or Dash favorites
 
 ---
 
-## Upgrading from Old SUIT (Cleanup & Uninstall)
+## Uninstalling SUIT for Fedora
 
-If you have an older installation of SUIT (Tkinter / Ubuntu edition), run this one-line command to remove legacy background services, outdated autostarts, and old touch rules:
+To remove SUIT for Fedora, its background services, autostarts, and desktop launchers:
+
+```bash
+cd SUIT && ./uninstall.sh
+```
+*(Optional: pass `./uninstall.sh --purge` to also delete saved camera profiles and display configurations).*
+
+---
+
+## Upgrading from Legacy SUIT (Ubuntu / Tkinter Edition)
+
+If you are migrating from an older installation of SUIT (Tkinter / Ubuntu edition), run this one-line command to remove legacy background services (`suit-killswitch.service`, `autoglow.service`) and old Ubuntu launchers:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/IteraThor/SUIT/main/uninstall_legacy.sh | bash
 ```
-
-*(Or run `./uninstall_legacy.sh` from within the cloned SUIT directory).*
-
-This automatically cleans:
-* Legacy background services (`suit-killswitch.service`, `autoglow.service`).
-* Legacy touch rotation rules (`/etc/udev/rules.d/99-suit-touch.rules`).
-* Old autostart entries (`suit-rotation.desktop`, `suit-chromium.desktop`).
-* Outdated desktop launchers.
 
 ---
 

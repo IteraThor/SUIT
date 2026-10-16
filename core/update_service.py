@@ -168,12 +168,32 @@ class UpdateService:
             logger.info("Successfully updated SUIT from origin main")
             cls.ensure_dependencies()
             cls.ensure_autodarts_service()
+            cls.ensure_camera_boot_service()
+            cls.ensure_display_autostart()
             return True, "SUIT updated successfully."
         except subprocess.TimeoutExpired:
             return False, "Update timed out. Please check internet connection."
         except Exception as e:
             logger.exception("Update execution failed")
             return False, f"Update failed: {str(e)}"
+
+    @classmethod
+    def ensure_camera_boot_service(cls) -> None:
+        """Heal camera boot service unit to resolve any systemd ordering cycles."""
+        try:
+            from core.camera_manual_service import CameraManualService
+            CameraManualService.heal_boot_service_if_needed()
+        except Exception as e:
+            logger.warning("Post-update camera boot service check notice: %s", e)
+
+    @classmethod
+    def ensure_display_autostart(cls) -> None:
+        """Ensure rotation and touch autostart is up-to-date with current repository path."""
+        try:
+            from core.display_service import DisplayService
+            DisplayService.ensure_autostart()
+        except Exception as e:
+            logger.warning("Post-update display autostart check notice: %s", e)
 
     @classmethod
     def ensure_autodarts_service(cls) -> None:
