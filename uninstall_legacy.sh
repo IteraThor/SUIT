@@ -24,19 +24,27 @@ sudo systemctl daemon-reload
 
 echo "[2/4] Removing legacy touch udev rules..."
 if [ -f "/etc/udev/rules.d/99-suit-touch.rules" ]; then
-    echo "  - Removing /etc/udev/rules.d/99-suit-touch.rules"
-    sudo rm -f "/etc/udev/rules.d/99-suit-touch.rules"
-    sudo udevadm control --reload-rules || true
-    sudo udevadm trigger --subsystem-match=input || true
+    if [ ! -f "$HOME/.suit_rotation_config.json" ]; then
+        echo "  - Removing legacy /etc/udev/rules.d/99-suit-touch.rules"
+        sudo rm -f "/etc/udev/rules.d/99-suit-touch.rules"
+        sudo udevadm control --reload-rules || true
+        sudo udevadm trigger --subsystem-match=input || true
+    else
+        echo "  - Preserving active SUIT for Fedora touch calibration rule"
+    fi
 fi
 
 echo "[3/4] Removing legacy autostart entries..."
-for auto in suit-rotation.desktop suit-chromium.desktop suit-kiosk.desktop; do
+for auto in suit-chromium.desktop; do
     if [ -f "$HOME/.config/autostart/$auto" ]; then
         echo "  - Removing ~/.config/autostart/$auto"
         rm -f "$HOME/.config/autostart/$auto"
     fi
 done
+if [ ! -f "$HOME/.suit_rotation_config.json" ] && [ -f "$HOME/.config/autostart/suit-rotation.desktop" ]; then
+    echo "  - Removing legacy ~/.config/autostart/suit-rotation.desktop"
+    rm -f "$HOME/.config/autostart/suit-rotation.desktop"
+fi
 
 echo "[4/4] Removing legacy desktop launchers..."
 for desktop_dir in "$HOME/Desktop" "$HOME/Schreibtisch"; do

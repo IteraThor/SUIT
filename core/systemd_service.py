@@ -1,4 +1,5 @@
 import atexit
+import time
 import subprocess
 import gi
 gi.require_version("Gio", "2.0")
@@ -230,7 +231,11 @@ class SystemdManager:
         if cls.is_autodarts_active():
             cls._autodarts_paused_by_suit = True
             logger.info("Pausing autodarts.service to release camera locks (tracked by SUIT)")
-            return cls.stop_autodarts()
+            stopped = cls.stop_autodarts()
+            if stopped:
+                # Brief sleep to allow camera device drivers and kernel V4L2 buffers to be fully released
+                time.sleep(0.5)
+            return stopped
         return False
 
     @classmethod

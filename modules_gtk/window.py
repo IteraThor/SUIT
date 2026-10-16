@@ -8,6 +8,8 @@ from pathlib import Path
 
 from core.logger import get_logger
 from core.privileges import check_sudo_privileges, setup_sudoers_pkexec
+from core.update_service import UpdateService
+from modules_gtk.async_utils import run_async
 from modules_gtk.menu import MainMenuView
 
 logger = get_logger("window")
@@ -138,6 +140,13 @@ class SuitWindow(Adw.ApplicationWindow):
                 # Pre-import heavy native C extensions in background thread
                 import cv2  # noqa: F401
                 from modules_gtk.camera_focus_view import CameraFocusView
+
+                # Auto-heal boot services in background (e.g. after CLI git pull updates)
+                try:
+                    UpdateService.ensure_camera_boot_service()
+                    UpdateService.ensure_display_autostart()
+                except Exception as e:
+                    logger.debug("Background service heal notice: %s", e)
 
                 def _init_page():
                     if not self.focus_page:
@@ -306,9 +315,25 @@ class SuitWindow(Adw.ApplicationWindow):
             logger.exception("Camera Optimizer unavailable due to missing dependency: %s", e)
             dialog = Adw.AlertDialog(
                 heading="OpenCV Required",
-                body="Camera Optimizer requires OpenCV.\n\nInstall with: sudo dnf install python3-opencv"
+                body="Camera Optimizer requires OpenCV (python3-opencv)."
             )
-            dialog.add_response("ok", "OK")
+            dialog.add_response("cancel", "Later")
+            dialog.add_response("install", "Install Now")
+            dialog.set_response_appearance("install", Adw.ResponseAppearance.SUGGESTED)
+
+            def on_resp(d, resp):
+                if resp == "install":
+                    self.show_toast("Installing python3-opencv...")
+                    def worker():
+                        return UpdateService.install_requirements(["python3-opencv"])
+                    def on_done(res):
+                        ok, msg = res
+                        self.show_toast(msg)
+                        if ok:
+                            self.open_cam_calibration_page()
+                    run_async(worker, on_done=on_done)
+
+            dialog.connect("response", on_resp)
             dialog.present(self)
         except Exception as e:
             logger.exception("Failed to open Camera Optimizer: %s", e)
@@ -331,9 +356,25 @@ class SuitWindow(Adw.ApplicationWindow):
             logger.exception("Camera Focus Tool unavailable due to missing dependency: %s", e)
             dialog = Adw.AlertDialog(
                 heading="OpenCV Required",
-                body="The Camera Focus Tool requires OpenCV.\n\nInstall with: sudo dnf install python3-opencv"
+                body="Camera Focus Tool requires OpenCV (python3-opencv)."
             )
-            dialog.add_response("ok", "OK")
+            dialog.add_response("cancel", "Later")
+            dialog.add_response("install", "Install Now")
+            dialog.set_response_appearance("install", Adw.ResponseAppearance.SUGGESTED)
+
+            def on_resp(d, resp):
+                if resp == "install":
+                    self.show_toast("Installing python3-opencv...")
+                    def worker():
+                        return UpdateService.install_requirements(["python3-opencv"])
+                    def on_done(res):
+                        ok, msg = res
+                        self.show_toast(msg)
+                        if ok:
+                            self.open_focus_page()
+                    run_async(worker, on_done=on_done)
+
+            dialog.connect("response", on_resp)
             dialog.present(self)
         except Exception as e:
             logger.exception("Failed to open Camera Focus Tool: %s", e)
