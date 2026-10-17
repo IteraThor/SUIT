@@ -132,7 +132,7 @@ class CamCalibrationView(Adw.Bin):
     def _go_to_baseline(self, new_session: bool = False):
         if SystemdManager.is_autodarts_active():
             self._autodarts_was_running = True
-            SystemdManager.pause_autodarts()
+            SystemdManager.pause_autodarts(settle=False)
         self.detector.unlock_target()
         if new_session:
             self.baseline_frames.clear()

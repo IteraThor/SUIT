@@ -792,7 +792,7 @@ class CameraManualView(Adw.NavigationPage):
 
         # Check if Autodarts is active and pause it to avoid device lock conflicts
         try:
-            self.was_autodarts_active = SystemdManager.pause_autodarts()
+            self.was_autodarts_active = SystemdManager.pause_autodarts(settle=False)
             if self.was_autodarts_active:
                 logger.info("Paused autodarts.service to release V4L2 device locks")
                 if hasattr(self.window, "show_toast"):

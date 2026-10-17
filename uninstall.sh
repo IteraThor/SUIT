@@ -56,6 +56,7 @@ if [ "$1" == "--purge" ] || [ "$1" == "--all" ]; then
     rm -f "$HOME/.suit_rotation_config.json"
     rm -f "$HOME/.suit_camera_profiles.json"
     rm -f "$HOME/suit.log"
+    rm -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/suit.log"
 else
     echo "  - Preserving camera and touch configurations (~/.suit_*.json)."
     echo "    (Run with --purge to remove configuration files as well)."

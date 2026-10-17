@@ -23,8 +23,16 @@ done
 sudo systemctl daemon-reload
 
 echo "[2/4] Removing legacy touch udev rules..."
+# SUIT for Fedora is detected by its autostart entry (it runs core.display_service),
+# not by the config file, which legacy installs may also have written.
+if grep -qs "core.display_service" "$HOME/.config/autostart/suit-rotation.desktop"; then
+    FEDORA_ACTIVE=1
+else
+    FEDORA_ACTIVE=0
+fi
+
 if [ -f "/etc/udev/rules.d/99-suit-touch.rules" ]; then
-    if [ ! -f "$HOME/.suit_rotation_config.json" ]; then
+    if [ "$FEDORA_ACTIVE" -eq 0 ]; then
         echo "  - Removing legacy /etc/udev/rules.d/99-suit-touch.rules"
         sudo rm -f "/etc/udev/rules.d/99-suit-touch.rules"
         sudo udevadm control --reload-rules || true
@@ -35,13 +43,13 @@ if [ -f "/etc/udev/rules.d/99-suit-touch.rules" ]; then
 fi
 
 echo "[3/4] Removing legacy autostart entries..."
-for auto in suit-chromium.desktop; do
+for auto in suit-chromium.desktop suit-kiosk.desktop; do
     if [ -f "$HOME/.config/autostart/$auto" ]; then
         echo "  - Removing ~/.config/autostart/$auto"
         rm -f "$HOME/.config/autostart/$auto"
     fi
 done
-if [ ! -f "$HOME/.suit_rotation_config.json" ] && [ -f "$HOME/.config/autostart/suit-rotation.desktop" ]; then
+if [ "$FEDORA_ACTIVE" -eq 0 ] && [ -f "$HOME/.config/autostart/suit-rotation.desktop" ]; then
     echo "  - Removing legacy ~/.config/autostart/suit-rotation.desktop"
     rm -f "$HOME/.config/autostart/suit-rotation.desktop"
 fi
