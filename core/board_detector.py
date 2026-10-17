@@ -31,6 +31,23 @@ class BoardROI:
     target_roi: Optional[Tuple[int, int, int, int]] = None  # (x, y, w, h) bounding box of furthest double
 
 
+DEFAULT_CAPTURE_RESOLUTION = (1280, 960)
+
+
+def get_autodarts_resolution(config_path: Optional[Path] = None) -> Tuple[int, int]:
+    """Return the (width, height) Autodarts streams at, so calibration sees the same sensor mode."""
+    path = config_path or (Path.home() / ".config" / "autodarts" / "config.toml")
+    try:
+        with open(path, "rb") as f:
+            cam = tomllib.load(f).get("cam", {})
+        width, height = int(cam.get("width", 0)), int(cam.get("height", 0))
+        if width > 0 and height > 0:
+            return width, height
+    except Exception as e:
+        logger.debug("Could not read Autodarts resolution from %s: %s", path, e)
+    return DEFAULT_CAPTURE_RESOLUTION
+
+
 class BoardDetector:
     """Detects dartboard position and extracts wire and uniform measurement masks."""
 
@@ -132,9 +149,21 @@ class BoardDetector:
             if res_key in cam_entry and "homography" in cam_entry[res_key]:
                 return np.array(cam_entry[res_key]["homography"]).reshape(3, 3)
 
-            for entry_val in cam_entry.values():
-                if isinstance(entry_val, dict) and "homography" in entry_val:
-                    return np.array(entry_val["homography"]).reshape(3, 3)
+            # A homography from another resolution is only valid if it shares the aspect ratio
+            # (pure scaling). Different aspect ratios crop the sensor differently, so reusing one
+            # would misplace every board mask.
+            for entry_key, entry_val in cam_entry.items():
+                if not (isinstance(entry_val, dict) and "homography" in entry_val):
+                    continue
+                m = re.fullmatch(r"(\d+)x(\d+)", str(entry_key))
+                if not m:
+                    continue
+                src_w, src_h = int(m.group(1)), int(m.group(2))
+                if abs(src_w / src_h - width / height) > 0.01:
+                    continue
+                h_src = np.array(entry_val["homography"]).reshape(3, 3)
+                scale_inv = np.diag([src_w / width, src_h / height, 1.0])
+                return h_src @ scale_inv
 
         except Exception as e:
             logger.debug("Failed loading calibration homography: %s", e)

@@ -14,13 +14,32 @@ from typing import Callable, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from core.board_detector import BoardDetector, BoardROI
+from core.board_detector import BoardDetector, BoardROI, get_autodarts_resolution
 from core.metrics import QualityEvaluator, QualityMetrics
 from core.v4l2_device import CameraSettings, V4L2Device
 
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[..., None]
+
+# V4L2 exposure_time_absolute is in 100 µs units.
+FLICKER_PERIOD_UNITS = {1: 10000.0 / 100.0, 2: 10000.0 / 120.0}  # 50 Hz -> 10 ms, 60 Hz -> 8.33 ms
+
+
+def flicker_safe_exposures(power_line_frequency: int, exp_min: int, exp_max: int, fps: int = 30) -> List[int]:
+    """Exposure times (longest first) that integrate whole mains flicker cycles.
+
+    Under mains-powered lighting these see constant brightness frame to frame. None exceeds the
+    frame period, so the stream keeps its frame rate. Without a known mains frequency the frame
+    period itself is the only candidate.
+    """
+    frame_limit = max(exp_min, min(exp_max, int(10000 / max(1, fps))))
+    period = FLICKER_PERIOD_UNITS.get(power_line_frequency)
+    if not period:
+        return [frame_limit]
+    cycles = int((frame_limit + 0.5) // period)  # tolerate 100 µs rounding of the frame period
+    candidates = [int(round(n * period)) for n in range(cycles, 0, -1)]
+    return [c for c in candidates if exp_min <= c <= frame_limit] or [frame_limit]
 
 
 @dataclasses.dataclass
@@ -35,6 +54,19 @@ class OptimizationResult:
     optimized_frame: np.ndarray
     roi: BoardROI
     improvement_percentage: float
+
+    # Below this the gain is within measurement noise, so applying the new settings is not worth it.
+    MIN_IMPROVEMENT_PCT = 2.0
+
+    @property
+    def is_improvement(self) -> bool:
+        return self.improvement_percentage >= self.MIN_IMPROVEMENT_PCT
+
+    def badge(self) -> Tuple[str, str]:
+        """(label, css class) describing the outcome for review badges."""
+        if self.is_improvement:
+            return f"+{self.improvement_percentage:.0f}% Quality", "status-pill-ok"
+        return "No gain – keeping current", "status-pill-warn"
 
 
 class CameraOptimizer:
@@ -81,9 +113,10 @@ class CameraOptimizer:
         if check_abort():
             return None
 
+        cap_w, cap_h = get_autodarts_resolution()
         cap = None
         try:
-            res_cap = self.device.open_stream(1280, 960)
+            res_cap = self.device.open_stream(cap_w, cap_h)
             if isinstance(res_cap, cv2.VideoCapture) and res_cap.isOpened():
                 cap = res_cap
         except Exception:
@@ -92,12 +125,12 @@ class CameraOptimizer:
         def get_frame(flush: int = 2) -> Optional[np.ndarray]:
             if cap is not None and cap.isOpened():
                 return self.device.read_stream_frame(cap, flush_frames=flush)
-            return self.device.capture_frame(warmup_frames=max(3, flush))
+            return self.device.capture_frame(width=cap_w, height=cap_h, warmup_frames=max(3, flush))
 
         def get_burst(count: int, flush: int = 2) -> List[np.ndarray]:
             if cap is not None and cap.isOpened():
                 return self.device.read_stream_burst(cap, count=count, flush_frames=flush)
-            return self.device.capture_burst(count=count, warmup_frames=max(3, flush))
+            return self.device.capture_burst(count=count, width=cap_w, height=cap_h, warmup_frames=max(3, flush))
 
 
         try:
@@ -173,10 +206,12 @@ class CameraOptimizer:
             max_g = gain_ctrl.max_val if gain_ctrl else 128
             gain_step = max(1, getattr(gain_ctrl, "step", 1) or 1)
 
-            # Preserve exact user exposure time (locked)
-            nominal_shutter = initial_settings.exposure_absolute if (initial_settings.exposure_absolute and initial_settings.exposure_absolute > 0) else 300
-
-            report("Stage 1 / 3", 0.18, f"Matching baseline brightness ({target_white_lum:.0f} DN) in Manual Mode (Exposure {nominal_shutter} locked)...")
+            # The reported exposure_time_absolute is meaningless while auto exposure is active (the
+            # driver marks it inactive and keeps a stale value), so pick the shutter from scratch:
+            # the longest flicker-free exposure that does not overshoot the target at minimum gain.
+            # More light per frame means less gain and therefore less sensor noise.
+            shutter_candidates = flicker_safe_exposures(initial_settings.power_line_frequency, exp_min, exp_max)
+            nominal_shutter = shutter_candidates[-1]
 
             # Set manual mode while preserving ALL factory ISP settings (brightness, saturation, gamma, wb)
             self.device.set_control("auto_exposure", 1)  # Manual Mode
@@ -188,6 +223,28 @@ class CameraOptimizer:
             if initial_settings.wb_auto == 0 and initial_settings.wb_temperature > 0:
                 self.device.set_control("white_balance_temperature", initial_settings.wb_temperature)
 
+            def measure_white(f: np.ndarray) -> float:
+                gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+                u_pix = gray[roi.uniform_mask > 0]
+                return float(np.percentile(u_pix, 90)) if len(u_pix) > 50 else float(np.percentile(gray, 90))
+
+            self.device.set_control("gain", min_g)
+            for shutter in shutter_candidates:
+                if check_abort():
+                    return None
+                self.device.set_control("exposure_time_absolute", shutter)
+                time.sleep(0.08)
+                f = get_frame(flush=3)
+                if f is None:
+                    continue
+                lum = measure_white(f)
+                report("Stage 1 / 3 (Shutter)", 0.17, f"Shutter {shutter * 0.1:.1f}ms at minimum gain -> White: {lum:.1f}/{target_white_lum:.0f} DN", frame=f)
+                if lum <= target_white_lum + 5.0:
+                    nominal_shutter = shutter
+                    break
+
+            logger.info("Selected flicker-free shutter %d (%.1f ms)", nominal_shutter, nominal_shutter * 0.1)
+            report("Stage 1 / 3", 0.18, f"Matching baseline brightness ({target_white_lum:.0f} DN) in Manual Mode (Exposure {nominal_shutter * 0.1:.1f}ms locked)...")
             self.device.set_control("exposure_time_absolute", nominal_shutter)
             time.sleep(0.08)
 
@@ -470,7 +527,7 @@ class CameraOptimizer:
             elif best_metrics.composite_score > 0:
                 improvement = 100.0
 
-            report("Complete", 1.0, f"Optimization finished! Quality score: {best_metrics.composite_score}/100 (+{improvement}%)", frame=optimized_frame)
+            report("Complete", 1.0, f"Optimization finished! Quality score: {best_metrics.composite_score}/100 ({improvement:+.1f}%)", frame=optimized_frame)
 
             return OptimizationResult(
                 camera_node=self.device.dev_node,

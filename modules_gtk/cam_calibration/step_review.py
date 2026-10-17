@@ -511,9 +511,7 @@ class ReviewStep:
 
             if self.active_review_mode == "after" and res:
                 frame = res.optimized_frame
-                badge_sign = "+" if res.improvement_percentage >= 0 else ""
-                badge_txt = f"{badge_sign}{res.improvement_percentage:.0f}% Sharper"
-                badge_cls = "status-pill-ok" if res.improvement_percentage >= 0 else "status-pill-warn"
+                badge_txt, badge_cls = res.badge()
             else:
                 frame = res.initial_frame if res else base_frame
                 badge_txt = "Default"
@@ -607,7 +605,6 @@ class ReviewStep:
                 if res:
                     s_init = res.initial_settings
                     s_opt = res.optimized_settings
-                    sign = "+" if res.improvement_percentage >= 0 else ""
 
                     self.rev_detail_badge_before.set_text("Default")
                     self.rev_detail_badge_before.set_css_classes(["status-pill-warn"])
@@ -615,8 +612,9 @@ class ReviewStep:
                         f"Exposure: {s_init.exposure_absolute * 0.1:.1f}ms | Gain: {s_init.gain} | Contrast: {s_init.contrast} | Sharpness: {s_init.sharpness}"
                     )
 
-                    self.rev_detail_badge_after.set_text(f"{sign}{res.improvement_percentage:.0f}% Sharper")
-                    self.rev_detail_badge_after.set_css_classes(["status-pill-ok" if res.improvement_percentage >= 0 else "status-pill-warn"])
+                    badge_txt, badge_cls = res.badge()
+                    self.rev_detail_badge_after.set_text(badge_txt)
+                    self.rev_detail_badge_after.set_css_classes([badge_cls])
                     self.rev_detail_lbl_after.set_text(
                         f"Exposure: {s_opt.exposure_absolute * 0.1:.1f}ms | Gain: {s_opt.gain} | Contrast: {s_opt.contrast} | Sharpness: {s_opt.sharpness}"
                     )
@@ -628,8 +626,13 @@ class ReviewStep:
     def _apply_and_finish(self):
         """Save calibrated values directly to camera hardware and enable CameraManualService boot unit."""
         applied_nodes = []
+        kept_nodes = []
         for dev_node, res in self.view.results.items():
             cam = next((c for c in self.view.cameras if c.dev_node == dev_node), None)
+            if cam and not res.is_improvement:
+                logger.info("Keeping current settings on %s: no measurable gain (%.1f%%)", dev_node, res.improvement_percentage)
+                kept_nodes.append(dev_node)
+                continue
             if cam:
                 applied_nodes.append(cam.dev_node)
                 try:
@@ -642,7 +645,7 @@ class ReviewStep:
 
         # Persist across reboots via the single unified SUIT camera boot service
         all_nodes = [c.dev_node for c in self.view.cameras] if self.view.cameras else applied_nodes
-        if all_nodes:
+        if applied_nodes and all_nodes:
             CameraManualService.enable_boot_service(all_nodes)
 
         if getattr(self.view, "_autodarts_was_running", False) or SystemdManager._autodarts_paused_by_suit:
@@ -650,7 +653,13 @@ class ReviewStep:
             self.view._autodarts_was_running = False
 
         if hasattr(self.view, "toast_overlay"):
-            self.view.toast_overlay.add_toast(Adw.Toast(title="Calibrated settings applied and saved to Manual Controls"))
+            if applied_nodes:
+                msg = f"Applied calibrated settings to {len(applied_nodes)} camera(s)"
+                if kept_nodes:
+                    msg += f"; kept {len(kept_nodes)} unchanged (no gain)"
+            else:
+                msg = "No camera improved – current settings kept"
+            self.view.toast_overlay.add_toast(Adw.Toast(title=msg))
 
         self.view._go_to_dashboard()
 

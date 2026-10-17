@@ -13,6 +13,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Gtk, GLib, Adw
 
+from core.board_detector import get_autodarts_resolution
 from core.v4l2_device import V4L2Device
 from modules_gtk.cv_gtk_utils import frame_to_pixbuf
 
@@ -272,20 +273,20 @@ class BaselineStep:
             with self._lock:
                 latest = dict(self._latest_live_frames)
 
+            # Capture at the resolution Autodarts (and the optimizer) uses, so the empty-board
+            # reference lines up pixel-for-pixel with the calibration frames.
+            cap_w, cap_h = get_autodarts_resolution()
             for cam in self.view.cameras:
-                if cam.dev_node in latest and latest[cam.dev_node] is not None:
-                    f = latest[cam.dev_node]
-                    if f.shape[:2] != (960, 1280):
-                        f = cv2.resize(f, (1280, 960), interpolation=cv2.INTER_LINEAR)
+                f = None
+                try:
+                    f = V4L2Device(cam.dev_node).capture_frame(width=cap_w, height=cap_h, warmup_frames=5)
+                except Exception as e:
+                    logger.error("Failed to capture baseline on %s: %s", cam.dev_node, e)
+                if f is None and latest.get(cam.dev_node) is not None:
+                    logger.warning("Using live preview frame as baseline for %s", cam.dev_node)
+                    f = cv2.resize(latest[cam.dev_node], (cap_w, cap_h), interpolation=cv2.INTER_LINEAR)
+                if f is not None:
                     captured[cam.dev_node] = f
-                else:
-                    try:
-                        vdev = V4L2Device(cam.dev_node)
-                        f = vdev.capture_frame(width=1280, height=960, warmup_frames=2)
-                        if f is not None:
-                            captured[cam.dev_node] = f
-                    except Exception as e:
-                        logger.error("Failed to capture baseline on %s: %s", cam.dev_node, e)
 
             GLib.idle_add(self._on_capture_finished, captured)
 

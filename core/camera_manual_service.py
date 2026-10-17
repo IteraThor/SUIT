@@ -1,4 +1,6 @@
+import glob
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -15,6 +17,48 @@ class CameraManualService:
     DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_PATH
     SERVICE_NAME = "suit-camera-settings.service"
     USER_UNIT_PATH = Path.home() / ".config" / "systemd" / "user" / SERVICE_NAME
+
+    BY_PATH_DIR = "/dev/v4l/by-path"
+
+    @classmethod
+    def stable_camera_path(cls, device_path: str) -> str:
+        """Map /dev/videoN to its /dev/v4l/by-path link, which survives USB re-enumeration.
+
+        Video node numbers can swap between boots, and identical cameras may share a serial
+        number, so the physical USB port path is the only reliable identity.
+        """
+        if device_path.startswith(cls.BY_PATH_DIR):
+            return device_path
+        try:
+            real = os.path.realpath(device_path)
+            for link in sorted(glob.glob(os.path.join(cls.BY_PATH_DIR, "*"))):
+                if os.path.realpath(link) == real:
+                    return link
+        except OSError:
+            pass
+        return device_path
+
+    @classmethod
+    def lookup_camera_settings(cls, camera_settings: dict, device_path: str) -> dict | None:
+        """Find a camera's saved settings whether they were keyed by port path or legacy /dev/videoN."""
+        if not camera_settings:
+            return None
+        stable = cls.stable_camera_path(device_path)
+        if stable in camera_settings:
+            return camera_settings[stable]
+        if not stable.startswith(cls.BY_PATH_DIR):
+            # Port path unavailable (camera unplugged or no udev links); fall back to the node name
+            return camera_settings.get(device_path)
+        # Legacy keys are only trusted when they do not belong to another camera's port
+        legacy = camera_settings.get(device_path)
+        if legacy is not None and not any(k.startswith(cls.BY_PATH_DIR) for k in camera_settings):
+            return legacy
+        return None
+
+    @classmethod
+    def normalize_camera_settings(cls, camera_settings: dict) -> dict:
+        """Re-key a {device: settings} map by stable port path."""
+        return {cls.stable_camera_path(dev): val for dev, val in camera_settings.items()}
 
     @classmethod
     def parse_v4l2_controls(cls, raw_output: str) -> dict[str, dict]:
@@ -93,7 +137,7 @@ class CameraManualService:
         for dev in cameras:
             ctrls_str = cls.get_camera_control_settings_string(dev)
             if ctrls_str:
-                exec_lines.append(f"ExecStart=-{v4l2_bin} -d {dev} --set-ctrl={ctrls_str}")
+                exec_lines.append(f"ExecStart=-{v4l2_bin} -d {cls.stable_camera_path(dev)} --set-ctrl={ctrls_str}")
 
         exec_section = "\n".join(exec_lines) if exec_lines else "ExecStart=/bin/true"
         return f"""[Unit]
@@ -282,7 +326,7 @@ WantedBy=default.target
             data = cls.get_profiles_data(target)
             if "profiles" not in data:
                 data["profiles"] = {}
-            data["profiles"][name] = camera_settings
+            data["profiles"][name] = cls.normalize_camera_settings(camera_settings)
             if set_active:
                 data["_active_profile"] = name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -360,7 +404,7 @@ WantedBy=default.target
 
         prof_cams = profiles[name]
         for dev in cameras:
-            settings = prof_cams.get(dev)
+            settings = cls.lookup_camera_settings(prof_cams, dev)
             if settings:
                 vdev = V4L2Device(dev)
                 vdev.set_controls_dict(settings)
@@ -397,8 +441,8 @@ WantedBy=default.target
         active_name = data.get("_active_profile", "CAM-librator")
         if active_name == "Default":
             active_name = "CAM-librator"
-        cams = data.get("profiles", {}).get(active_name, {})
-        cams[device_path] = settings
+        cams = cls.normalize_camera_settings(data.get("profiles", {}).get(active_name, {}))
+        cams[cls.stable_camera_path(device_path)] = settings
         return cls.save_profile(active_name, cams, config_path=target, set_active=True)
 
     @classmethod

@@ -136,7 +136,17 @@ class V4L2Device:
         if not self._initial_snapshot:
             logger.warning("No snapshot available to restore on %s", self.dev_node)
             return False
-        return self.set_controls_dict(self._initial_snapshot)
+        snap = self._initial_snapshot
+        # set_controls_dict skips manual values the target auto modes would reject; restore them
+        # first while manual mode still allows it, so the snapshot round-trips exactly.
+        for auto_k, manual_k in (("auto_exposure", "exposure_time_absolute"),
+                                 ("white_balance_automatic", "white_balance_temperature")):
+            auto_val = snap.get(auto_k)
+            manual_on = 1 if auto_k == "auto_exposure" else 0
+            if auto_val is not None and auto_val != manual_on and manual_k in snap:
+                self.set_control(auto_k, manual_on)
+                self.set_control(manual_k, snap[manual_k])
+        return self.set_controls_dict(snap)
 
     def get_control(self, name: str) -> Optional[int]:
         """Get the current integer value of a V4L2 control."""

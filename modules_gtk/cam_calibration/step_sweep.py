@@ -245,9 +245,7 @@ class SweepStep:
         if dev_node in self.sweep_cam_widgets:
             w = self.sweep_cam_widgets[dev_node]
             w["card"].remove_css_class("active-calibrating")
-            sign = "+" if result.improvement_percentage >= 0 else ""
-            badge_text = f"{sign}{result.improvement_percentage:.0f}% Sharper"
-            badge_cls = "status-pill-ok" if result.improvement_percentage >= 0 else "status-pill-warn"
+            badge_text, badge_cls = result.badge()
             w["badge"].set_text(badge_text)
             w["badge"].set_css_classes([badge_cls])
             w["status_lbl"].set_text(f"Optimal Gain: {result.optimized_settings.gain} | Exposure: {result.optimized_settings.exposure_absolute * 0.1:.1f}ms")
