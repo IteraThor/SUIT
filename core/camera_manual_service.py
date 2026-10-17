@@ -187,8 +187,17 @@ WantedBy=default.target
             healed = False
 
             # Check for legacy cyclic ordering
-            if "After=default.target" in content:
-                content = re.sub(r"(?m)^After=default\.target\r?\n?", "", content)
+            def _strip_default_target(match: re.Match) -> str:
+                tokens = [t for t in match.group(1).split() if t != "default.target"]
+                return f"After={' '.join(tokens)}\n" if tokens else ""
+
+            new_content = re.sub(
+                r"(?m)^[ \t]*After[ \t]*=([^\r\n]*\bdefault\.target\b[^\r\n]*)\r?\n?",
+                _strip_default_target,
+                content,
+            )
+            if new_content != content:
+                content = new_content
                 healed = True
 
             # Ensure Before=autodarts.service is present so camera controls apply before Autodarts

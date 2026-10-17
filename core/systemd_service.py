@@ -226,13 +226,16 @@ class SystemdManager:
         return SystemdService.start_unit("autodarts.service")
 
     @classmethod
-    def pause_autodarts(cls) -> bool:
-        """Pause autodarts.service if active, tracking that SUIT paused it."""
+    def pause_autodarts(cls, settle: bool = True) -> bool:
+        """Pause autodarts.service if active, tracking that SUIT paused it.
+
+        Pass settle=False when calling from the GTK main thread to skip the blocking settle delay.
+        """
         if cls.is_autodarts_active():
             cls._autodarts_paused_by_suit = True
             logger.info("Pausing autodarts.service to release camera locks (tracked by SUIT)")
             stopped = cls.stop_autodarts()
-            if stopped:
+            if stopped and settle:
                 # Brief sleep to allow camera device drivers and kernel V4L2 buffers to be fully released
                 time.sleep(0.5)
             return stopped

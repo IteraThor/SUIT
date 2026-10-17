@@ -2,6 +2,8 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw, Gdk, GLib
+import importlib
+import sys
 import time
 import threading
 from pathlib import Path
@@ -136,17 +138,17 @@ class SuitWindow(Adw.ApplicationWindow):
         so that tapping the Camera Focus menu card is instantaneous on the first click."""
         def _bg_prewarm():
             time.sleep(0.4)  # Let main menu render smoothly first
+            # Auto-heal boot services (e.g. after CLI git pull); independent of OpenCV availability
+            try:
+                UpdateService.ensure_camera_boot_service()
+                UpdateService.ensure_display_autostart()
+            except Exception as e:
+                logger.debug("Background service heal notice: %s", e)
+
             try:
                 # Pre-import heavy native C extensions in background thread
                 import cv2  # noqa: F401
                 from modules_gtk.camera_focus_view import CameraFocusView
-
-                # Auto-heal boot services in background (e.g. after CLI git pull updates)
-                try:
-                    UpdateService.ensure_camera_boot_service()
-                    UpdateService.ensure_display_autostart()
-                except Exception as e:
-                    logger.debug("Background service heal notice: %s", e)
 
                 def _init_page():
                     if not self.focus_page:
@@ -303,6 +305,45 @@ class SuitWindow(Adw.ApplicationWindow):
             dialog.add_response("ok", "OK")
             dialog.present(self)
 
+    def _prompt_install_opencv(self, tool_name, retry_cb):
+        dialog = Adw.AlertDialog(
+            heading="OpenCV Required",
+            body=f"{tool_name} requires OpenCV (python3-opencv)."
+        )
+        dialog.add_response("cancel", "Later")
+        dialog.add_response("install", "Install Now")
+        dialog.set_response_appearance("install", Adw.ResponseAppearance.SUGGESTED)
+
+        def on_resp(d, resp):
+            if resp != "install":
+                return
+            self.show_toast("Installing python3-opencv...")
+
+            def worker():
+                return UpdateService.install_requirements(["python3-opencv"])
+
+            def on_done(res):
+                ok, msg = res
+                if not ok:
+                    self.show_toast(msg)
+                    return
+                # Freshly installed system modules need fresh import finders; a partially failed
+                # import may also be cached, so verify before retrying to avoid a dialog loop.
+                importlib.invalidate_caches()
+                sys.modules.pop("cv2", None)
+                try:
+                    import cv2  # noqa: F401
+                except ImportError:
+                    self.show_toast("OpenCV installed. Please restart SUIT to use this tool.")
+                    return
+                self.show_toast(msg)
+                retry_cb()
+
+            run_async(worker, on_done=on_done)
+
+        dialog.connect("response", on_resp)
+        dialog.present(self)
+
     def open_cam_calibration_page(self):
         try:
             if not self.cam_calibration_page:
@@ -313,28 +354,7 @@ class SuitWindow(Adw.ApplicationWindow):
                 self.cam_calibration_page.on_page_opened()
         except ImportError as e:
             logger.exception("Camera Optimizer unavailable due to missing dependency: %s", e)
-            dialog = Adw.AlertDialog(
-                heading="OpenCV Required",
-                body="Camera Optimizer requires OpenCV (python3-opencv)."
-            )
-            dialog.add_response("cancel", "Later")
-            dialog.add_response("install", "Install Now")
-            dialog.set_response_appearance("install", Adw.ResponseAppearance.SUGGESTED)
-
-            def on_resp(d, resp):
-                if resp == "install":
-                    self.show_toast("Installing python3-opencv...")
-                    def worker():
-                        return UpdateService.install_requirements(["python3-opencv"])
-                    def on_done(res):
-                        ok, msg = res
-                        self.show_toast(msg)
-                        if ok:
-                            self.open_cam_calibration_page()
-                    run_async(worker, on_done=on_done)
-
-            dialog.connect("response", on_resp)
-            dialog.present(self)
+            self._prompt_install_opencv("Camera Optimizer", self.open_cam_calibration_page)
         except Exception as e:
             logger.exception("Failed to open Camera Optimizer: %s", e)
             dialog = Adw.AlertDialog(
@@ -354,28 +374,7 @@ class SuitWindow(Adw.ApplicationWindow):
                 self.focus_page.on_page_opened()
         except ImportError as e:
             logger.exception("Camera Focus Tool unavailable due to missing dependency: %s", e)
-            dialog = Adw.AlertDialog(
-                heading="OpenCV Required",
-                body="Camera Focus Tool requires OpenCV (python3-opencv)."
-            )
-            dialog.add_response("cancel", "Later")
-            dialog.add_response("install", "Install Now")
-            dialog.set_response_appearance("install", Adw.ResponseAppearance.SUGGESTED)
-
-            def on_resp(d, resp):
-                if resp == "install":
-                    self.show_toast("Installing python3-opencv...")
-                    def worker():
-                        return UpdateService.install_requirements(["python3-opencv"])
-                    def on_done(res):
-                        ok, msg = res
-                        self.show_toast(msg)
-                        if ok:
-                            self.open_focus_page()
-                    run_async(worker, on_done=on_done)
-
-            dialog.connect("response", on_resp)
-            dialog.present(self)
+            self._prompt_install_opencv("Camera Focus Tool", self.open_focus_page)
         except Exception as e:
             logger.exception("Failed to open Camera Focus Tool: %s", e)
             dialog = Adw.AlertDialog(
