@@ -95,6 +95,34 @@ def apply_edge_contrast_filter(frame: np.ndarray) -> np.ndarray:
     return cv2.applyColorMap(mag, cv2.COLORMAP_VIRIDIS)
 
 
+def _sobel_magnitude(img: np.ndarray) -> np.ndarray:
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    g = gray.astype(np.float32)
+    return cv2.magnitude(cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3))
+
+
+def edge_strength_pair(
+    before: Optional[np.ndarray], after: Optional[np.ndarray]
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Colorized Sobel edge maps of two crops on ONE shared brightness scale.
+
+    The scale comes from the stronger of the two (99.5th percentile), so neither picture clips and
+    a pair is directly comparable in absolute edge strength. Read the SHAPE: a sharp edge is a thin
+    line, ringing is a second line beside it, sensor noise is speckle. Overall brightness is not a
+    quality measure: tuning that removes clipped glare lowers gradients on purpose. Crops are not
+    blurred first, so noise stays visible. A missing crop stays None.
+    """
+    mags = [None if im is None or im.size == 0 else _sobel_magnitude(im) for im in (before, after)]
+    peaks = [float(np.percentile(m, 99.5)) for m in mags if m is not None]
+    if not peaks:
+        return before, after
+    # Floor of ~25 DN step edge (Sobel gain 4): a flat crop must not stretch sensor noise into "edges"
+    scale = 235.0 / max(max(peaks), 100.0)
+    out = [None if m is None else cv2.applyColorMap(np.clip(m * scale, 0, 255).astype(np.uint8), cv2.COLORMAP_VIRIDIS)
+           for m in mags]
+    return out[0], out[1]
+
+
 def apply_noise_inspector_filter(frame: np.ndarray) -> np.ndarray:
     """Isolate high-frequency sensor grain / noise by subtracting low-pass structure and amplifying 7x."""
     if frame is None or frame.size == 0:

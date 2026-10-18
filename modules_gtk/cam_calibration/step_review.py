@@ -16,7 +16,7 @@ from core.optimizer import OptimizationResult
 from core.v4l2_device import V4L2Device
 from modules_gtk.cam_calibration import widgets as W
 from modules_gtk.cam_calibration.camera_source import cam_key
-from modules_gtk.cam_calibration.step_tune import tip_crop
+from modules_gtk.cam_calibration.step_tune import tip_crop, tip_crop_marked
 
 if TYPE_CHECKING:
     from modules_gtk.cam_calibration_view import CamCalibrationView
@@ -101,7 +101,25 @@ def outcome_text(title: str, res: Optional[OptimizationResult]) -> str:
         head = "a clearer picture of the board" if pct >= 10 else "a slightly clearer picture"
         return f"{title}: {head}. {_what_changed(res)}"
     head = "tips are much clearer" if pct >= 25 else "tips are clearer" if pct >= 10 else "tips are a little clearer"
-    return f"{title}: {head}. {_what_changed(res)}"
+    return f"{title}: {head}. {_what_changed(res)}{_faint_note(res)}"
+
+
+def _faint_note(res: OptimizationResult) -> str:
+    """One sentence, only for good news: a tip this camera could not see became visible.
+
+    A tip that stays too faint is already said by its column ("Tip 1 · too faint", picture marked
+    Estimated); repeating it here would overflow the narrow text slot.
+    """
+    now_visible = [hp.dart_id for hp in res.hidden_probe if hp.became_visible]
+    if not now_visible:
+        return ""
+    verb = "is" if len(now_visible) == 1 else "are"
+    return f" Tip {_join_ids(now_visible)} {verb} visible now."
+
+
+def _join_ids(ids) -> str:
+    ids = [str(i) for i in ids]
+    return ", ".join(ids[:-1]) + " and " + ids[-1] if len(ids) > 1 else ids[0]
 
 
 def board_spots(res: OptimizationResult, shape) -> List[Tuple[float, float]]:
@@ -116,6 +134,9 @@ def board_spots(res: OptimizationResult, shape) -> List[Tuple[float, float]]:
     return [(cx, cy - 0.6 * r), (cx, cy), (cx, cy + 0.6 * r)]
 
 
+EDGES_HINT = "Same scale in both rows. Thin line: sharp edge. Double line: ringing. Speckle: noise. Dimmer: less glare."
+
+
 class ReviewStep:
     """Headline, per-camera outcome rows, the tip grid and Apply / Discard."""
 
@@ -124,6 +145,15 @@ class ReviewStep:
         self.moved_banner = W.ResultBanner("warn", "", "", compact=True)
         self.bottom = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.outcome_label = W.wrap_label("", ("review-outcome",), max_chars=30)
+        # Normal / Edges picture switch for the tip close-ups; lives in the action bar so the
+        # right column keeps its height at 980x640
+        self.modes = Gtk.Box(css_classes=["linked", "tip-switcher"])
+        self.normal_btn = Gtk.ToggleButton(label="Normal", active=True)
+        self.edges_btn = Gtk.ToggleButton(label="Edges", group=self.normal_btn)
+        self.edges_btn.connect("toggled", lambda b: self._set_edges(b.get_active()))
+        for b in (self.normal_btn, self.edges_btn):
+            b.set_size_request(110, -1)
+            self.modes.append(b)
         self.again_btn = Gtk.Button(label="Find darts again", halign=Gtk.Align.START)
         self.again_btn.add_css_class("optimizer-btn")
         self.again_btn.connect("clicked", lambda _b: self._find_again())
@@ -133,9 +163,27 @@ class ReviewStep:
 
     # -- step protocol ------------------------------------------------------------------
 
+    def _set_edges(self, on: bool) -> None:
+        self.view.tip_grid.set_edge_mode(on)
+        self._show_outcome(self.view.selected)
+
+    def _show_outcome(self, key: Optional[str]) -> None:
+        """The sentence under the picture switch: the result, or how to read the Edges pictures.
+
+        Both share one slot because the column has no room for a third text block at 980x640.
+        """
+        if key is None:
+            return
+        if self.view.tip_grid.edge_mode:
+            self.outcome_label.set_label(EDGES_HINT)
+        else:
+            self.outcome_label.set_label(outcome_text(self.view.cam_title(key), self.view.results.get(key)))
+
     def enter(self):
         v = self.view
         self._finishing = False
+        self.normal_btn.set_active(True)    # every review starts with the normal pictures
+        v.tip_grid.set_edge_mode(False)
         v.set_main(v.tip_grid)
         keys = [cam_key(c) for c in v.cameras]
         improved = [k for k in keys if k in v.results and v.results[k].is_improvement]
@@ -162,6 +210,7 @@ class ReviewStep:
             top = self.moved_banner
         v.set_panels(top, self.bottom)
 
+        v.action_bar.set_center(self.modes)
         v.action_bar.set_secondary("Discard", callback=self.discard)
         if improved:
             v.action_bar.set_primary("Apply settings", callback=self.apply_settings)
@@ -189,8 +238,7 @@ class ReviewStep:
         if key is None:
             return
         res = v.results.get(key)
-        title = v.cam_title(key)
-        self.outcome_label.set_label(outcome_text(title, res))
+        self._show_outcome(key)
         self.again_btn.set_visible(bool(res is not None and res.darts_moved and not v.board_only))
         grid = v.tip_grid
         if res is None:
@@ -203,12 +251,24 @@ class ReviewStep:
         if tips:
             before: List[Optional[np.ndarray]] = []
             after: List[Optional[np.ndarray]] = []
-            ids = []
+            ids, estimated, markers, now_visible, why = [], [], [], [], []
+            seen_now = {hp.dart_id for hp in res.hidden_probe if hp.became_visible}
             for r in tips[:3]:
                 ids.append(r.dart_id)
-                before.append(tip_crop(before_f, r) if r.visible else None)
-                after.append(tip_crop(after_f, r) if r.visible else None)
-            grid.set_tips(before, after, kept=kept, tip_ids=ids)
+                # A tip the camera cannot see still gets its picture: the crop at the estimated spot,
+                # with a ring on it, so you can look yourself at what is there (a faint point, or
+                # the dart that blocks it) and whether tuning made it visible.
+                bc, mark = tip_crop_marked(before_f, r)
+                ac, _ = tip_crop_marked(after_f, r)
+                # no picture (frame missing) -> no "Estimated" chip over an empty slot
+                estimated.append(not r.visible and bc is not None)
+                why.append("too faint" if r.faint else "hidden")
+                now_visible.append(not kept and r.dart_id in seen_now)
+                before.append(bc)
+                after.append(ac)
+                markers.append(mark)
+            grid.set_tips(before, after, kept=kept, tip_ids=ids, estimated=estimated, markers=markers,
+                          now_visible=now_visible, why=why)
         else:
             spots = board_spots(res, before_f.shape) if before_f is not None else []
             before = [W.crop_square(before_f, p, 180) for p in spots]

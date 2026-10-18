@@ -27,6 +27,10 @@ import numpy as np
 from core.board_detector import BoardDetector, BoardROI, board_mask_from_homography, get_autodarts_resolution
 from core.metrics import (
     HALO_VETO,
+    VIS_MARGINAL_CNR,
+    VIS_MIN_CNR,
+    VIS_MIN_CONTRAST,
+    VIS_MIN_VALID,
     QualityEvaluator,
     QualityMetrics,
     TipROI,
@@ -103,6 +107,48 @@ def _patch_ncc(a: np.ndarray, b: np.ndarray, box: Tuple[int, int, int, int]) -> 
 
 
 @dataclasses.dataclass
+class HiddenProbe:
+    """A tip that is too faint to see, measured at its ESTIMATED position before and after tuning.
+
+    Reported only: faint tips are not part of the score, because a position without a visible tip
+    would just reward whatever noise lands there. `became_visible` needs a clear margin over the
+    visibility threshold on the tuned picture.
+    """
+    dart_id: int
+    before_contrast: float  # DN
+    before_cnr: float
+    after_contrast: float
+    after_cnr: float
+    became_visible: bool = False
+
+
+def probe_faint_tips(tips: Sequence[TipROI], before_burst: Sequence[np.ndarray],
+                     after_burst: Sequence[np.ndarray]) -> List[HiddenProbe]:
+    """Measure every faint tip at its estimated position on two bursts of the same length."""
+    faint = [t for t in (tips or []) if not t.visible and t.faint]
+    if not faint or not before_burst or not after_burst:
+        return []
+    # CNR depends on how many frames are averaged (a single frame has no temporal noise estimate and
+    # reads ~5 on pure noise), so two bursts of different length cannot be compared
+    if len(before_burst) != len(after_burst) or len(before_burst) < 2:
+        return []
+    sb, sa = _gray_stack(before_burst), _gray_stack(after_burst)
+    mb_mean, ma_mean = sb.mean(axis=0), sa.mean(axis=0)
+    out = []
+    for t in faint:
+        mb, ma = tip_metrics(sb, t, mb_mean), tip_metrics(sa, t, ma_mean)
+        # It must pass with a clear margin after tuning and must not have passed before: a tip that
+        # already measures as visible was misjudged earlier, it did not become visible through tuning
+        passes_before = (mb.contrast >= VIS_MIN_CONTRAST and mb.cnr >= VIS_MIN_CNR
+                         and mb.valid_profiles >= VIS_MIN_VALID)
+        became = (ma.contrast >= VIS_MIN_CONTRAST and ma.cnr >= VIS_MARGINAL_CNR
+                  and ma.valid_profiles >= VIS_MIN_VALID and not passes_before)
+        out.append(HiddenProbe(t.dart_id, round(mb.contrast, 1), round(mb.cnr, 1),
+                               round(ma.contrast, 1), round(ma.cnr, 1), bool(became)))
+    return out
+
+
+@dataclasses.dataclass
 class OptimizationResult:
     camera_node: str
     target_kelvin: int
@@ -124,6 +170,7 @@ class OptimizationResult:
     tip_component_after: Optional[float] = None
     veto: Optional[str] = None  # hard veto seen on the B side (diagnostic text)
     details: List[str] = dataclasses.field(default_factory=list)  # technical log for the Details dialog
+    hidden_probe: List[HiddenProbe] = dataclasses.field(default_factory=list)  # faint tips, estimated position
 
     # Below this the gain is within measurement noise, so applying the new settings is not worth it.
     MIN_IMPROVEMENT_PCT = 3.0
@@ -504,12 +551,24 @@ class CameraOptimizer:
         report(STAGE_CHECK, 0.96, "Checking that the darts did not move")
         moved = moved_tips(a2_burst, reference=initial_burst)
 
+        # Reported only: a failure here must never cost the finished measurement, and a moved dart
+        # has no meaningful "estimated position" any more
+        hidden_probe: List[HiddenProbe] = []
+        if tips and not moved:
+            try:
+                hidden_probe = probe_faint_tips(tips, a2_burst, b2_burst)
+            except Exception as e:
+                logger.warning("Faint-tip probe failed on %s: %s", self.device.dev_node, e)
+        for hp in hidden_probe:
+            note("faint tip %d at its estimated position: C %.0f -> %.0f DN, CNR %.1f -> %.1f%s", hp.dart_id,
+                 hp.before_contrast, hp.after_contrast, hp.before_cnr, hp.after_cnr,
+                 " -> VISIBLE" if hp.became_visible else "")
         res = result(initial_metrics=self._metrics(a2_burst, roi, a2), optimized_settings=best.settings,
                      optimized_metrics=self._metrics(b2_burst, roi, b2), optimized_frame=b2_burst[0].copy(),
                      initial_frame=a2_burst[0].copy(), improvement_percentage=improvement,
                      initial_tip_score=a1.tip_score, optimized_tip_score=b2.tip_score, ab_spread_pct=spread_pct,
                      darts_moved=bool(moved), tip_component_before=tip_before, tip_component_after=tip_after,
-                     veto=veto)
+                     veto=veto, hidden_probe=hidden_probe)
         note("decision: %s (needs %+.1f%%)", "apply" if res.is_improvement else "keep", res.required_improvement_pct)
         if res.darts_moved:
             report(STAGE_CHECK, 1.0, "The darts seem to have moved. This camera keeps its settings.", frame=res.optimized_frame)

@@ -54,6 +54,17 @@ def tip_crop(frame: Optional[np.ndarray], roi: TipROI, size: int = 150) -> Optio
     return W.crop_square(frame, (roi.tip[0] - dx * back, roi.tip[1] - dy * back), size)
 
 
+def tip_crop_marked(frame: Optional[np.ndarray], roi: TipROI, size: int = 150):
+    """(crop, marker) like tip_crop, plus the tip's position inside the crop as fractions (x, y)."""
+    crop = tip_crop(frame, roi, size)
+    if crop is None:
+        return None, None
+    dx, dy = roi.direction
+    back = min(size * 0.22, roi.point_len * 0.8)
+    x0, y0, side = W.crop_origin(frame.shape, (roi.tip[0] - dx * back, roi.tip[1] - dy * back), size)
+    return crop, ((roi.tip[0] - x0) / side, (roi.tip[1] - y0) / side)
+
+
 def result_row(res: Optional[OptimizationResult]):
     """(subtitle, chip kind, chip text) of a finished camera in the tuning list."""
     if res is None:

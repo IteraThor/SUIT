@@ -178,6 +178,7 @@ class CamCalibrationView(Adw.Bin):
         if old is not None and self.current_step != name:
             old.leave()
         self.current_step = name
+        self.action_bar.set_center(None)    # a step that wants something there sets it in enter()
         n = STEP_NUMBERS[name]
         self.stepper.set_current(n)
         if self.on_subtitle:

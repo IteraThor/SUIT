@@ -756,6 +756,8 @@ button.compact-btn,
 .tip-crop { border-radius: 8px; background-color: black; }
 .tip-crop .tip-crop-ring { border-radius: 8px; border: 2px solid transparent; }
 .tip-crop-after .tip-crop-ring { border-color: alpha(#57e389, 0.55); }
+.tip-switcher button { min-height: 44px; font-weight: 700; }
+
 .tip-grid-header,
 .tip-grid-label { font-size: 12px; font-weight: 700; color: alpha(@window_fg_color, 0.58); }
 .review-outcome { font-size: 13.5px; color: alpha(@window_fg_color, 0.62); }

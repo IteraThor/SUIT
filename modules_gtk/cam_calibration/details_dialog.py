@@ -1,8 +1,8 @@
 """Camera Optimizer Details dialog: technical values for support and testing.
 
 Everything the main wizard keeps out of sight lives here: settings before/after, scores, the
-A/B spread and vetoes, per-tip metrics, the detector result, the engine log and the
-detector overlay / Edges / Heatmap pictures.
+A/B spread and vetoes, per-tip metrics, the detector result, the engine log, the detector
+overlay and Edges pictures, and the steel-point cross-section before against after.
 """
 
 from __future__ import annotations
@@ -16,8 +16,9 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gtk, Pango
 
-from core.cv_utils import apply_difference_filter, apply_edge_contrast_filter
+from core.cv_utils import apply_edge_contrast_filter
 from core.dart_tip_detector import draw_tip_overlay
+from core.metrics import tip_cross_section
 from core.optimizer import OptimizationResult
 from core.v4l2_device import CameraSettings
 from modules_gtk.cam_calibration import widgets as W
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("cam_librator.details")
 
-PICTURE_MODES = (("overlay", "Detector"), ("normal", "After"), ("edge", "Edges"), ("diff", "Heatmap"))
+PICTURE_MODES = (("overlay", "Detector"), ("normal", "After"), ("edge", "Edges"))
 
 
 def _arrow(a, b, fmt="{}") -> str:
@@ -121,6 +122,14 @@ class DetailsDialog(Adw.Dialog):
         box.append(self._section("Pictures"))
         box.append(self._pictures(titles))
 
+        box.append(self._section("Steel point cross-section"))
+        box.append(W.wrap_label("Brightness across the steel point, before against after, with the "
+                                "surrounding board at 0. Height is the tip contrast (the score counts it "
+                                "only up to 60 DN, so a drop from a much higher value is not a loss), "
+                                "width is the edge width, and a dip beside the peak is ringing.",
+                                ("dim-label", "caption"), max_chars=90))
+        box.append(self._profiles())
+
         box.append(self._section("Engine log"))
         log: List[str] = []
         for k, t in zip(self.keys, titles):
@@ -197,15 +206,30 @@ class DetailsDialog(Adw.Dialog):
             rois = list(res.tips) if res is not None and res.tips else v.tip_rois.get(k, [])
             before = res.initial_tip_score.tips if res is not None and res.initial_tip_score else []
             after = res.optimized_tip_score.tips if res is not None and res.optimized_tip_score else []
+            probes = {hp.dart_id: hp for hp in res.hidden_probe} if res is not None else {}
             for i, r in enumerate(rois):
                 a = before[i] if i < len(before) else None
                 b = after[i] if i < len(after) else None
                 reason = (r.hidden_reason or "").split(" (")[0]
+                if r.faint:
+                    reason = reason.replace(" at the estimated position", "")   # said once, below
                 state = "visible" + (" (marginal)" if r.marginal else "") if r.visible else f"hidden: {reason}"
+                hp = probes.get(r.dart_id)
+                if hp is not None:      # faint tip: numbers at the ESTIMATED position, before -> after
+                    state += " · now visible" if hp.became_visible else " · estimated position"
+                    c_cell = _arrow(hp.before_contrast, hp.after_contrast, "{:.0f}")
+                    cnr_cell = _arrow(hp.before_cnr, hp.after_cnr, "{:.1f}")
+                elif not r.visible and r.faint:
+                    c_cell = _arrow(r.est_contrast or None, None, "{:.0f}")
+                    cnr_cell = _arrow(r.est_cnr or None, None, "{:.1f}")
+                    state += " · estimated position"
+                else:
+                    c_cell = _arrow(a.contrast if a else (r.ref_contrast or None), b.contrast if b else None, "{:.0f}")
+                    cnr_cell = _arrow(a.cnr if a else None, b.cnr if b else None, "{:.1f}")
                 rows.append([
                     v.cam_title(k), str(r.dart_id), state,
-                    _arrow(a.contrast if a else (r.ref_contrast or None), b.contrast if b else None, "{:.0f}"),
-                    _arrow(a.cnr if a else None, b.cnr if b else None, "{:.1f}"),
+                    c_cell,
+                    cnr_cell,
                     _arrow(a.edge_width if a else None, b.edge_width if b else None, "{:.2f}"),
                     _arrow(a.halo if a else None, b.halo if b else None, "{:.2f}"),
                     _arrow(a.spec_clip * 100 if a else None, b.spec_clip * 100 if b else None, "{:.1f} %"),
@@ -218,7 +242,7 @@ class DetailsDialog(Adw.Dialog):
         self.cam_dd = Gtk.DropDown.new_from_strings(list(titles) or ["–"])
         if self.view.selected in self.keys:
             self.cam_dd.set_selected(self.keys.index(self.view.selected))
-        self.cam_dd.connect("notify::selected", lambda *_: self._update_picture())
+        self.cam_dd.connect("notify::selected", lambda *_: self._on_camera_changed())
         controls.append(self.cam_dd)
         self.mode = "overlay"
         first = None
@@ -264,10 +288,46 @@ class DetailsDialog(Adw.Dialog):
             return None
         if self.mode == "edge":
             return apply_edge_contrast_filter(after)
-        if self.mode == "diff":
-            before = res.initial_frame if res is not None else None
-            return apply_difference_filter(before, after) if before is not None else None
         return after
+
+    def _profiles(self) -> Gtk.Widget:
+        self.profile_row = Gtk.Box(spacing=12, homogeneous=True)
+        self.profile_plots = [W.ProfilePlot() for _ in range(3)]
+        for plot in self.profile_plots:
+            self.profile_row.append(plot)
+        self.profile_empty = Gtk.Label(label="No tips to plot (this camera was tuned on the whole board).",
+                                      xalign=0.0)
+        self.profile_empty.add_css_class("dim-label")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.append(self.profile_row)
+        box.append(self.profile_empty)
+        self._update_profiles()
+        return box
+
+    def _on_camera_changed(self) -> None:
+        self._update_picture()
+        self._update_profiles()
+
+    def _update_profiles(self) -> None:
+        idx = self.cam_dd.get_selected()
+        key = self.keys[idx] if self.keys and idx < len(self.keys) else None
+        res = self.view.results.get(key) if key else None
+        tips = [t for t in (res.tips if res is not None and res.tips else []) if t.visible][:3]
+        for i, plot in enumerate(self.profile_plots):
+            if i >= len(tips):
+                plot.set_visible(False)
+                continue
+            roi = tips[i]
+            try:
+                before = tip_cross_section(res.initial_frame, roi)
+                after = before if not res.is_improvement else tip_cross_section(res.optimized_frame, roi)
+            except Exception as e:
+                logger.error("Profile plot failed: %s", e)
+                before = after = None
+            plot.set_visible(True)
+            plot.set_data(f"{self.view.cam_title(key)} · Tip {roi.dart_id}", before, after)
+        self.profile_empty.set_visible(not tips)
+        self.profile_row.set_visible(bool(tips))
 
     def _update_picture(self):
         try:

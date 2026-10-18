@@ -415,6 +415,9 @@ class TipROI:
     ref_contrast: float = 0.0  # tip contrast (DN) when frozen, for the darts-moved check
     hidden_reason: Optional[str] = None  # diagnostic: why the tip is not visible in this camera
     polarity: int = 0  # +1 bright point / -1 dark point vs BOTH flanks, frozen in step 2 (0 = decide per burst)
+    faint: bool = False  # hidden only because the point is too faint (not occluded): worth probing while tuning
+    est_contrast: float = 0.0  # contrast (DN) at the ESTIMATED position, no search; for the probe and Details
+    est_cnr: float = 0.0
 
 
 @dataclasses.dataclass
@@ -571,6 +574,38 @@ def _aligned_halo(prof: np.ndarray, cis: np.ndarray, contrast: float, polarity: 
     # Normalise by the robust per-profile contrast (the aligned median can be near-flat on a
     # weak tip, which made the ratio explode), and cap at 1.
     return float(min(1.0, max([0.0] + sides) / max(contrast, 8.0)))
+
+
+def tip_cross_section(frame_or_frames, roi: TipROI) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """(offsets in px, DN) of the steel point's cross-section, for plotting before against after.
+
+    Perpendicular profiles along the frozen tip axis are aligned on each profile's own shaft centre
+    and combined with the median (like the ringing measurement). The result is shifted so the
+    flanks sit at 0 and flipped so the point always rises upward: the peak height is the tip
+    contrast, the width is the edge width, and an undershoot beside it is ringing. Returns None
+    when no profile has a usable point.
+    """
+    f = frame_or_frames
+    single = isinstance(f, np.ndarray) and (f.ndim == 2 or (f.ndim == 3 and f.shape[2] in (1, 3) and f.dtype != np.float32))
+    stack = _as_stack([f] if single else f)
+    mean = stack.mean(axis=0)
+    prof = sample_profiles(mean, roi.tip, roi.direction, min(PROFILE_LEN, 0.85 * roi.point_len))
+    stats = [_profile_stats(p) for p in prof]
+    cs = np.array([st[0] for st in stats])
+    cis = np.array([st[3] for st in stats], int)
+    if cs.size == 0 or float(np.median(cs)) <= 0:
+        return None
+    use = cs >= 0.5 * float(np.median(cs))
+    if use.sum() < 3:
+        return None
+    R = PROFILE_HALF - CENTER_SEARCH
+    aligned = np.stack([p[ci - R:ci + R + 1] for p, ci in zip(prof[use], cis[use])])
+    m = np.median(aligned, axis=0)
+    base = float(np.median(np.concatenate([m[:3], m[-3:]])))
+    m = m - base
+    if m[R] < 0:
+        m = -m
+    return np.arange(-R, R + 1, dtype=np.float32), m.astype(np.float32)
 
 
 def _line_coverage(gray: np.ndarray, roi: TipROI) -> float:
@@ -904,16 +939,31 @@ def tip_rois_for_camera(det, cam_id: str, stack) -> List[TipROI]:
         shift = math.hypot(r.tip[0] - raw.tip[0], r.tip[1] - raw.tip[1])
         m = tip_metrics(stack, r, mean)
         visible, marginal = tip_visibility(m)
+        # The refinement keeps the best of ~150 candidate positions, so on its own it also "finds" a
+        # ridge (wire, segment edge, barrel shadow) near a tip that is not there: on plain board
+        # spots it passed the test 40-65 % of the time. The detector's projected position is the
+        # only place that is certain to be the tip, so the signal must also be there, unsearched.
+        m_est = tip_metrics(stack, raw, mean)
+        faint_at_est = m_est.contrast < VIS_MIN_CONTRAST or m_est.cnr < VIS_MIN_CNR
+        faint = False
         reason = None
         if not ct.seen_axis or ct.occluded:
             reason = "occluded" if ct.occluded else "axis not seen"
         elif shift > VIS_MAX_REFINE_SHIFT:
-            reason = f"refined {shift:.1f} px away"
+            reason, faint = f"refined {shift:.1f} px away", True
         elif not visible:
-            reason = f"low contrast (C={m.contrast:.0f}, CNR={m.cnr:.1f}, valid={m.valid_profiles:.2f})"
+            reason, faint = f"low contrast (C={m.contrast:.0f}, CNR={m.cnr:.1f}, valid={m.valid_profiles:.2f})", True
+        elif faint_at_est:
+            reason, faint = f"faint at the estimated position (C={m_est.contrast:.0f}, CNR={m_est.cnr:.1f})", True
+        if reason is not None:
+            # A hidden tip keeps the projected position (not the searched one), so its picture and the
+            # probe look at the place where the tip should be.
+            r = dataclasses.replace(raw, polarity=0)
         r.visible = reason is None
         r.marginal = r.visible and marginal
-        r.ref_contrast = float(m.contrast)
+        r.ref_contrast = float(m.contrast if r.visible else m_est.contrast)
         r.hidden_reason = reason
+        r.faint = faint
+        r.est_contrast, r.est_cnr = float(m_est.contrast), float(m_est.cnr)
         out.append(r)
     return out

@@ -16,6 +16,8 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
+from core.cv_utils import edge_strength_pair
+
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
@@ -92,6 +94,16 @@ def frame_to_texture(frame: Optional[np.ndarray], max_w: Optional[int] = None,
                                  GLib.Bytes.new(frame.tobytes()), w * 3)
 
 
+def crop_origin(shape: Tuple[int, int], center: Tuple[float, float], size: int,
+                anchor_y: float = 0.5) -> Tuple[int, int, int]:
+    """(x0, y0, size) of the square crop crop_square takes, so callers can place markers in it."""
+    h, w = shape[:2]
+    size = int(max(8, min(size, w, h)))
+    x0 = int(round(center[0] - size / 2))
+    y0 = int(round(center[1] - size * anchor_y))
+    return max(0, min(w - size, x0)), max(0, min(h - size, y0)), size
+
+
 def crop_square(frame: np.ndarray, center: Tuple[float, float], size: int,
                 anchor_y: float = 0.5) -> Optional[np.ndarray]:
     """Square crop of side `size` around `center`, shifted inside the frame at the edges.
@@ -100,12 +112,7 @@ def crop_square(frame: np.ndarray, center: Tuple[float, float], size: int,
     """
     if frame is None or frame.size == 0:
         return None
-    h, w = frame.shape[:2]
-    size = int(max(8, min(size, w, h)))
-    x0 = int(round(center[0] - size / 2))
-    y0 = int(round(center[1] - size * anchor_y))
-    x0 = max(0, min(w - size, x0))
-    y0 = max(0, min(h - size, y0))
+    x0, y0, size = crop_origin(frame.shape, center, size, anchor_y)
     return frame[y0:y0 + size, x0:x0 + size]
 
 
@@ -650,7 +657,8 @@ class Stepper(Gtk.Box):
 # --------------------------------------------------------------------------- action bar
 
 class ActionBar(Gtk.Box):
-    """The wizard's single bottom bar: secondary button left, primary button right."""
+    """The wizard's single bottom bar: secondary button left, primary button right, and an
+    optional widget (e.g. a picture switch) centred between them."""
 
     def __init__(self):
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -661,7 +669,8 @@ class ActionBar(Gtk.Box):
             b.add_css_class("optimizer-btn")
             b.set_visible(False)
         self.append(self.secondary_button)
-        self.append(Gtk.Box(hexpand=True))
+        self.center = Gtk.Box(hexpand=True, halign=Gtk.Align.FILL)
+        self.append(self.center)
         self.append(self.primary_button)
         self._handlers: Dict[Gtk.Button, Tuple[int, Optional[Callable]]] = {}
 
@@ -695,7 +704,18 @@ class ActionBar(Gtk.Box):
         """Configure the left button. callback replaces any previous one (None removes it)."""
         self._setup(self.secondary_button, label, visible, sensitive, suggested, destructive, callback)
 
+    def set_center(self, widget: Optional[Gtk.Widget] = None) -> None:
+        """Show `widget` in the middle of the bar; None clears it."""
+        while (child := self.center.get_first_child()) is not None:
+            self.center.remove(child)
+        if widget is not None:
+            widget.set_halign(Gtk.Align.CENTER)
+            widget.set_hexpand(True)
+            widget.set_valign(Gtk.Align.CENTER)
+            self.center.append(widget)
+
     def hide_all(self) -> None:
+        self.set_center(None)
         self.set_primary(visible=False)
         self.set_secondary(visible=False, suggested=False)
 
@@ -896,11 +916,34 @@ class TipCrop(Gtk.AspectFrame):
         CameraView._place(self.chip, Gtk.Align.START, Gtk.Align.END, 6)
         self.chip.set_visible(bool(label))
         self.overlay.add_overlay(self.chip)
+        self.marker: Optional[Tuple[float, float]] = None
+        self.marker_area = Gtk.DrawingArea(can_target=False)
+        self.marker_area.set_draw_func(self._draw_marker)
+        self.marker_area.set_visible(False)
+        self.overlay.add_overlay(self.marker_area)
         ring = Gtk.Box(can_target=False)
         ring.add_css_class("tip-crop-ring")
         self.overlay.add_overlay(ring)
         self.set_child(self.overlay)
         self.set_after(after)
+
+    def set_marker(self, pos: Optional[Tuple[float, float]]) -> None:
+        """Dashed ring at pos (x, y as fractions of the crop) marking where a tip should be."""
+        self.marker = pos
+        self.marker_area.set_visible(pos is not None)
+        self.marker_area.queue_draw()
+
+    def _draw_marker(self, _area, cr, w, h) -> None:
+        if self.marker is None:
+            return
+        x, y, r = self.marker[0] * w, self.marker[1] * h, 0.09 * min(w, h)
+        cr.set_dash([4.0, 3.0])
+        # dark outline first, then the yellow ring, so it reads on light and dark pictures
+        for width, color in ((4.0, (0.0, 0.0, 0.0, 0.55)), (2.0, (1.0, 0.85, 0.29, 1.0))):
+            cr.set_line_width(width)
+            cr.set_source_rgba(*color)
+            cr.arc(x, y, r, 0, 6.2832)
+            cr.stroke()
 
     def set_after(self, after: bool) -> None:
         if after:
@@ -934,6 +977,10 @@ class TipGrid(Gtk.Grid):
         self.before: List[TipCrop] = []
         self.after: List[TipCrop] = []
         self._headers: List[Gtk.Label] = []
+        self._raw_before: List[Optional[np.ndarray]] = [None] * n_tips
+        self._raw_after: List[Optional[np.ndarray]] = [None] * n_tips
+        self._empty_text = "Not visible"
+        self.edge_mode = False
         self.before_label = _VerticalLabel("Before")
         self.after_label = _VerticalLabel("After")
         self.attach(self.before_label, 0, 1, 1, 1)
@@ -952,11 +999,19 @@ class TipGrid(Gtk.Grid):
 
     def set_tips(self, before: Sequence[Optional[np.ndarray]], after: Sequence[Optional[np.ndarray]],
                  kept: bool = False, tip_ids: Optional[Sequence[int]] = None,
-                 empty_text: str = "Not visible", headers: Optional[Sequence[str]] = None) -> None:
+                 empty_text: str = "Not visible", headers: Optional[Sequence[str]] = None,
+                 estimated: Optional[Sequence[bool]] = None,
+                 markers: Optional[Sequence[Optional[Tuple[float, float]]]] = None,
+                 now_visible: Optional[Sequence[bool]] = None,
+                 why: Optional[Sequence[str]] = None) -> None:
         """Fill the grid. kept=True labels the second row "Current" without the green ring.
 
         Missing entries (None) show `empty_text`; tip_ids renames the column headers
-        ("Tip N"), headers replaces them with free text (e.g. board areas).
+        ("Tip N"), headers replaces them with free text (e.g. board areas). estimated[i] labels
+        column i "Estimated" (a tip that cannot be seen: the picture shows where it should be) and
+        markers[i] draws a dashed ring at that spot in both rows; why[i] is the header note of such
+        a column ("too faint" by default, e.g. "hidden" when another dart is in the way), and
+        now_visible[i] replaces it with "visible now" (tuning made the tip visible).
         """
         self.after_label.set_text("Current" if kept else "After")
         # Columns past the given tips (e.g. only 2 darts) stay in the layout, so the crops keep
@@ -966,17 +1021,106 @@ class TipGrid(Gtk.Grid):
             shown = 1.0 if i < used else 0.0
             for w in (self._headers[i], self.before[i], self.after[i]):
                 w.set_opacity(shown)
-            b = before[i] if i < len(before) else None
-            a = after[i] if i < len(after) else None
-            self.before[i].set_crop(b, empty_text)
-            self.after[i].set_crop(a, empty_text)
+            self._raw_before[i] = before[i] if i < len(before) else None
+            self._raw_after[i] = after[i] if i < len(after) else None
             self.after[i].set_after(not kept)
+            est = bool(estimated[i]) if estimated is not None and i < len(estimated) else False
+            mark = markers[i] if markers is not None and i < len(markers) else None
+            seen_now = bool(now_visible[i]) if now_visible is not None and i < len(now_visible) else False
+            note = why[i] if why is not None and i < len(why) and why[i] else "too faint"
+            for crop in (self.before[i], self.after[i]):
+                crop.set_label("Estimated" if est else "")
+                crop.set_marker(mark if est else None)
             if headers is not None and i < len(headers):
                 self._headers[i].set_label(headers[i])
             elif tip_ids is not None and i < len(tip_ids):
-                self._headers[i].set_label(f"Tip {tip_ids[i]}")
+                self._headers[i].set_label(f"Tip {tip_ids[i]}" + ((" · visible now" if seen_now else f" · {note}") if est else ""))
             else:
                 self._headers[i].set_label(f"Tip {i + 1}")
+        self._empty_text = empty_text
+        self._render()
+
+    def set_edge_mode(self, on: bool) -> None:
+        """Show the close-ups as edge maps (one shared scale per Before/After pair) or normally."""
+        if on != self.edge_mode:
+            self.edge_mode = on
+            self._render()
+
+    def _render(self) -> None:
+        for i in range(self._n):
+            b, a = self._raw_before[i], self._raw_after[i]
+            if self.edge_mode:
+                b, a = edge_strength_pair(b, a)
+            self.before[i].set_crop(b, self._empty_text)
+            self.after[i].set_crop(a, self._empty_text)
+
+
+class ProfilePlot(Gtk.DrawingArea):
+    """Cross-section of one steel point, before (grey) against after (green).
+
+    Both curves are shifted so the flanks sit at 0 and the point rises upward, so the height is the
+    tip contrast, the width the edge width, and a dip beside the peak is ringing. Both curves share
+    one vertical scale so they can be compared directly.
+    """
+
+    BEFORE = (0.78, 0.78, 0.82)
+    AFTER = (0.34, 0.89, 0.54)
+
+    def __init__(self, title: str = ""):
+        super().__init__()
+        self.set_content_width(220)
+        self.set_content_height(140)
+        self.set_hexpand(True)
+        self.title = title
+        self.before: Optional[Tuple[np.ndarray, np.ndarray]] = None
+        self.after: Optional[Tuple[np.ndarray, np.ndarray]] = None
+        self.set_draw_func(self._draw)
+
+    def set_data(self, title: str, before, after) -> None:
+        self.title, self.before, self.after = title, before, after
+        self.queue_draw()
+
+    def _draw(self, _area, cr, w, h) -> None:
+        pad_l, pad_r, pad_t, pad_b = 8, 8, 22, 18
+        curves = [(c, col) for c, col in ((self.before, self.BEFORE), (self.after, self.AFTER)) if c is not None]
+        cr.set_source_rgba(1, 1, 1, 0.58)
+        cr.select_font_face("sans-serif")
+        cr.set_font_size(11)
+        cr.move_to(pad_l, 13)
+        cr.show_text(self.title)
+        if not curves:
+            cr.move_to(pad_l, h / 2)
+            cr.show_text("No picture")
+            return
+        xs = curves[0][0][0]
+        lo = min(0.0, min(float(c[1].min()) for c, _ in curves))
+        hi = max(10.0, max(float(c[1].max()) for c, _ in curves))
+        x0, x1 = pad_l, w - pad_r
+        y0, y1 = h - pad_b, pad_t
+
+        def px(x): return x0 + (float(x) - float(xs[0])) / float(xs[-1] - xs[0]) * (x1 - x0)
+        def py(v): return y0 + (float(v) - lo) / (hi - lo) * (y1 - y0)
+
+        cr.set_line_width(1)
+        cr.set_source_rgba(1, 1, 1, 0.14)          # baseline (flank level) and the centre line
+        cr.move_to(x0, py(0)); cr.line_to(x1, py(0)); cr.stroke()
+        cr.move_to(px(0), y1); cr.line_to(px(0), y0); cr.stroke()
+        cr.set_source_rgba(1, 1, 1, 0.45)
+        cr.move_to(x0, h - 5); cr.show_text(f"{int(xs[0])} px")
+        cr.move_to(x1 - 28, h - 5); cr.show_text(f"+{int(xs[-1])} px")
+        cr.set_line_width(2)
+        for (cx, cy), col in curves:
+            cr.set_source_rgb(*col)
+            for i, (xv, yv) in enumerate(zip(cx, cy)):
+                (cr.move_to if i == 0 else cr.line_to)(px(xv), py(yv))
+            cr.stroke()
+        # legend with the peak height (tip contrast in DN) of each curve
+        cr.set_font_size(10.5)
+        legend_x = x1 - 118
+        for n, ((_cx, cy), col) in enumerate(curves):
+            cr.set_source_rgb(*col)
+            cr.move_to(legend_x + n * 60, 13)
+            cr.show_text(f"{'Before' if col == self.BEFORE else 'After'} {float(cy.max()):.0f}")
 
 
 # --------------------------------------------------------------------------- board drawing
