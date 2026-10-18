@@ -1,4 +1,5 @@
-"""Step 1 (Insert darts): live 640x480 preview of every camera and where to put the darts."""
+"""Step 1 (Insert darts): live 640x480 preview of every camera, a picture of the empty board,
+then where to put the darts."""
 
 from __future__ import annotations
 import logging
@@ -19,6 +20,7 @@ logger = logging.getLogger("cam_librator.insert")
 THUMB_INTERVAL_S = 0.5     # list thumbnails refresh slower than the large view
 OPEN_ATTEMPTS = 6          # live stream open attempts before a camera shows "No picture" ...
 OPEN_RETRY_S = 1.0         # ... one second apart
+REFERENCE_FRAMES = 3       # empty-board burst per camera (same length as the search burst)
 
 
 class InsertStep:
@@ -35,6 +37,7 @@ class InsertStep:
         self.open_retry_s = OPEN_RETRY_S
         self._pending = False
         self._last_thumb = 0.0
+        self._capture: Optional[threading.Thread] = None
 
         self.placement = W.PlacementCard()
         self.notice = W.ResultBanner("warn", "", "", compact=True)
@@ -62,6 +65,7 @@ class InsertStep:
             cv.set_status(None)
             return
 
+        v.action_bar.set_secondary(visible=False)
         if v.board_only:
             v.heading.set_text("Check the cameras", "Make sure nothing blocks the board.")
             if v.board_only_reason == "cameras":
@@ -71,11 +75,10 @@ class InsertStep:
             self.notice.set_result("warn", "Tuning on the whole board", body)
             v.set_panels(self.notice, None)
             v.action_bar.set_primary("Start tuning", callback=self._start_board_only)
+        elif not v.reference_frames:
+            self._show_empty_phase()
         else:
-            v.heading.set_text("Put 3 darts in the 20")
-            v.set_panels(self.placement, None)      # the drawing sits above the camera list
-            v.action_bar.set_primary("Find darts", callback=self._find_darts)
-        v.action_bar.set_secondary(visible=False)
+            self._show_darts_phase()
 
         for cam in v.cameras:
             v.camera_list.set_row(cam_key(cam), "Starting the picture", "neutral", "Wait")
@@ -104,6 +107,79 @@ class InsertStep:
             self.view.camera_view.set_title(self.view.cam_title(self.view.selected))
 
     # -- actions ------------------------------------------------------------------------
+
+    def _show_empty_phase(self, failed: Optional[str] = None):
+        v = self.view
+        v.heading.set_text("Take all darts out of the board",
+                           "SUIT first takes a picture of the empty board. It finds the darts by "
+                           "comparing against it.")
+        if failed:
+            self.notice.set_result("bad", "No picture of the empty board", failed)
+            v.set_panels(self.notice, None)
+        else:
+            v.set_panels(None, None)
+        v.action_bar.set_secondary(visible=False)
+        v.action_bar.set_primary("Board is empty", callback=self._capture_reference)
+
+    def _show_darts_phase(self):
+        v = self.view
+        v.heading.set_text("Put 3 darts in the 20")
+        v.set_panels(self.placement, None)      # the drawing sits above the camera list
+        v.action_bar.set_secondary("Retake empty board", callback=self._retake_reference)
+        v.action_bar.set_primary("Find darts", callback=self._find_darts)
+
+    def _retake_reference(self):
+        self.view.reference_frames = {}
+        self._show_empty_phase()
+
+    def _capture_reference(self):
+        v = self.view
+        v.heading.set_text("Taking the picture", "Keep your hands away from the board.")
+        v.action_bar.set_primary("Board is empty", sensitive=False)
+        v.camera_view.set_status("working", "Taking picture")
+        self._capture = threading.Thread(target=self._reference_worker, args=(v.session,), daemon=True,
+                                         name="optimizer-reference")
+        self._capture.start()
+
+    def _reference_worker(self, session: int):
+        v = self.view
+        frames: Dict[str, list] = {}
+        missing = []
+        try:
+            self.stop_live_stream(wait=True)
+            v.wait_for_cameras(own=threading.current_thread())
+            w, h = v.capture_size
+            for cam in list(v.cameras):
+                if session != v.session:
+                    return
+                try:
+                    burst = v.source.capture_burst(cam, REFERENCE_FRAMES, w, h)
+                except Exception as e:
+                    logger.error("Empty-board capture failed on %s: %s", cam.dev_node, e)
+                    burst = []
+                if burst:
+                    frames[cam_key(cam)] = burst
+                else:
+                    missing.append(cam)
+        finally:
+            v.ui(session, self._on_reference_done, frames, missing)
+
+    def _on_reference_done(self, frames: Dict[str, list], missing: list):
+        v = self.view
+        if v.current_step != "insert":
+            return
+        if missing:
+            nums = ", ".join(str(c.index) for c in missing)
+            self._show_empty_phase(f"Camera {nums} did not answer. Tap Board is empty to try again.")
+        else:
+            v.reference_frames = frames
+            self._show_darts_phase()
+        v.camera_view.set_status("live", "Live")
+        self.start_live_stream()
+
+    @property
+    def capture_thread(self) -> Optional[threading.Thread]:
+        return self._capture
 
     def _find_darts(self):
         self.view.show_step("find")

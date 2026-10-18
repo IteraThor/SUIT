@@ -32,6 +32,8 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 UNITS_PER_MM = 1.9
+MERGE_END_PX = 10.0                     # collinear-axis merge: end / top offset from the kept axis line
+MERGE_TOP_PX = 12.0
 BOARD_UNITS = 1000
 # Board-space working grid (px). 500 was tried: it halves the runtime but drops axes on the rig
 # fixtures (tips matched in only 2 cameras), so the grid stays at the calibrated 1000-unit scale.
@@ -48,6 +50,13 @@ WARN_NEED_THREE_CAMERAS = "need_three_cameras"
 WARN_FEWER_DARTS = "fewer_darts"
 WARN_DARTS_CLOSE = "darts_close"
 WARN_HIGH_RESIDUAL = "high_residual"
+
+SIL_MIN_LEN = 50                        # silhouette: a barrel + shaft is straight inside the mask for this long (px)
+SIL_MAX_WIDTH = 32.0                    # widest barrel accepted (px)
+REF_MIN_DIFF = 12.0                     # Lab units; reference mode never thresholds below this
+REF_NOISE_K = 6.0                       # ... nor below this multiple of the median change on the board
+REF_TIP_LOW = 0.45                      # tip walk: the needle continues while the change stays above this part of thr
+REF_TIP_MAX_PX = 40                     # tip walk: never further than this past the mask end
 
 CLOSE_TIPS_MM = 8.0                     # tips nearer than this are touching / robin-hood
 HIGH_RESIDUAL_MM = 3.0                  # axis lines missing each other by more: stale homography?
@@ -254,6 +263,27 @@ def _anomaly_maps(meds: List[np.ndarray], preps: List[dict]) -> List[np.ndarray]
     return out
 
 
+def _reference_evidence(ref: np.ndarray, cur: np.ndarray) -> np.ndarray:
+    """Colour change (Lab distance) between the empty-board reference and the frame with darts.
+
+    Same camera, same settings, so nothing but the darts (and their shadows) changes; a 3x3
+    tolerance absorbs sub-pixel shake on the wires and number ring.
+    """
+    labs = [cv2.cvtColor(cv2.GaussianBlur(f, (0, 0), 0.8).astype(np.float32) / 255.0, cv2.COLOR_BGR2Lab)
+            for f in (ref, cur)]
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    return _tol_diff(labs[0], labs[1], k)
+
+
+def _reference_mask(E: np.ndarray, valid: np.ndarray) -> np.ndarray:
+    """Binary dart mask from reference evidence: a noise-relative threshold, then cleanup."""
+    vals = E[valid]
+    noise = float(np.median(vals)) if vals.size else 1.0
+    thr = max(REF_MIN_DIFF, REF_NOISE_K * noise)
+    E = np.where(valid, E, 0)
+    return _dart_mask(E, thr)
+
+
 def _dart_mask(E: np.ndarray, thr: float = 7.0) -> np.ndarray:
     m = (E > thr).astype(np.uint8) * 255
     m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 11)))
@@ -266,7 +296,8 @@ def _dart_mask(E: np.ndarray, thr: float = 7.0) -> np.ndarray:
     return m
 
 
-def _axes_from_mask(m: np.ndarray, tip_dir: np.ndarray, band: int = 13, up: int = 140, max_dev: float = 15) -> List[dict]:
+def _axes_from_mask(m: np.ndarray, tip_dir: np.ndarray, band: int = 13, up: int = 140, max_dev: float = 40,
+                    corridor: bool = False) -> List[dict]:
     """Dart axes in a binary evidence mask: narrow runs along tip_dir, ending at the barrel end."""
     ang = math.degrees(math.atan2(tip_dir[0], tip_dir[1]))      # rotate so tip_dir -> +y
     Hh, Ww = m.shape
@@ -317,6 +348,7 @@ def _axes_from_mask(m: np.ndarray, tip_dir: np.ndarray, band: int = 13, up: int 
                 hi += 1
             widths.append(hi - lo + 1)
             pts.append((x0 + (lo + hi) / 2.0, ytop + r))
+            centre = (lo + hi) / 2.0       # follow a dart that leans away from the tip direction
         if len(pts) < 35:
             continue
         P = np.array(pts, float)
@@ -344,14 +376,129 @@ def _axes_from_mask(m: np.ndarray, tip_dir: np.ndarray, band: int = 13, up: int 
         dup = False
         for b in out:
             nb = np.array([-b["d"][1], b["d"][0]])
-            if abs((a["end"] - b["end"]) @ nb) < 6 and abs((a["top"] - b["end"]) @ nb) < 10 \
+            if abs((a["end"] - b["end"]) @ nb) < MERGE_END_PX and abs((a["top"] - b["end"]) @ nb) < MERGE_TOP_PX \
                     and (b["end"] - a["end"]) @ b["d"] >= -3:
                 b["length"] = max(b["length"], a["length"] + float((b["end"] - a["end"]) @ b["d"]))
+                dup = True
+                break
+            # A complete silhouette (reference mode) also yields "ends" on the barrel rings and the
+            # flight: any end inside a longer dart's body corridor is part of that dart.
+            behind = (b["end"] - a["end"]) @ b["d"]
+            if corridor and abs((a["end"] - b["end"]) @ nb) < b["width"] / 2 + 4 and 0 < behind < b["length"] + 20:
                 dup = True
                 break
         if not dup:
             out.append(a)
     return out
+
+
+def _axes_from_silhouette(m: np.ndarray, tip_dir: np.ndarray, max_dev: float = 45.0) -> List[dict]:
+    """Dart axes in a complete dart silhouette (reference mode).
+
+    Every pixel on the lower boundary of the mask (no mask just ahead of it along the tip
+    direction) is a candidate barrel end. From each candidate, rays are cast back toward the flight
+    at angles within max_dev of the camera's tip direction; a ray scores the length it stays deep
+    inside the mask (centre and +-3 px both set). The best (end, angle) pairs are the darts: this
+    holds for leaning darts and for darts that touch or overlap in this view, because each barrel
+    is its own straight strip. The axis is then refit sub-pixel on the barrel's perpendicular run
+    centres and the end is walked forward to the last mask pixel on the axis.
+    """
+    H, W = m.shape
+    on = m > 0
+    if on.sum() < 50:
+        return []
+    td = tip_dir / (np.linalg.norm(tip_dir) or 1.0)
+
+    def sample(pts):
+        q = np.round(pts).astype(np.int64)
+        ok = (q[..., 0] >= 0) & (q[..., 0] < W) & (q[..., 1] >= 0) & (q[..., 1] < H)
+        out = np.zeros(q.shape[:-1], bool)
+        out[ok] = on[q[..., 1][ok], q[..., 0][ok]]
+        return out
+
+    # Candidate ends: mask pixels with nothing 3 px ahead along the tip direction, thinned to a 4 px grid.
+    ys, xs = np.nonzero(on)
+    P = np.stack([xs, ys], axis=1).astype(np.float64)
+    ahead = sample(P + 3 * td)
+    P = P[~ahead]
+    if not len(P):
+        return []
+    _, idx = np.unique((P // 4).astype(np.int64), axis=0, return_index=True)
+    P = P[idx]
+
+    base = math.atan2(td[1], td[0])
+    phis = np.radians(np.arange(-max_dev, max_dev + 0.1, 2.0))
+    D = np.stack([np.cos(base + phis), np.sin(base + phis)], axis=1)          # flight -> tip
+    N = np.stack([-D[:, 1], D[:, 0]], axis=1)
+    ts = np.arange(4.0, 124.0, 2.0)
+    # pts[c, a, t] = P[c] - ts[t] * D[a] (+- 3 px sideways)
+    back = P[:, None, None, :] - ts[None, None, :, None] * D[None, :, None, :]
+    inside = sample(back) & sample(back + 3 * N[None, :, None, :]) & sample(back - 3 * N[None, :, None, :])
+    # Run length from the end: first miss (one missing sample tolerated for barrel grooves).
+    miss = ~inside
+    miss2 = miss & np.concatenate([miss[..., 1:], np.ones(miss.shape[:-1] + (1,), bool)], axis=-1)
+    first = np.where(miss2.any(axis=-1), miss2.argmax(axis=-1), len(ts))
+    score = first * 2.0                                                        # px
+    score -= 0.05 * np.abs(np.degrees(phis))[None, :]                         # prefer the tip direction on ties
+
+    def perp_run(c, d):
+        n = np.array([-d[1], d[0]])
+        offs = np.arange(-24, 25)
+        v = sample(c[None, :] + offs[:, None] * n[None, :])
+        c0 = 24
+        if not v[c0]:
+            return None
+        lo = c0
+        while lo > 0 and v[lo - 1]:
+            lo -= 1
+        hi = c0
+        while hi < len(v) - 1 and v[hi + 1]:
+            hi += 1
+        return (offs[lo] + offs[hi]) / 2.0, float(hi - lo + 1)
+
+    axes: List[dict] = []
+    flat = score.ravel().copy()
+    order = np.argsort(-flat)
+    for o in order[:4000]:
+        if flat[o] < SIL_MIN_LEN or len(axes) >= 12:
+            break
+        ci, ai = divmod(int(o), len(phis))
+        p, d = P[ci], D[ai]
+        n = np.array([-d[1], d[0]])
+        if any(abs((p - b["end"]) @ np.array([-b["d"][1], b["d"][0]])) < b["width"] / 2 + 5
+               and -12 < (b["end"] - p) @ b["d"] < b["length"] + 10 for b in axes):
+            continue                                                           # part of a dart already found
+        cs, ws = [], []
+        for t in np.arange(6.0, min(96.0, flat[o]), 2.0):
+            pr = perp_run(p - t * d, d)
+            if pr is not None:
+                cs.append((t, pr[0]))
+                ws.append(pr[1])
+        if len(cs) < 10:
+            continue
+        width = float(np.median(ws))
+        if width > SIL_MAX_WIDTH:
+            continue
+        T = np.array(cs)
+        k1, k0 = np.polyfit(T[:, 0], T[:, 1], 1)
+        res = np.abs(T[:, 1] - (k1 * T[:, 0] + k0))
+        keep = res <= max(1.5, float(np.percentile(res, 75)))
+        if keep.sum() >= 6:
+            k1, k0 = np.polyfit(T[keep, 0], T[keep, 1], 1)
+        # offset(t) = k1 * t + k0 along -d: the refit axis through p + k0 * n with direction d - k1 * n
+        d2 = d - k1 * n
+        d2 = d2 / np.linalg.norm(d2)
+        q = p + k0 * n
+        # Walk forward to the last mask pixel on the axis (the barrel end, or the needle when visible).
+        fw = np.arange(0.0, 40.0, 1.0)
+        hit = sample(q[None, :] + fw[:, None] * d2[None, :])
+        k = 0
+        while k + 1 < len(fw) and (hit[k + 1] or (k + 2 < len(fw) and hit[k + 2])):
+            k += 1
+        end = q + fw[k] * d2
+        length = float(flat[o]) + fw[k]
+        axes.append(dict(end=end, top=end - min(140.0, length) * d2, d=d2, width=width, length=length))
+    return axes
 
 
 def _trace_point(g: np.ndarray, start: np.ndarray, d: np.ndarray, max_len: int = 70) -> Tuple[np.ndarray, float]:
@@ -379,6 +526,12 @@ def _trace_point(g: np.ndarray, start: np.ndarray, d: np.ndarray, max_len: int =
             if gap > 4:
                 break
     return start + last * d, float(last)
+
+
+def _dist_to_segment(x: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+    ab = b - a
+    t = float(np.clip((x - a) @ ab / max(ab @ ab, 1e-9), 0.0, 1.0))
+    return float(np.linalg.norm(x - (a + t * ab)))
 
 
 def _ls_intersect(lines) -> Optional[np.ndarray]:
@@ -418,11 +571,22 @@ def _ui_box(tip, d, L, w, size) -> Tuple[int, int, int, int]:
 # Detection
 # ----------------------------------------------------------------------------------------------
 
+def _burst_median(burst: Sequence[np.ndarray], size: Tuple[int, int]) -> np.ndarray:
+    fr = [f if f.ndim == 3 else cv2.cvtColor(f, cv2.COLOR_GRAY2BGR) for f in burst]
+    fr = [f if (f.shape[1], f.shape[0]) == size else cv2.resize(f, size, interpolation=cv2.INTER_AREA) for f in fr]
+    return _median(fr)
+
+
 def detect_dart_tips(frames: Dict[str, List[np.ndarray]], cams: Dict[str, CameraModel],
-                     expected: int = 3, debug: bool = False) -> TipDetection:
+                     expected: int = 3, debug: bool = False,
+                     references: Optional[Dict[str, List[np.ndarray]]] = None) -> TipDetection:
     """Find the dart tips seen by exactly three calibrated cameras.
 
     `frames` maps camera id -> burst (BGR, capture resolution; 1..N frames, 3 recommended).
+    `references` (same keys) are bursts of the EMPTY board taken with the same settings. With
+    them every camera finds its darts on its own by change detection (robust to leaning,
+    overlapping and dark darts) and the tip is measured in the image; without them the darts are
+    found by 3-camera consensus on the board plane.
     Fewer than 3 usable cameras gives an empty result with WARN_NEED_THREE_CAMERAS.
     """
     t0 = time.perf_counter()
@@ -434,26 +598,33 @@ def detect_dart_tips(frames: Dict[str, List[np.ndarray]], cams: Dict[str, Camera
         ids = ids[:3]
     models = [cams[cid] for cid in ids]
     preps = [_prepare(m) for m in models]
-    meds = []
-    for m in models:
-        fr = [f if f.ndim == 3 else cv2.cvtColor(f, cv2.COLOR_GRAY2BGR) for f in frames[m.id]]
-        fr = [f if (f.shape[1], f.shape[0]) == m.size else cv2.resize(f, m.size, interpolation=cv2.INTER_AREA) for f in fr]
-        meds.append(_median(fr))
-    A = _anomaly_maps(meds, preps)
+    meds = [_burst_median(frames[m.id], m.size) for m in models]
+    use_ref = references is not None and all(references.get(m.id) for m in models)
+    if use_ref:
+        A = [_reference_evidence(_burst_median(references[m.id], m.size), med) for m, med in zip(models, meds)]
+    else:
+        A = _anomaly_maps(meds, preps)
     dbg: Optional[Dict[str, np.ndarray]] = {} if debug else None
 
     per: List[List[dict]] = []
+    ref_thr: List[float] = []
     for i, (m, c, med) in enumerate(zip(models, preps, meds)):
         x0, y0, x1, y1 = c["crop"]
-        Aimg = cv2.remap(A[i], *c["to_image"], cv2.INTER_LINEAR)
-        Aimg[c["far"]] = 0
-        mask = _dart_mask(Aimg)
+        if use_ref:
+            Aimg = A[i][y0:y1, x0:x1]
+            mask = _reference_mask(Aimg, ~c["far"])
+            vals = Aimg[~c["far"]]
+            ref_thr.append(max(REF_MIN_DIFF, REF_NOISE_K * float(np.median(vals)) if vals.size else REF_MIN_DIFF))
+        else:
+            Aimg = cv2.remap(A[i], *c["to_image"], cv2.INTER_LINEAR)
+            Aimg[c["far"]] = 0
+            mask = _dart_mask(Aimg)
         if dbg is not None:
             full = np.zeros((m.size[1], m.size[0]), np.uint8)
             full[y0:y1, x0:x1] = mask
             dbg[f"mask:{m.id}"] = full
             dbg[f"evidence:{m.id}"] = A[i]
-        axes = _axes_from_mask(mask, c["tip_dir"])
+        axes = _axes_from_silhouette(mask, c["tip_dir"]) if use_ref else _axes_from_mask(mask, c["tip_dir"])
         g = cv2.GaussianBlur(cv2.cvtColor(med, cv2.COLOR_BGR2GRAY).astype(np.float32), (0, 0), 0.8)
         off = np.array([x0, y0], float)
         for ax in axes:
@@ -463,6 +634,11 @@ def detect_dart_tips(frames: Dict[str, List[np.ndarray]], cams: Dict[str, Camera
             ax["prior_tip"] = ax["end"] + L * ax["d"]
             ax["trace_tip"], _ = _trace_point(g, ax["end"], ax["d"], max_len=int(1.8 * L))
             ax["anchor"] = h_apply(c["H"], [ax["prior_tip"]])[0]
+            # The evidence mask often stops above the barrel end (steel barrels are dark and low in
+            # contrast), so the tip may lie anywhere between the mask end and the traced point plus
+            # the pose prior: the anchor is that segment, not a single point.
+            ax["anchor_far"] = h_apply(c["H"], [ax["trace_tip"] + L * ax["d"]])[0]
+            ax["anchor_near"] = h_apply(c["H"], [ax["end"]])[0]
             pb = h_apply(c["H"], [ax["end"], ax["end"] - 60 * ax["d"]])
             u = pb[1] - pb[0]
             ax["p"], ax["u"] = pb[0], u / np.linalg.norm(u)        # board line, direction tip -> flight
@@ -481,7 +657,7 @@ def detect_dart_tips(frames: Dict[str, List[np.ndarray]], cams: Dict[str, Camera
             if X is None:
                 continue
             dl = [abs((X - allax[j]["p"]) @ np.array([-allax[j]["u"][1], allax[j]["u"][0]])) for j in comb]
-            da = [np.linalg.norm(X - allax[j]["anchor"]) for j in comb]
+            da = [_dist_to_segment(X, allax[j]["anchor_near"], allax[j]["anchor_far"]) for j in comb]
             along = [(X - allax[j]["p"]) @ allax[j]["u"] for j in comb]
             if max(dl) > 12 or max(da) > 40 or max(along) > 8:
                 continue
@@ -496,7 +672,6 @@ def detect_dart_tips(frames: Dict[str, List[np.ndarray]], cams: Dict[str, Camera
         chosen.append(h)
         used |= set(h["members"])
     chosen = chosen[:expected]
-    chosen.sort(key=lambda h: -math.hypot(h["X"][0] - 500, h["X"][1] - 500))   # outermost first
 
     tips: List[DartTip] = []
     for n, h in enumerate(chosen):
@@ -508,6 +683,10 @@ def detect_dart_tips(frames: Dict[str, List[np.ndarray]], cams: Dict[str, Camera
             ax = members.get(i)
             if ax is not None:
                 d, w = ax["d"], ax["width"]
+                if use_ref:
+                    # The silhouette axis is exact in this camera; the board point carries the
+                    # homography error, so keep only its position along the axis.
+                    p = ax["end"] + ((p - ax["end"]) @ d) * d
             else:
                 d, w = c["tip_dir"], DEFAULT_WIDTH_PX
             L = _point_len_px(c, X)

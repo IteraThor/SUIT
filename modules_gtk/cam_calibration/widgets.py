@@ -238,7 +238,71 @@ class TipOverlay(Gtk.DrawingArea):
         self._tips: List[Tuple[int, float, float, bool]] = []
         self._src = (0.0, 0.0, 1.0, 1.0)      # visible rect, normalised
         self._frame_size = (4.0, 3.0)          # px, only the aspect matters
+        self._on_moved: Optional[Callable[[int, float, float], None]] = None
+        self._drag_idx: Optional[int] = None
+        self._drag_start = (0.0, 0.0)
         self.set_draw_func(self._draw)
+        drag = Gtk.GestureDrag()
+        drag.connect("drag-begin", self._on_drag_begin)
+        drag.connect("drag-update", self._on_drag_update)
+        drag.connect("drag-end", self._on_drag_end)
+        self.add_controller(drag)
+
+    def set_editable(self, on_moved: Optional[Callable[[int, float, float], None]]) -> None:
+        """Let the tip boxes be dragged; on_moved(tip_id, u, v) gets the new normalised frame point.
+
+        None turns dragging off. Only presses on a box are taken: everything else (a tap that
+        zooms the view) still reaches the widgets underneath.
+        """
+        self._on_moved = on_moved
+        self._drag_idx = None
+        self.set_can_target(on_moved is not None)
+
+    def to_frame(self, x: float, y: float, width: int, height: int) -> Tuple[float, float]:
+        """Inverse of to_widget."""
+        fw, fh = self._frame_size
+        sx, sy, sw, sh = self._src
+        src_w, src_h = sw * fw, sh * fh
+        scale = max(width / src_w, height / src_h)
+        off_x = (width - src_w * scale) / 2.0
+        off_y = (height - src_h * scale) / 2.0
+        return (x - off_x) / (fw * scale) + sx, (y - off_y) / (fh * scale) + sy
+
+    def _hit(self, x: float, y: float) -> Optional[int]:
+        w, h = self.get_width(), self.get_height()
+        best, best_d = None, (self.BOX / 2 + 10) ** 2
+        for i, (_tid, u, v, _hid) in enumerate(self._tips):
+            tx, ty = self.to_widget(u, v, w, h)
+            d = (tx - x) ** 2 + (ty - y) ** 2
+            if d <= best_d:
+                best, best_d = i, d
+        return best
+
+    def _on_drag_begin(self, gesture, x, y):
+        idx = self._hit(x, y) if self._on_moved is not None else None
+        if idx is None:
+            gesture.set_state(Gtk.EventSequenceState.DENIED)
+            return
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+        self._drag_idx = idx
+        _tid, u, v, _hid = self._tips[idx]
+        self._drag_start = self.to_widget(u, v, self.get_width(), self.get_height())   # box centre, not the press point
+
+    def _on_drag_update(self, _gesture, dx, dy):
+        if self._drag_idx is None:
+            return
+        w, h = self.get_width(), self.get_height()
+        u, v = self.to_frame(self._drag_start[0] + dx, self._drag_start[1] + dy, w, h)
+        tid, _u, _v, hidden = self._tips[self._drag_idx]
+        self._tips[self._drag_idx] = (tid, min(1.0, max(0.0, u)), min(1.0, max(0.0, v)), hidden)
+        self.queue_draw()
+
+    def _on_drag_end(self, _gesture, _dx, _dy):
+        idx, self._drag_idx = self._drag_idx, None
+        if idx is None or self._on_moved is None:
+            return
+        tid, u, v, _hidden = self._tips[idx]
+        self._on_moved(tid, u, v)
 
     def configure(self, tips, src, frame_size) -> None:
         self._tips = list(tips)
@@ -422,6 +486,20 @@ class CameraView(Gtk.AspectFrame):
         self._tips = list(tips or [])
         self._tips_space = space
         self._sync_overlay()
+
+    def set_tips_editable(self, on_moved: Optional[Callable[[int, float, float], None]]) -> None:
+        """Make the tip boxes draggable. on_moved(tip_id, x, y) gets the new tip in image px of
+        the tips' space; None turns dragging off."""
+        if on_moved is None:
+            self.tip_overlay.set_editable(None)
+            return
+
+        def moved(tid: int, u: float, v: float) -> None:
+            fw, fh = self._frame_size
+            tw, th = self._tips_space or (fw, fh)
+            on_moved(tid, u * tw, v * th)
+
+        self.tip_overlay.set_editable(moved)
 
     def set_zoom(self, rect: Optional[Tuple[float, float, float, float]],
                  space: Optional[Tuple[float, float]] = None) -> None:

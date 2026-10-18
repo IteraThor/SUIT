@@ -20,7 +20,8 @@ from core.dart_tip_detector import (
     darts_close_together,
     detect_dart_tips,
 )
-from core.metrics import TipROI, tip_rois_for_camera
+import dataclasses as _dc
+from core.metrics import TipROI, tip_box, tip_metrics, tip_rois_for_camera, _as_stack, _tip_polarity
 from modules_gtk.cam_calibration import widgets as W
 from modules_gtk.cam_calibration.camera_source import cam_key
 
@@ -191,7 +192,7 @@ class FindStep:
             self._show_result()
 
     def leave(self):
-        pass
+        self.view.camera_view.set_tips_editable(None)
 
     def on_camera_selected(self, key: str):
         if not self.running:
@@ -206,6 +207,7 @@ class FindStep:
         self.zoomed = True
         v.heading.set_text("Looking for the darts", "This takes a few seconds. Keep your hands away from the board.")
         v.set_panels(None, None)
+        v.camera_view.set_tips_editable(None)
         v.camera_view.set_tips([])
         v.camera_view.set_zoom(None)
         v.camera_view.set_hint(None)
@@ -240,7 +242,9 @@ class FindStep:
             models = {k: m for k, m in v.models.items() if k in frames}
             rois: Dict[str, List[TipROI]] = {}
             if len(models) >= 3:
-                det = detect_dart_tips({k: frames[k] for k in models}, models, expected=3)
+                refs = {k: v.reference_frames[k] for k in models if k in v.reference_frames}
+                det = detect_dart_tips({k: frames[k] for k in models}, models, expected=3,
+                                       references=refs if len(refs) == len(models) else None)
                 for k in models:
                     rois[k] = tip_rois_for_camera(det, k, frames[k])
             else:
@@ -291,7 +295,16 @@ class FindStep:
             v.heading.set_text("Ready to tune", "Each camera is tuned on the whole board.")
         else:
             v.heading.set_text("Check the darts SUIT found",
-                               "Yellow boxes mark the tips. Tap a camera to check it.")
+                               "Yellow boxes mark the tips. Drag a box onto its tip to correct it. "
+                               "Tap a camera to check it.")
+        self._apply_outcome(keys)
+        v.select_camera(v.selected)
+        self._show_camera(v.selected)
+
+    def _apply_outcome(self, keys):
+        """Banner, camera rows and buttons from self.outcome."""
+        v = self.view
+        o = self.outcome
         self.banner.set_result(o.kind, o.title, o.body)
         v.set_panels(self.banner, None)
         for k in keys:
@@ -301,8 +314,33 @@ class FindStep:
         v.action_bar.set_secondary("Search again", suggested=bad, callback=self._start_search)
         v.action_bar.set_primary("Start tuning", sensitive=o.can_tune, suggested=not bad,
                                  callback=self._start_tuning)
-        v.select_camera(v.selected)
-        self._show_camera(v.selected)
+
+    def _on_tip_moved(self, dart_id: int, x: float, y: float):
+        """A box was dragged: the tip of this dart in the selected camera is where the user put it."""
+        v = self.view
+        key = v.selected
+        rois = v.tip_rois.get(key or "", [])
+        burst = v.find_frames.get(key or "")
+        idx = next((i for i, r in enumerate(rois) if r.dart_id == dart_id), None)
+        if idx is None or not burst:
+            return
+        stack = _as_stack(burst)
+        mean = stack.mean(axis=0)
+        old = rois[idx]
+        h, w = mean.shape[:2]
+        tip = (float(min(w - 1, max(0.0, x))), float(min(h - 1, max(0.0, y))))
+        new = _dc.replace(old, tip=tip, box=tip_box(tip, mean.shape), visible=True, marginal=False,
+                          hidden_reason=None, faint=False, manual=True)
+        new.polarity = _tip_polarity(mean, new)
+        new.ref_contrast = float(tip_metrics(stack, new, mean).contrast)
+        rois[idx] = new
+        logger.info("Tip %d in %s moved by hand to (%.0f, %.0f)", dart_id, key, tip[0], tip[1])
+        keys = [cam_key(c) for c in v.cameras]
+        numbers = {cam_key(c): str(c.index) for c in v.cameras}
+        self.outcome = classify(v.detection, v.tip_rois, keys, numbers)
+        v.board_only = self.outcome.board_only
+        self._apply_outcome(keys)
+        v.camera_view.set_tips([(r.dart_id, r.tip, not r.visible) for r in rois], space=(w, h))
 
     def _show_camera(self, key: Optional[str]):
         v = self.view
@@ -335,6 +373,7 @@ class FindStep:
         cv.set_zoom(rect, space=(w, h))
         cv.set_frame(frame)
         cv.set_tips([(r.dart_id, r.tip, not r.visible) for r in rois], space=(w, h))
+        cv.set_tips_editable(None if self.running or self.view.board_only else self._on_tip_moved)
         if rect is not None:
             cv.set_hint("Zoomed in · tap for whole board")
         elif boxes:

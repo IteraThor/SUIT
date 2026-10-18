@@ -61,6 +61,7 @@ ISP_LEVELS: Dict[str, Tuple[int, ...]] = {
     "gamma": (300, 340, 380, 420),
 }
 ISP_ORDER = ("sharpness", "contrast", "gamma")
+LUM_MATCH_BAND = 0.07  # candidates stay within this part of the other cameras' board luminance
 
 MOVED_CONTRAST_RATIO = 0.5  # a visible tip whose contrast ON ITS FROZEN AXIS fell below half of the step-2 value moved
 MOVED_MIN_NCC = 0.90  # tip patches of two bursts at the same settings correlating less than this moved
@@ -148,6 +149,17 @@ def probe_faint_tips(tips: Sequence[TipROI], before_burst: Sequence[np.ndarray],
     return out
 
 
+def lum_match_veto(lum: float, ref_lum: float, target: float) -> Optional[str]:
+    """Veto text when a candidate's board luminance is further from the other cameras' than allowed.
+
+    Allowed: within LUM_MATCH_BAND of `target`, or at least as close as the initial settings
+    (`ref_lum`) were, so a camera that starts off-target may still move toward it.
+    """
+    if abs(lum - target) > max(LUM_MATCH_BAND * target, abs(ref_lum - target)):
+        return f"brightness differs from the other cameras ({lum:.0f} vs {target:.0f} DN)"
+    return None
+
+
 @dataclasses.dataclass
 class OptimizationResult:
     camera_node: str
@@ -171,6 +183,13 @@ class OptimizationResult:
     veto: Optional[str] = None  # hard veto seen on the B side (diagnostic text)
     details: List[str] = dataclasses.field(default_factory=list)  # technical log for the Details dialog
     hidden_probe: List[HiddenProbe] = dataclasses.field(default_factory=list)  # faint tips, estimated position
+    board_lum_before: Optional[float] = None  # mean board luminance (DN) with the initial settings
+    board_lum_after: Optional[float] = None  # ... with the tuned settings
+
+    @property
+    def board_lum_final(self) -> Optional[float]:
+        """Board luminance of what the camera runs with after this result is applied (or kept)."""
+        return self.board_lum_after if self.is_improvement else self.board_lum_before
 
     # Below this the gain is within measurement noise, so applying the new settings is not worth it.
     MIN_IMPROVEMENT_PCT = 3.0
@@ -242,12 +261,16 @@ class CameraOptimizer:
         precision_mode: str = "ultra",
         tips: Optional[List[TipROI]] = None,
         homography: Optional[np.ndarray] = None,
+        target_lum: Optional[float] = None,
     ) -> Optional[OptimizationResult]:
         """Tune one camera. Returns None on cancel or capture failure.
 
         `tips` are the frozen TipROIs of this camera from step 2 (tip_rois_for_camera), in image
         px at the Autodarts capture resolution. `homography` (image -> board) gives the r=330
         board mask; without it the calibration file, then the detected board, is used.
+        `target_lum` is the mean board luminance (DN) of the cameras tuned before this one: the
+        three pictures should look alike, so a candidate must stay within LUM_MATCH_BAND of it
+        (or at least not be further from it than the initial settings).
         progress_cb(stage_key, fraction, user_text, frame=None): stage_key is one of
         "brightness", "sensitivity", "detail", "check"; user_text is plain language.
         """
@@ -306,7 +329,7 @@ class CameraOptimizer:
                 return None
 
             return self._run(report, note, check_abort, get_frame, get_burst, precision_mode, tips,
-                             homography, (cap_w, cap_h), details)
+                             homography, (cap_w, cap_h), details, target_lum)
         except _Cancelled:
             logger.info("Optimization cancelled on %s. Restoring camera snapshot.", self.device.dev_node)
             return None
@@ -327,7 +350,7 @@ class CameraOptimizer:
     # ------------------------------------------------------------------------------------------
 
     def _run(self, report, note, check_abort, get_frame, get_burst, precision_mode, tips, homography,
-             cap_size, details) -> Optional[OptimizationResult]:
+             cap_size, details, target_lum: Optional[float] = None) -> Optional[OptimizationResult]:
         initial_burst = get_burst(SEARCH_BURST, flush=4)
         if not initial_burst:
             logger.error("Failed to capture baseline frames from %s", self.device.dev_node)
@@ -382,6 +405,14 @@ class CameraOptimizer:
 
         # Scorer shared by every measurement. The reference must have the same burst length.
         def score(burst: List[np.ndarray], settings: CameraSettings, reference: Optional[_Eval]) -> _Eval:
+            e = score_one(burst, settings, reference)
+            if target_lum and reference is not None and e.veto is None and e.tip_score is not None \
+                    and reference.tip_score is not None:
+                e.veto = lum_match_veto(e.tip_score.board.mean_lum, reference.tip_score.board.mean_lum, target_lum)
+                e.tip_score.veto = e.veto
+            return e
+
+        def score_one(burst: List[np.ndarray], settings: CameraSettings, reference: Optional[_Eval]) -> _Eval:
             ref_ts = reference.tip_score if reference is not None else None
             if use_tips:
                 ts = self.evaluator.evaluate_tips(burst, roi, tips, reference=ref_ts,
@@ -568,7 +599,9 @@ class CameraOptimizer:
                      initial_frame=a2_burst[0].copy(), improvement_percentage=improvement,
                      initial_tip_score=a1.tip_score, optimized_tip_score=b2.tip_score, ab_spread_pct=spread_pct,
                      darts_moved=bool(moved), tip_component_before=tip_before, tip_component_after=tip_after,
-                     veto=veto, hidden_probe=hidden_probe)
+                     veto=veto, hidden_probe=hidden_probe,
+                     board_lum_before=a2.tip_score.board.mean_lum if a2.tip_score else None,
+                     board_lum_after=b2.tip_score.board.mean_lum if b2.tip_score else None)
         note("decision: %s (needs %+.1f%%)", "apply" if res.is_improvement else "keep", res.required_improvement_pct)
         if res.darts_moved:
             report(STAGE_CHECK, 1.0, "The darts seem to have moved. This camera keeps its settings.", frame=res.optimized_frame)

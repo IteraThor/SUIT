@@ -90,6 +90,7 @@ class CamCalibrationView(Adw.Bin):
         self.capture_size = (1280, 960)
         self.detection: Optional[TipDetection] = None
         self.find_frames: Dict[str, List[np.ndarray]] = {}
+        self.reference_frames: Dict[str, List[np.ndarray]] = {}   # empty board, same settings as the search
         self.tip_rois: Dict[str, List[TipROI]] = {}
         self.results: Dict[str, OptimizationResult] = {}
         self.failed: Dict[str, str] = {}               # cam key -> error (Details only)
@@ -220,17 +221,35 @@ class CamCalibrationView(Adw.Bin):
         self.cancel_event = None
         self.detection = None
         self.find_frames.clear()
+        self.reference_frames = {}
         self.tip_rois.clear()
         self.results.clear()
         self.failed.clear()
         self.moved_after_run = []
         self.step_tune.reset()
         self.pause_autodarts()
+        self._start_profile_reset(self.session)
 
         self.camera_list.set_cameras([(cam_key(c), f"Camera {c.index}") for c in self.cameras])
         self.selected = cam_key(self.cameras[0]) if self.cameras else None
         self._load_models()
         self.show_step("insert")
+
+    def _start_profile_reset(self, session: int):
+        """Calibrate from factory camera settings: a profile applied in the manual controls would
+        otherwise be the baseline of every measurement. Workers wait for this thread."""
+        cams = list(self.cameras)
+
+        def _reset():
+            try:
+                if session == self.session and hasattr(self.source, "reset_camera_profile"):
+                    self.source.reset_camera_profile(cams)
+                    logger.info("Reset the manual camera profile to Default before calibration")
+            except Exception as e:
+                logger.error("Could not reset the camera profile: %s", e)
+
+        self.profile_reset_thread = threading.Thread(target=_reset, daemon=True, name="optimizer-profile-reset")
+        self.profile_reset_thread.start()
 
     def _load_models(self):
         try:
@@ -278,7 +297,8 @@ class CamCalibrationView(Adw.Bin):
 
     def camera_workers(self) -> List[threading.Thread]:
         """Worker threads that may still hold a camera (live preview, search burst, tuning)."""
-        threads = (self.step_insert.thread, self.step_find.worker, self.step_tune.worker)
+        threads = (getattr(self, "profile_reset_thread", None), self.step_insert.thread,
+                   self.step_insert.capture_thread, self.step_find.worker, self.step_tune.worker)
         me = threading.current_thread()
         return [t for t in threads if t is not None and t.is_alive() and t is not me]
 

@@ -57,6 +57,11 @@ class CameraSource:
         cams.sort(key=lambda c: c.index)
         return cams
 
+    def reset_camera_profile(self, cams: Sequence[CameraDevice]) -> None:
+        """Apply the Default profile of the manual controls: factory control values, active profile reset."""
+        from core.camera_manual_service import CameraManualService
+        CameraManualService.apply_profile("Default", [c.dev_node for c in cams])
+
     def capture_resolution(self) -> Tuple[int, int]:
         return get_autodarts_resolution()
 

@@ -418,6 +418,7 @@ class TipROI:
     faint: bool = False  # hidden only because the point is too faint (not occluded): worth probing while tuning
     est_contrast: float = 0.0  # contrast (DN) at the ESTIMATED position, no search; for the probe and Details
     est_cnr: float = 0.0
+    manual: bool = False  # placed by hand in step 2: always counts as visible
 
 
 @dataclasses.dataclass
@@ -471,12 +472,12 @@ TIP_WEIGHTS = dict(cnr=0.15, contrast=0.25, sharp=0.40, line=0.20)
 BOARD_WEIGHTS = dict(noise=0.30, motion=0.20, hl=0.30, sh=0.20)
 
 # Visibility (decided once in step 2): C >= 10 DN, >= 60 % valid profiles, CNR >= 6; CNR 6..8 is
-# the margin band. Refinement may move the detector tip sideways by at most 5 px.
+# the margin band. Refinement may move the detector tip sideways by at most 7.5 px (the search stops at 8).
 VIS_MIN_CONTRAST = 10.0
 VIS_MIN_VALID = 0.6
 VIS_MIN_CNR = 6.0
 VIS_MARGINAL_CNR = 8.0
-VIS_MAX_REFINE_SHIFT = 5.0
+VIS_MAX_REFINE_SHIFT = 7.5
 HALO_VETO = 0.22  # calculate_halo_overshoot on the board wires
 TIP_BOX = (120, 120)  # stats box, tip at the bottom-centre third
 
@@ -886,7 +887,42 @@ def refine_tip_axis(frames_or_stack, roi: TipROI, max_shift: int = 8, max_angle_
             score = float(np.median(ridge)) - 0.3 * abs(sh) - 0.2 * abs(ang)
             if score > best[0]:
                 best = (score, tip, (ddx, ddy))
-    return dataclasses.replace(roi, tip=(float(best[1][0]), float(best[1][1])), direction=best[2])
+    tip, (ddx, ddy) = best[1], best[2]
+    a = _snap_along_axis(mean, tip, (ddx, ddy), roi.point_len)
+    tip = (tip[0] - a * ddx, tip[1] - a * ddy)
+    return dataclasses.replace(roi, tip=(float(tip[0]), float(tip[1])), direction=(ddx, ddy))
+
+
+SNAP_MAX_BACK = 35      # px the tip may move back toward the flight (the board plane lies below the steel end)
+SNAP_PROBE_LEN = 12     # px of the profile that must sit on steel
+SNAP_MIN_RIDGE = 8.0    # DN; below this there is no steel to snap onto
+
+
+def _snap_along_axis(mean: np.ndarray, tip, direction, point_len: float) -> int:
+    """How far (px, toward the flight) to move the tip so it sits on the visible end of the steel.
+
+    The detector's tip is where the dart axis meets the calibration plane, which can lie several mm
+    past the steel end (the point is partly in the board, darts lean). Along the axis the first
+    position whose short probe is fully on a ridge is the visible end; the barrel behind it has an
+    equally strong ridge, so the smallest offset that reaches most of the best ridge wins.
+    """
+    dx, dy = direction
+    length = min(SNAP_PROBE_LEN, 0.85 * point_len)
+    c0 = PROFILE_HALF
+    ridges = []
+    for a in range(0, SNAP_MAX_BACK + 1):
+        t = (tip[0] - a * dx, tip[1] - a * dy)
+        prof = sample_profiles(mean, t, (dx, dy), length)
+        centre = prof[:, c0 - 1:c0 + 2].mean(axis=1)
+        bl = np.median(prof[:, c0 - FLANK_OUT:c0 - FLANK_IN + 1], axis=1)
+        br = np.median(prof[:, c0 + FLANK_IN:c0 + FLANK_OUT + 1], axis=1)
+        dl, dr = centre - bl, centre - br
+        ridge = np.where(np.sign(dl) == np.sign(dr), np.minimum(np.abs(dl), np.abs(dr)), 0.0)
+        ridges.append(float(np.median(ridge)))
+    best = max(ridges)
+    if best < SNAP_MIN_RIDGE:
+        return 0
+    return next(a for a, r in enumerate(ridges) if r >= 0.6 * best)
 
 
 def _tip_polarity(mean: np.ndarray, roi: TipROI) -> int:
@@ -921,7 +957,7 @@ def tip_rois_for_camera(det, cam_id: str, stack) -> List[TipROI]:
     """Frozen TipROIs for one camera from a TipDetection, in DartTip.id order.
 
     Each detector tip is refined once on `stack` (frames or a float32 gray stack), then tested for
-    visibility: seen axis and not occluded, refinement shift <= 5 px, C >= 10 DN, >= 60 % valid
+    visibility: seen axis and not occluded, sideways refinement shift <= 7.5 px, C >= 10 DN, >= 60 % valid
     profiles and CNR >= 6 (CNR < 8 marks it marginal).
     """
     stack = _as_stack(stack)
@@ -936,7 +972,8 @@ def tip_rois_for_camera(det, cam_id: str, stack) -> List[TipROI]:
                      box=tip_box(ct.px, shape), point_len=float(ct.point_len), dart_id=int(t.id))
         r = refine_tip_axis(stack, raw)
         r = dataclasses.replace(r, box=tip_box(r.tip, shape), polarity=_tip_polarity(mean, r))
-        shift = math.hypot(r.tip[0] - raw.tip[0], r.tip[1] - raw.tip[1])
+        # Only the sideways part counts: moving along the axis is the snap onto the steel end.
+        shift = abs((r.tip[0] - raw.tip[0]) * -r.direction[1] + (r.tip[1] - raw.tip[1]) * r.direction[0])
         m = tip_metrics(stack, r, mean)
         visible, marginal = tip_visibility(m)
         # The refinement keeps the best of ~150 candidate positions, so on its own it also "finds" a
