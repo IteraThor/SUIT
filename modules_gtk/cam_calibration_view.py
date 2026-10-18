@@ -37,6 +37,7 @@ from core.optimizer import OptimizationResult
 from core.systemd_service import SystemdManager
 from core.v4l2_topology import CameraDevice
 from modules_gtk.cam_calibration import widgets as W
+from modules_gtk.cam_calibration.camera_picker_dialog import CameraPickerDialog, needs_camera_choice
 from modules_gtk.cam_calibration.camera_source import CameraSource, cam_key
 from modules_gtk.cam_calibration.step_find import FindStep
 from modules_gtk.cam_calibration.step_insert import InsertStep
@@ -418,6 +419,14 @@ class CamCalibrationPage(Adw.NavigationPage):
             hb.pack_end(self.details_button)
             self._details_packed = True
         self.view.refresh_cameras()
+        if needs_camera_choice(self.view.cameras):
+            # Only 3 cameras can be calibrated: let the user pick before Autodarts is paused
+            CameraPickerDialog(self.view.cameras, self._on_cameras_chosen, self._on_back).present(self)
+        else:
+            self.view.start_session()
+
+    def _on_cameras_chosen(self, cameras):
+        self.view.cameras = cameras
         self.view.start_session()
 
     def on_page_closed(self):
