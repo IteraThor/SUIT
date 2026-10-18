@@ -16,6 +16,9 @@ from modules_gtk.menu import MainMenuView
 
 logger = get_logger("window")
 
+# Longest the window stays open after a close request while the Camera Optimizer restores a camera
+RESTORE_WAIT_S = 20.0
+
 class SuitWindow(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="SUIT for Fedora")
@@ -77,7 +80,7 @@ class SuitWindow(Adw.ApplicationWindow):
         self.btn_back.set_tooltip_text("Back to Menu")
         self.btn_back.set_size_request(46, 44)
         self.btn_back.set_visible(False)
-        self.btn_back.connect("clicked", lambda b: self.nav_view.pop())
+        self.btn_back.connect("clicked", lambda b: self._on_back_clicked())
         self.header_bar.pack_start(self.btn_back)
 
         # Title Widget
@@ -115,8 +118,18 @@ class SuitWindow(Adw.ApplicationWindow):
         # Handle window close request to cleanly tear down active page & services
         self.connect("close-request", self._on_close_request)
 
+    def _on_back_clicked(self):
+        """Header back: a page may ask first (e.g. Camera Optimizer while tuning)."""
+        page = self.nav_view.get_visible_page()
+        confirm = getattr(page, "confirm_leave", None)
+        if callable(confirm) and confirm(self.nav_view.pop):
+            return
+        self.nav_view.pop()
+
     def _on_close_request(self, *args):
         """Lifecycle hook when window close is requested: cleanly teardown active page."""
+        if getattr(self, "_close_ready", False):
+            return False
         logger.info("Window close requested: running active page cleanup")
         page = self.nav_view.get_visible_page()
         if page and hasattr(page, "on_page_closed"):
@@ -125,13 +138,32 @@ class SuitWindow(Adw.ApplicationWindow):
             except Exception:
                 logger.exception("Error executing on_page_closed on window close")
 
-        # Give any restore thread a brief moment to finish before window destruction
-        if page and hasattr(page, "_restore_thread"):
-            t = getattr(page, "_restore_thread")
-            if t and t.is_alive():
-                t.join(timeout=1.0)
+        # The Camera Optimizer first has to stop mid-measurement and put the camera back. That
+        # can take several seconds, so keep the window (insensitive) until its restore thread is
+        # done instead of exiting with a camera on test settings. Its page may already be popped.
+        threads = []
+        for p in (page, getattr(self, "cam_calibration_page", None)):
+            t = getattr(p, "_restore_thread", None) if p is not None else None
+            if t is not None and t.is_alive() and t not in threads:
+                threads.append(t)
+        if not threads:
+            return False
 
-        return False
+        self.set_sensitive(False)
+        self.title_widget.set_subtitle("Putting the cameras back…")
+        deadline = time.monotonic() + RESTORE_WAIT_S
+
+        def _poll():
+            if any(t.is_alive() for t in threads) and time.monotonic() < deadline:
+                return True
+            if any(t.is_alive() for t in threads):
+                logger.error("Camera restore still running after %.0f s; closing anyway", RESTORE_WAIT_S)
+            self._close_ready = True
+            self.close()
+            return False
+
+        GLib.timeout_add(100, _poll)
+        return True
 
     def _start_background_prewarm(self):
         """Asynchronously pre-warm heavy dependencies (OpenCV, GStreamer, CameraFocusView)

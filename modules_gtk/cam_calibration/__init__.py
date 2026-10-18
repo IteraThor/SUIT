@@ -1,13 +1,13 @@
-"""Camera Optimizer UI Package for SUIT."""
+"""Camera Optimizer UI Package for SUIT (wizard steps, widgets, camera access)."""
 
-from modules_gtk.cam_calibration.step_baseline import BaselineStep
-from modules_gtk.cam_calibration.step_setup import SetupStep
-from modules_gtk.cam_calibration.step_sweep import SweepStep
+from modules_gtk.cam_calibration.step_insert import InsertStep
+from modules_gtk.cam_calibration.step_find import FindStep
+from modules_gtk.cam_calibration.step_tune import TuneStep
 from modules_gtk.cam_calibration.step_review import ReviewStep
 
 __all__ = [
-    "BaselineStep",
-    "SetupStep",
-    "SweepStep",
+    "InsertStep",
+    "FindStep",
+    "TuneStep",
     "ReviewStep",
 ]

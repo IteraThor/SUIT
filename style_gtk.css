@@ -625,54 +625,150 @@ button.compact-btn,
     opacity: 0.85;
 }
 
-.cam-column-card {
-    background-color: alpha(@theme_fg_color, 0.035);
-    border: 1px solid alpha(@theme_fg_color, 0.09);
-    border-radius: 12px;
-    padding: 10px 12px;
-}
+/* ===================== Camera Optimizer v2 (Layout B) ===================== */
+/* Widgets live in modules_gtk/cam_calibration/widgets.py */
 
-.cam-column-card.active-calibrating {
-    border: 2px solid @accent_color;
-    background-color: alpha(@accent_color, 0.05);
-}
-
-.wizard-title {
-    font-size: 1.25em;
-    font-weight: 800;
-}
-
-.wizard-subtitle {
-    font-size: 0.9em;
-    opacity: 0.75;
-}
-
-.wizard-subtitle-danger {
-    font-size: 0.95em;
+/* Stepper */
+.optimizer-stepper { min-height: 32px; }
+.optimizer-stepper .step { font-size: 13px; font-weight: 600; color: alpha(@window_fg_color, 0.55); }
+.optimizer-stepper .step-num {
+    min-width: 24px;
+    min-height: 24px;
+    border-radius: 999px;
+    font-size: 12px;
     font-weight: 700;
-    color: @destructive_color;
-    opacity: 1.0;
+    background-color: alpha(@window_fg_color, 0.10);
 }
+.optimizer-stepper .step-current { color: @window_fg_color; }
+.optimizer-stepper .step-current .step-num { background-color: @accent_bg_color; color: @accent_fg_color; }
+.optimizer-stepper .step-done { color: @window_fg_color; }
+.optimizer-stepper .step-done .step-num { background-color: alpha(@success_color, 0.18); color: @success_color; }
+.optimizer-stepper .step-line {
+    min-width: 16px;
+    min-height: 2px;
+    border-radius: 2px;
+    background-color: alpha(@window_fg_color, 0.10);
+}
+.optimizer-stepper .step-line-done { background-color: alpha(@success_color, 0.45); }
 
-.metric-badge {
-    background-color: alpha(@theme_fg_color, 0.06);
+/* Bottom action bar: one for the whole wizard */
+.optimizer-actionbar {
+    min-height: 72px;
+    padding-left: 24px;
+    padding-right: 24px;
+    border-top: 1px solid alpha(black, 0.30);
+}
+.optimizer-btn {
+    min-height: 48px;
+    padding-left: 22px;
+    padding-right: 22px;
+    border-radius: 10px;
+    font-size: 14.5px;
+    font-weight: 700;
+}
+.optimizer-btn.suggested-action { padding-left: 26px; padding-right: 26px; }
+
+/* Step heading in the right column */
+.step-head .title-3 { font-weight: 800; }
+.step-subtitle { font-size: 13.5px; }
+
+/* Large camera view (CameraView) */
+.cam-frame { border-radius: 12px; background-color: black; }
+.cam-frame .cam-ring { border-radius: 12px; border: 3px solid transparent; }
+.cam-frame-active .cam-ring { border-color: @accent_bg_color; }
+.cam-frame-dim > picture { opacity: 0.45; }
+.cam-caption { font-size: 13px; color: alpha(@window_fg_color, 0.58); }
+
+/* Chips on top of camera images */
+.osd-chip {
+    background-color: alpha(black, 0.66);
+    color: white;
+    border-radius: 999px;
+    min-height: 26px;
+    padding: 0 10px;
+    font-size: 12.5px;
+    font-weight: 700;
+}
+.osd-chip-small { min-height: 20px; padding: 0 7px; font-size: 11px; }
+.chip-dot {
+    min-width: 8px;
+    min-height: 8px;
+    border-radius: 999px;
+    background-color: currentColor;
+}
+.chip-ok { color: #57e389; }
+.chip-warn { color: #f8e45c; }
+.chip-bad { color: #ff7b63; }
+.chip-accent { color: @accent_color; }
+.chip-neutral { color: alpha(@window_fg_color, 0.65); }
+.osd-chip.chip-neutral { color: alpha(white, 0.70); }
+.osd-chip.chip-live { color: white; }
+.chip-live .chip-dot { background-color: #ff5f57; animation: optimizer-pulse 1.6s ease-in-out infinite; }
+@keyframes optimizer-pulse { 50% { opacity: 0.35; } }
+
+/* Tinted status pill (list rows, cards); never hexpand */
+.status-chip {
+    border-radius: 999px;
+    min-height: 24px;
+    padding: 0 10px;
+    font-size: 12.5px;
+    font-weight: 700;
+}
+.status-chip.chip-ok { background-color: alpha(#2ec27e, 0.18); }
+.status-chip.chip-warn { background-color: alpha(#e5a50a, 0.18); }
+.status-chip.chip-bad { background-color: alpha(#e01b24, 0.20); }
+.status-chip.chip-accent { background-color: alpha(@accent_bg_color, 0.22); }
+.status-chip.chip-live { background-color: alpha(#ff5f57, 0.16); color: #ff8a80; }
+.status-chip.chip-neutral { background-color: alpha(@window_fg_color, 0.08); }
+
+/* Tip close-up picture-in-picture */
+.tip-pip {
     border-radius: 8px;
-    padding: 4px 8px;
+    background-color: black;
+    border: 2px solid #ffd94a;
+    box-shadow: 0 0 0 2px alpha(black, 0.6);
 }
 
-.metric-val {
-    font-weight: bold;
-    font-size: 1.0em;
-}
+/* Result banner (step 2) */
+.result-banner { border-radius: 12px; padding: 12px 16px; }
+.result-banner-compact { padding: 10px 12px; }
+.result-banner.result-ok { background-color: alpha(#2ec27e, 0.18); }
+.result-banner.result-warn { background-color: alpha(#e5a50a, 0.18); }
+.result-banner.result-bad { background-color: alpha(#e01b24, 0.20); }
+.result-banner .result-body { font-size: 13.5px; color: alpha(@window_fg_color, 0.78); }
 
-.metric-lbl {
-    font-size: 0.78em;
-    opacity: 0.7;
+/* Progress card (step 3) */
+.progress-card { padding: 14px 16px; }
+.optimizer-progress trough,
+.optimizer-progress progress { min-height: 8px; border-radius: 8px; }
+.stage-chip {
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 12.5px;
+    font-weight: 600;
+    background-color: alpha(@window_fg_color, 0.07);
+    color: alpha(@window_fg_color, 0.58);
 }
+.stage-chip.stage-done { background-color: alpha(#2ec27e, 0.18); color: #57e389; }
+.stage-chip.stage-current { background-color: alpha(@accent_bg_color, 0.35); color: white; }
 
-.big-cta-button {
-    font-weight: 700;
-    font-size: 1.0em;
-    padding: 10px 24px;
-}
+/* Review tip grid (step 4) */
+.tip-crop { border-radius: 8px; background-color: black; }
+.tip-crop .tip-crop-ring { border-radius: 8px; border: 2px solid transparent; }
+.tip-crop-after .tip-crop-ring { border-color: alpha(#57e389, 0.55); }
+.tip-grid-header,
+.tip-grid-label { font-size: 12px; font-weight: 700; color: alpha(@window_fg_color, 0.58); }
+.review-outcome { font-size: 13.5px; color: alpha(@window_fg_color, 0.62); }
 
+/* Camera list rows */
+list.boxed-list.camera-list > row.camera-row { min-height: 60px; padding-top: 0; padding-bottom: 0; }
+list.boxed-list.camera-list > row.camera-row > box.header { min-height: 0; padding-top: 6px; padding-bottom: 6px; }
+list.boxed-list.camera-list > row.camera-row > box.header > box.title { padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; }
+.camera-row label.title { font-size: 15px; font-weight: 600; }
+.camera-row label.subtitle { font-size: 13px; }
+.camera-row .camera-thumb { border-radius: 6px; background-color: black; }
+
+/* Step 1 placement panel */
+.placement-card { padding: 12px; }
+.placement-num { font-weight: 700; min-width: 12px; }
+.placement-text { font-size: 13px; color: alpha(@window_fg_color, 0.65); }
