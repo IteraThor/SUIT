@@ -72,9 +72,8 @@ class InsertStep:
             v.set_panels(self.notice, None)
             v.action_bar.set_primary("Start tuning", callback=self._start_board_only)
         else:
-            v.heading.set_text("Put 3 darts in the 20",
-                               "These are the darkest fields, so they are the hardest for the cameras.")
-            v.set_panels(None, self.placement)
+            v.heading.set_text("Put 3 darts in the 20")
+            v.set_panels(self.placement, None)      # the drawing sits above the camera list
             v.action_bar.set_primary("Find darts", callback=self._find_darts)
         v.action_bar.set_secondary(visible=False)
 
