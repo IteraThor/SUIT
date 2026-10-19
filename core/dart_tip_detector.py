@@ -1,7 +1,8 @@
 """Multi-camera dart tip detector against an empty-board reference.
 
 Pipeline:
- 1. per-pixel median of the burst per camera, for the darts and for the empty-board reference
+ 1. per-pixel median of the burst per camera, for the darts and for the empty-board reference;
+    the reference is mapped onto the darts picture's brightness and colour (auto exposure drifts)
  2. colour change (Lab) between reference and darts in every camera -> dart silhouettes
  3. straight barrel strips in each silhouette, leaning within the camera's tip direction -> dart
     axes; the barrel end is the last silhouette pixel on the axis
@@ -45,13 +46,21 @@ WARN_FEWER_DARTS = "fewer_darts"
 WARN_DARTS_CLOSE = "darts_close"
 WARN_HIGH_RESIDUAL = "high_residual"
 
-SIL_MIN_LEN = 50                        # silhouette: a barrel + shaft is straight inside the mask for this long (px)
+SIL_MIN_LEN_FRAC = 0.025               # silhouette: a barrel + shaft is straight inside the mask for this long (share of the image width; 32 px at 1280)
 SIL_MAX_WIDTH = 32.0                    # widest barrel accepted (px)
 REF_MIN_DIFF = 12.0                     # Lab units; the change mask never thresholds below this
 REF_NOISE_K = 6.0                       # ... nor below this multiple of the median change on the board
+PHOTO_BINS = 24                         # photometric match: intensity bins per channel
+PHOTO_MIN_BIN_PX = 200                  # ... a bin needs this many samples
+PHOTO_GAIN_RANGE = (0.5, 2.0)           # a fitted gain outside this is a failed fit: leave the picture alone
 REF_TIP_LOW = 0.45                      # tip walk: the needle continues while the change stays above this part of thr
 REF_TIP_MAX_PX = 40                     # tip walk: never further than this past the mask end
 
+AXIS_BEHIND_MAX = 16.0                  # board units: a tip may lie this far behind the barrel end (the change mask overshoots it by shadow / sheen)
+SUPPORT_MIN = 0.35                      # third camera: share of the barrel corridor on the dart mask below which a 2-camera tip is rejected
+SUPPORT_SPAN_PX = 60.0                  # corridor length behind the steel point (px)
+SUPPORT_LEAN_DEG = (-25, -15, -5, 5, 15, 25, 0)   # darts lean: the corridor follows the best of these angles
+SUPPORT_BONUS = 3.0                     # cost bonus for full third-camera support
 CLOSE_TIPS_MM = 8.0                     # tips nearer than this are touching / robin-hood
 HIGH_RESIDUAL_MM = 3.0                  # axis lines missing each other by more: stale homography?
 
@@ -212,6 +221,37 @@ def _tol_diff(a: np.ndarray, b: np.ndarray, k: np.ndarray) -> np.ndarray:
     return np.sqrt(d)
 
 
+def _match_photometry(ref: np.ndarray, cur: np.ndarray, crop: Tuple[int, int, int, int], far: np.ndarray) -> np.ndarray:
+    """Map the empty-board picture onto the darts picture's brightness and colour.
+
+    Auto exposure and white balance drift between the two bursts (up to 20 % in one channel on
+    real rigs), which lifts the noise floor and with it the detection threshold. A per-channel
+    linear map is fitted on the medians of intensity bins inside the search crop, so the darts
+    (few pixels, never the median of a bin) do not pull it.
+    """
+    x0, y0, x1, y1 = crop
+    valid = ~far
+    out = ref.astype(np.float32)
+    for ch in range(3):
+        r = ref[y0:y1, x0:x1, ch][valid].ravel()[::5].astype(np.float32)
+        c = cur[y0:y1, x0:x1, ch][valid].ravel()[::5].astype(np.float32)
+        if r.size < PHOTO_BINS * PHOTO_MIN_BIN_PX:
+            continue
+        idx = np.clip(np.digitize(r, np.percentile(r, np.linspace(0, 100, PHOTO_BINS + 1))[1:-1]), 0, PHOTO_BINS - 1)
+        xs, ys = [], []
+        for k in range(PHOTO_BINS):
+            sel = idx == k
+            if sel.sum() >= PHOTO_MIN_BIN_PX:
+                xs.append(float(np.median(r[sel])))
+                ys.append(float(np.median(c[sel])))
+        if len(xs) < 4 or np.ptp(xs) < 20:
+            continue
+        gain, offset = np.polyfit(xs, ys, 1)
+        if PHOTO_GAIN_RANGE[0] <= gain <= PHOTO_GAIN_RANGE[1]:
+            out[..., ch] = gain * out[..., ch] + offset
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
 def _reference_evidence(ref: np.ndarray, cur: np.ndarray) -> np.ndarray:
     """Colour change (Lab distance) between the empty-board reference and the frame with darts.
 
@@ -245,7 +285,7 @@ def _dart_mask(E: np.ndarray, thr: float) -> np.ndarray:
     return m
 
 
-def _axes_from_silhouette(m: np.ndarray, tip_dir: np.ndarray, max_dev: float = 45.0) -> List[dict]:
+def _axes_from_silhouette(m: np.ndarray, tip_dir: np.ndarray, min_len: float, max_dev: float = 45.0) -> List[dict]:
     """Dart axes in a complete dart silhouette (change against the empty-board reference).
 
     Every pixel on the lower boundary of the mask (no mask just ahead of it along the tip
@@ -313,7 +353,7 @@ def _axes_from_silhouette(m: np.ndarray, tip_dir: np.ndarray, max_dev: float = 4
     flat = score.ravel().copy()
     order = np.argsort(-flat)
     for o in order[:4000]:
-        if flat[o] < SIL_MIN_LEN or len(axes) >= 12:
+        if flat[o] < min_len or len(axes) >= 12:
             break
         ci, ai = divmod(int(o), len(phis))
         p, d = P[ci], D[ai]
@@ -379,6 +419,29 @@ def _trace_point(g: np.ndarray, start: np.ndarray, d: np.ndarray, max_len: int =
             if gap > 4:
                 break
     return start + last * d, float(last)
+
+
+def _corridor_support(mask: np.ndarray, off: np.ndarray, p: np.ndarray, d: np.ndarray, start: float) -> Optional[float]:
+    """Share of the barrel corridor behind image point p that lies on the dart mask.
+
+    A tip on the board has its barrel above it, so a camera that has no dart silhouette there
+    disproves the tip. The corridor leans up to SUPPORT_LEAN_DEG from the camera's tip direction.
+    `mask` is the (dilated) change mask of the search crop whose top-left corner is `off`; None
+    when the corridor is mostly outside it (the camera cannot judge).
+    """
+    Hh, Ww = mask.shape
+    ts = np.arange(start, start + SUPPORT_SPAN_PX, 2.0)
+    best: Optional[float] = None
+    for deg in SUPPORT_LEAN_DEG:
+        a = math.radians(deg)
+        dr = np.array([d[0] * math.cos(a) - d[1] * math.sin(a), d[0] * math.sin(a) + d[1] * math.cos(a)])
+        q = np.round(p[None, :] - ts[:, None] * dr[None, :] - off[None, :]).astype(np.int64)
+        ok = (q[:, 0] >= 0) & (q[:, 0] < Ww) & (q[:, 1] >= 0) & (q[:, 1] < Hh)
+        if ok.mean() < 0.5:
+            continue
+        share = float((mask[q[ok, 1], q[ok, 0]] > 0).mean())
+        best = share if best is None else max(best, share)
+    return best
 
 
 def _dist_to_segment(x: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
@@ -455,19 +518,22 @@ def detect_dart_tips(frames: Dict[str, List[np.ndarray]], cams: Dict[str, Camera
     models = [cams[cid] for cid in ids]
     preps = [_prepare(m) for m in models]
     meds = [_burst_median(frames[m.id], m.size) for m in models]
-    A = [_reference_evidence(_burst_median(references[m.id], m.size), med) for m, med in zip(models, meds)]
+    A = [_reference_evidence(_match_photometry(_burst_median(references[m.id], m.size), med, c["crop"], c["far"]), med)
+         for m, c, med in zip(models, preps, meds)]
     dbg: Optional[Dict[str, np.ndarray]] = {} if debug else None
 
     per: List[List[dict]] = []
+    support_masks: List[np.ndarray] = []
     for i, (m, c, med) in enumerate(zip(models, preps, meds)):
         x0, y0, x1, y1 = c["crop"]
         mask = _reference_mask(A[i][y0:y1, x0:x1], ~c["far"])
+        support_masks.append(cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))))
         if dbg is not None:
             full = np.zeros((m.size[1], m.size[0]), np.uint8)
             full[y0:y1, x0:x1] = mask
             dbg[f"mask:{m.id}"] = full
             dbg[f"evidence:{m.id}"] = A[i]
-        axes = _axes_from_silhouette(mask, c["tip_dir"])
+        axes = _axes_from_silhouette(mask, c["tip_dir"], SIL_MIN_LEN_FRAC * m.size[0])
         g = cv2.GaussianBlur(cv2.cvtColor(med, cv2.COLOR_BGR2GRAY).astype(np.float32), (0, 0), 0.8)
         off = np.array([x0, y0], float)
         for ax in axes:
@@ -502,10 +568,23 @@ def detect_dart_tips(frames: Dict[str, List[np.ndarray]], cams: Dict[str, Camera
             dl = [abs((X - allax[j]["p"]) @ np.array([-allax[j]["u"][1], allax[j]["u"][0]])) for j in comb]
             da = [_dist_to_segment(X, allax[j]["anchor_near"], allax[j]["anchor_far"]) for j in comb]
             along = [(X - allax[j]["p"]) @ allax[j]["u"] for j in comb]
-            if max(dl) > 12 or max(da) > 40 or max(along) > 8:
+            if max(dl) > 12 or max(da) > 40 or max(along) > AXIS_BEHIND_MAX:
                 continue
-            hyps.append(dict(X=X, members=comb, cost=np.mean(dl) + 0.15 * np.mean(da) - (6 if k == 3 else 0),
-                             dl=max(dl), da=max(da)))
+            cost = np.mean(dl) + 0.15 * np.mean(da) - (6 if k == 3 else 0)
+            support = None
+            if k == 2:
+                # Two lines always meet exactly, so the pair proves nothing: the third camera has to
+                # see a dart standing there (a ghost line from a flight or a shadow does not).
+                o = next(i for i in range(3) if i not in {allax[j]["cam"] for j in comb})
+                co = preps[o]
+                po = h_apply(co["Hinv"], [X])[0]
+                support = _corridor_support(support_masks[o], np.array(co["crop"][:2], float), po,
+                                            co["tip_dir"], 0.7 * _point_len_px(co, X))
+                if support is not None:
+                    if support < SUPPORT_MIN:
+                        continue
+                    cost -= SUPPORT_BONUS * support
+            hyps.append(dict(X=X, members=comb, cost=cost, dl=max(dl), da=max(da), support=support))
     hyps.sort(key=lambda h: h["cost"])
     used: set = set()
     chosen = []
@@ -515,6 +594,7 @@ def detect_dart_tips(frames: Dict[str, List[np.ndarray]], cams: Dict[str, Camera
         chosen.append(h)
         used |= set(h["members"])
     chosen = chosen[:expected]
+    chosen.sort(key=lambda h: -math.hypot(h["X"][0] - 500.0, h["X"][1] - 500.0))     # ids: outermost first
 
     tips: List[DartTip] = []
     for n, h in enumerate(chosen):
@@ -569,13 +649,12 @@ def detect_dart_tips(frames: Dict[str, List[np.ndarray]], cams: Dict[str, Camera
 
 
 def darts_close_together(tips: Sequence[DartTip], min_mm: float = CLOSE_TIPS_MM) -> bool:
-    """True for touching / robin-hood tips, or more than one tip matched in only two cameras.
+    """True for touching / robin-hood tips.
 
     Three darts in one segment (T20 plus the singles above and below) are the expected
-    arrangement and do not count as close.
+    arrangement and do not count as close. A dart seen by only two cameras is not close either:
+    the camera that cannot see it gets its own "hidden" note in the Find step.
     """
-    if sum(1 for t in tips if t.n_cams < 3) > 1:
-        return True
     for a, b in itertools.combinations(tips, 2):
         if math.hypot(a.board_mm[0] - b.board_mm[0], a.board_mm[1] - b.board_mm[1]) < min_mm:
             return True

@@ -1,6 +1,7 @@
 """Step 2 (Find darts): full-resolution burst, dart tip detection, frozen tip ROIs, banner."""
 
 from __future__ import annotations
+import copy
 import dataclasses
 import logging
 import os
@@ -21,8 +22,8 @@ from core.dart_tip_detector import (
     darts_close_together,
     detect_dart_tips,
 )
-import dataclasses as _dc
-from core.metrics import TipROI, tip_box, tip_metrics, tip_rois_for_camera, _as_stack, _tip_polarity
+from core.metrics import TipROI, tip_rois_for_camera
+from core.tip_editor import MAX_DARTS, TipEditor
 from modules_gtk.cam_calibration import widgets as W
 from modules_gtk.cam_calibration.camera_source import cam_key
 
@@ -94,14 +95,16 @@ def classify(det: Optional[TipDetection], rois: Dict[str, List[TipROI]], keys: S
     if n <= 1:
         title = "No darts found" if n == 0 else "Only 1 dart found"
         return FindOutcome("bad", title, "Put 3 darts in the 20 and make sure no hand blocks a camera. "
-                           "Then tap Search again.", False, rows=rows)
+                           "Then tap Search again. Or tap Add dart and drag its box onto each tip.", False, rows=rows)
     if blind:
         cams = _join_ids(blind)
         return FindOutcome("bad", f"Camera {cams} can't see any tips",
-                           "Make sure nothing blocks the camera, then tap Search again.", False, rows=rows)
+                           "Make sure nothing blocks the camera, then tap Search again. Or drag its boxes "
+                           "onto the tips: it cannot find them on its own.", False, rows=rows)
     if n == 2:
         return FindOutcome("warn", "Only 2 darts found",
-                           "You can start tuning, or add the third dart and search again.", True, rows=rows)
+                           "You can start tuning, add the third dart and search again, or tap Add dart "
+                           "and drag its box onto the missing tip.", True, rows=rows)
     if darts_close_together(det.tips):
         return FindOutcome("warn", "Darts are close together",
                            "Results may be less precise. Put them in the three spots of step 1 "
@@ -178,12 +181,29 @@ class FindStep:
         self.zoomed = True
         self.banner = W.ResultBanner("ok", "", "", compact=True)
         self.debug_state: Optional[str] = os.environ.get(DEBUG_ENV) or None
+        # Manual fixes: which dart is where. The user's tips are board positions, so one drag in a camera
+        # also moves that dart's boxes in the other cameras (core/tip_editor.py)
+        self.editor = TipEditor()
+        self.add_button = Gtk.Button(label="Add dart")
+        self.add_button.add_css_class("flat")
+        self.add_button.set_tooltip_text("Add a dart SUIT missed, then drag its box onto the tip")
+        self.add_button.connect("clicked", lambda *_: self._add_dart())
+        self.remove_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.remove_popover = Gtk.Popover()
+        self.remove_popover.set_child(self.remove_list)
+        self.remove_button = Gtk.MenuButton(label="Remove dart")
+        self.remove_button.add_css_class("flat")
+        self.remove_button.set_tooltip_text("Remove a box that is not on a dart")
+        self.remove_button.set_popover(self.remove_popover)
         # Saves what this step worked with as a zip for the SUIT team (training / test data)
         self.save_button = Gtk.Button(label="Save sample")
         self.save_button.add_css_class("flat")
         self.save_button.set_tooltip_text("Save the pictures and the tips SUIT found as a file "
                                           "you can send to the SUIT team")
         self.save_button.connect("clicked", lambda *_: self._save_sample())
+        self.tools = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        for widget in (self.add_button, self.remove_button, self.save_button):
+            self.tools.append(widget)
 
         # Tap the large view to switch between the darts and the whole board
         click = Gtk.GestureClick()
@@ -217,6 +237,7 @@ class FindStep:
         self.running = True
         self.outcome = None
         self.zoomed = True
+        self.editor.reset()
         v.heading.set_text("Looking for the darts", "This takes a few seconds. Keep your hands away from the board.")
         v.set_panels(None, None)
         v.camera_view.set_tips_editable(None)
@@ -307,8 +328,9 @@ class FindStep:
             v.heading.set_text("Ready to tune", "Each camera is tuned on the whole board.")
         else:
             v.heading.set_text("Check the darts SUIT found",
-                               "Yellow boxes mark the tips. Drag a box onto its tip to correct it. "
-                               "Tap a camera to check it. Something wrong? Tap Save sample and send "
+                               "Yellow boxes mark the tips. Drag a box onto its tip to fix it: the other "
+                               "cameras follow. Add dart and Remove dart fix a missed or invented dart. "
+                               "Tap a camera to check it. If it went wrong, tap Save sample and send "
                                "the file to the SUIT team.")
         self._apply_outcome(keys)
         v.select_camera(v.selected)
@@ -330,8 +352,27 @@ class FindStep:
             v.action_bar.set_secondary("Search again", suggested=bad, callback=self._start_search)
         v.action_bar.set_primary("Start tuning", sensitive=o.can_tune, suggested=not bad,
                                  callback=self._start_tuning)
-        can_save = bool(v.find_frames) and bool(v.reference_frames) and not o.board_only
-        v.action_bar.set_center(self.save_button if can_save else None)
+        self._update_tools()
+
+    def _update_tools(self):
+        """Add / Remove dart and Save sample in the middle of the action bar."""
+        v = self.view
+        det, o = v.detection, self.outcome
+        can_edit = det is not None and o is not None and not o.board_only and not self.running and bool(v.models)
+        can_save = bool(v.find_frames) and bool(v.reference_frames) and o is not None and not o.board_only
+        self.add_button.set_visible(can_edit)
+        self.add_button.set_sensitive(can_edit and len(det.tips) < MAX_DARTS)
+        self.remove_button.set_visible(can_edit and bool(det.tips))
+        while (child := self.remove_list.get_first_child()) is not None:
+            self.remove_list.remove(child)
+        if can_edit:
+            for tip in det.tips:
+                item = Gtk.Button(label=f"Dart {tip.id}")
+                item.add_css_class("flat")
+                item.connect("clicked", self._on_remove_clicked, tip.id)
+                self.remove_list.append(item)
+        self.save_button.set_visible(can_save)
+        v.action_bar.set_center(self.tools if (can_edit or can_save) else None)
 
     # -- sample export ------------------------------------------------------------------
 
@@ -341,13 +382,15 @@ class FindStep:
         self.save_button.set_label("Saving...")
         # Copies: the user may drag a tip or search again while the zip is written
         args = (list(v.cameras), dict(v.reference_frames), dict(v.find_frames), tuple(v.capture_size),
-                v.detection, {k: list(rs) for k, rs in v.tip_rois.items()})
+                copy.deepcopy(v.detection), {k: list(rs) for k, rs in v.tip_rois.items()},
+                sorted(self.editor.touched))
         threading.Thread(target=self._save_worker, args=(v.session, *args), daemon=True,
                          name="optimizer-sample").start()
 
-    def _save_worker(self, session: int, cams, empty, darts, size, det, rois):
+    def _save_worker(self, session: int, cams, empty, darts, size, det, rois, edited):
         try:
-            path = self.view.source.export_sample(cams, empty, darts, size, detection=det, tip_rois=rois)
+            path = self.view.source.export_sample(cams, empty, darts, size, detection=det, tip_rois=rois,
+                                                  edited_darts=edited)
             self.view.ui(session, self._on_sample_saved, str(path))
         except Exception:
             logger.exception("Saving the dart sample failed")
@@ -369,32 +412,55 @@ class FindStep:
         self.view.reference_frames = {}
         self.view.show_step("insert")
 
+    # -- manual fixes ---------------------------------------------------------------------
+
     def _on_tip_moved(self, dart_id: int, x: float, y: float):
         """A box was dragged: the tip of this dart in the selected camera is where the user put it."""
         v = self.view
         key = v.selected
-        rois = v.tip_rois.get(key or "", [])
-        burst = v.find_frames.get(key or "")
-        idx = next((i for i, r in enumerate(rois) if r.dart_id == dart_id), None)
-        if idx is None or not burst:
+        if key is None or v.detection is None or key not in v.find_frames:
             return
-        stack = _as_stack(burst)
-        mean = stack.mean(axis=0)
-        old = rois[idx]
-        h, w = mean.shape[:2]
-        tip = (float(min(w - 1, max(0.0, x))), float(min(h - 1, max(0.0, y))))
-        new = _dc.replace(old, tip=tip, box=tip_box(tip, mean.shape), visible=True, marginal=False,
-                          hidden_reason=None, faint=False, manual=True)
-        new.polarity = _tip_polarity(mean, new)
-        new.ref_contrast = float(tip_metrics(stack, new, mean).contrast)
-        rois[idx] = new
-        logger.info("Tip %d in %s moved by hand to (%.0f, %.0f)", dart_id, key, tip[0], tip[1])
+        self.editor.models = v.models
+        if self.editor.move(v.detection, key, dart_id, (x, y)):
+            logger.info("Dart %d in %s put by hand at (%.0f, %.0f)", dart_id, key, x, y)
+            self._after_edit()
+
+    def _add_dart(self):
+        v = self.view
+        key = v.selected
+        if key is None or v.detection is None or key not in v.find_frames:
+            return
+        self.editor.models = v.models
+        near = [r.tip for r in v.tip_rois.get(key, [])]
+        dart_id = self.editor.add(v.detection, key, near=near)
+        if dart_id is None:
+            v.toast(f"SUIT tunes with up to {MAX_DARTS} darts.")
+            return
+        logger.info("Dart %d added by hand in %s", dart_id, key)
+        v.toast(f"Dart {dart_id} added. Drag its box onto the tip.")
+        self._after_edit()
+
+    def _on_remove_clicked(self, _button, dart_id: int):
+        self.remove_popover.popdown()
+        v = self.view
+        if v.detection is not None and self.editor.remove(v.detection, dart_id):
+            logger.info("Dart %d removed by hand", dart_id)
+            self._after_edit()
+
+    def _after_edit(self):
+        """Rebuild every camera's tips from the edited detection and refresh the banner and boxes."""
+        v = self.view
         keys = [cam_key(c) for c in v.cameras]
         numbers = {cam_key(c): str(c.index) for c in v.cameras}
+        v.tip_rois = {k: self.editor.rois(v.detection, k, v.find_frames[k]) for k in v.find_frames}
         self.outcome = classify(v.detection, v.tip_rois, keys, numbers)
         v.board_only = self.outcome.board_only
         self._apply_outcome(keys)
-        v.camera_view.set_tips([(r.dart_id, r.tip, not r.visible) for r in rois], space=(w, h))
+        key = v.selected
+        frame = v.find_frames.get(key or "")
+        if frame:
+            h, w = frame[0].shape[:2]
+            v.camera_view.set_tips([(r.dart_id, r.tip, not r.visible) for r in v.tip_rois.get(key, [])], space=(w, h))
 
     def _show_camera(self, key: Optional[str]):
         v = self.view

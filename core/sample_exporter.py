@@ -3,8 +3,9 @@
 A sample is what step 2 of the Camera Optimizer worked with, losslessly:
 - the empty-board burst and the darts burst of every camera (PNG, capture resolution)
 - Autodarts' calibration.json and the camera part of config.toml (never keys or board ids)
-- the V4L2 controls each camera had
+- the V4L2 controls each camera had and how much the lens bends the picture (core/lens_check.py)
 - the detection and the tip positions per camera; `manual` marks a tip the user dragged into place
+  (such tips are verified board positions), `edited_darts` the darts the user added, moved or removed
 
 Pure Python / OpenCV, no GTK. Camera controls are passed in by the caller (hardware stays in
 CameraSource).
@@ -23,6 +24,8 @@ import zipfile
 
 import cv2
 import numpy as np
+
+from core.lens_check import lens_check
 
 logger = logging.getLogger("suit.sample_exporter")
 
@@ -108,6 +111,12 @@ def _detection_entry(detection, numbers: Dict[str, int]) -> Optional[dict]:
     }
 
 
+def _lens_entry(empty_frame: Optional[np.ndarray]) -> Optional[dict]:
+    """Lens distortion measured on the empty-board picture (None: the rings were not found)."""
+    result = lens_check(empty_frame) if empty_frame is not None else None
+    return result.to_dict() if result is not None else None
+
+
 def _tip_entries(rois) -> List[dict]:
     return [{
         "dart_id": r.dart_id,
@@ -125,6 +134,7 @@ def export_sample(cameras: Sequence[SampleCamera],
                   capture_size: Sequence[int],
                   detection=None,
                   tip_rois: Optional[Dict[str, list]] = None,
+                  edited_darts: Optional[Sequence[int]] = None,
                   out_dir: Optional[Path] = None,
                   autodarts_dir: Optional[Path] = None,
                   now: Optional[datetime] = None) -> Path:
@@ -151,6 +161,7 @@ def export_sample(cameras: Sequence[SampleCamera],
         "cameras": [],
         "autodarts": {"cam": autodarts_cam_settings(ad_dir / "config.toml"), "calibration": None},
         "detection": _detection_entry(detection, numbers),
+        "edited_darts": sorted(int(i) for i in edited_darts or []),
     }
 
     tmp = path.with_suffix(".zip.part")
@@ -158,6 +169,7 @@ def export_sample(cameras: Sequence[SampleCamera],
         for c in cams:
             entry = {"number": c.number, "key": c.key, "dev_node": c.dev_node, "name": c.name,
                      "sensor_model": c.sensor_model, "controls": c.controls,
+                     "lens": _lens_entry((empty.get(c.key) or [None])[0]),
                      "empty": [], "darts": [], "tips": _tip_entries((tip_rois or {}).get(c.key))}
             for kind, bursts in (("empty", empty), ("darts", darts)):
                 for i, frame in enumerate(bursts.get(c.key) or []):

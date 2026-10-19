@@ -92,7 +92,7 @@ class CameraSource:
 
     def export_sample(self, cams: Sequence[CameraDevice], empty: Dict[str, List[np.ndarray]],
                       darts: Dict[str, List[np.ndarray]], capture_size: Tuple[int, int],
-                      detection=None, tip_rois=None):
+                      detection=None, tip_rois=None, edited_darts=None):
         """Save a dart sample zip for the SUIT team (worker thread); returns its path."""
         from core.camera_manual_service import CameraManualService
         from core.sample_exporter import SampleCamera, export_sample
@@ -100,7 +100,8 @@ class CameraSource:
                                     sensor_model=c.sensor_model,
                                     controls=CameraManualService.get_camera_controls(c.dev_node))
                        for c in cams]
-        return export_sample(sample_cams, empty, darts, capture_size, detection=detection, tip_rois=tip_rois)
+        return export_sample(sample_cams, empty, darts, capture_size, detection=detection, tip_rois=tip_rois,
+                             edited_darts=edited_darts)
 
     @staticmethod
     def settle(seconds: float) -> None:

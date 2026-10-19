@@ -214,6 +214,11 @@ class TuneStep:
         det0 = v.detection
         if det0 is None or not det0.tips:
             return []
+        if v.step_find.editor.has_edits:
+            # Tips put by hand are not what the automatic finder would find again; the optimizer's own
+            # per-camera check (contrast and patch correlation on the frozen tips) already covers them
+            logger.info("End-of-run dart check skipped: tips were edited by hand")
+            return []
         v.ui(session, self._on_final_check_start)
         try:
             w, h = v.capture_size
