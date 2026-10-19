@@ -10,6 +10,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk
 
+from core.autodarts_controls import persist_camera_settings
 from core.camera_manual_service import CameraManualService
 from core.metrics import TipMetrics
 from core.optimizer import OptimizationResult
@@ -24,6 +25,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger("cam_librator.review")
 
 APPLIED_TOAST = "Settings applied. They load every time the computer starts."
+NOT_IN_AUTODARTS_TOAST = ("Settings applied, but they could not be saved in Autodarts. "
+                          "Autodarts may reset the exposure the next time it starts.")
 
 
 def _plural(n: int, word: str) -> str:
@@ -286,6 +289,7 @@ class ReviewStep:
         v.action_bar.set_primary_sensitive(False)
         v.action_bar.set_secondary_sensitive(False)
         applied: List[str] = []
+        not_in_autodarts: List[str] = []
         try:
             for key, res in v.results.items():
                 cam = v.camera_for(key)
@@ -297,8 +301,12 @@ class ReviewStep:
                 try:
                     V4L2Device(cam.dev_node).apply_settings(res.optimized_settings)
                     # Also persist to manual service presets
-                    CameraManualService.save_preset(cam.dev_node, res.optimized_settings.to_dict())
+                    CameraManualService.save_preset(cam.dev_node, res.optimized_settings.to_controls())
                     applied.append(cam.dev_node)
+                    # Autodarts writes the controls of its own config to the camera at every start, which
+                    # puts exposure back on auto: the calibration has to be in that config as well
+                    if not persist_camera_settings(cam.dev_node, getattr(cam, "by_path", None), res.optimized_settings):
+                        not_in_autodarts.append(cam.dev_node)
                 except Exception as e:
                     logger.error("Failed to apply settings to %s: %s", cam.dev_node, e)
 
@@ -312,7 +320,7 @@ class ReviewStep:
             # Autodarts resumes and the wizard closes whatever happened above
             v.resume_autodarts()
             if applied:
-                v.toast(APPLIED_TOAST)
+                v.toast(NOT_IN_AUTODARTS_TOAST if not_in_autodarts else APPLIED_TOAST)
             else:
                 v.toast("Nothing changed. The cameras keep their current settings.")
             v.leave_wizard()

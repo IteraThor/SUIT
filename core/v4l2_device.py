@@ -59,6 +59,25 @@ class CameraSettings:
     def to_dict(self) -> Dict[str, int]:
         return dataclasses.asdict(self)
 
+    def to_controls(self) -> Dict[str, int]:
+        """The settings as V4L2 control names, without the controls an auto mode makes inactive."""
+        ctrls = {
+            "auto_exposure": self.exposure_auto,
+            "gain": self.gain,
+            "white_balance_automatic": self.wb_auto,
+            "sharpness": self.sharpness,
+            "contrast": self.contrast,
+            "brightness": self.brightness,
+            "gamma": self.gamma,
+            "saturation": self.saturation,
+            "power_line_frequency": self.power_line_frequency,
+        }
+        if self.exposure_auto == 1:
+            ctrls["exposure_time_absolute"] = self.exposure_absolute
+        if self.wb_auto == 0:
+            ctrls["white_balance_temperature"] = self.wb_temperature
+        return ctrls
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> CameraSettings:
         valid_fields = {f.name for f in dataclasses.fields(cls)}
@@ -216,23 +235,7 @@ class V4L2Device:
 
     def apply_settings(self, settings: CameraSettings) -> bool:
         """Apply a full CameraSettings profile, omitting controls made inactive by auto modes."""
-        ctrl_map = {
-            "auto_exposure": settings.exposure_auto,
-            "gain": settings.gain,
-            "white_balance_automatic": settings.wb_auto,
-            "sharpness": settings.sharpness,
-            "contrast": settings.contrast,
-            "brightness": settings.brightness,
-            "gamma": settings.gamma,
-            "saturation": settings.saturation,
-            "power_line_frequency": settings.power_line_frequency,
-        }
-        if settings.exposure_auto == 1:
-            ctrl_map["exposure_time_absolute"] = settings.exposure_absolute
-        if settings.wb_auto == 0:
-            ctrl_map["white_balance_temperature"] = settings.wb_temperature
-
-        return self.set_controls_dict(ctrl_map)
+        return self.set_controls_dict(settings.to_controls())
 
     def reset_to_defaults(self) -> bool:
         """Reset camera controls to standard factory defaults, querying hardware defaults first if available."""

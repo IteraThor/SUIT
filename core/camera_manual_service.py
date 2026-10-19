@@ -38,6 +38,21 @@ class CameraManualService:
             pass
         return device_path
 
+    # CameraSettings field names an early optimizer wrote into profiles -> the V4L2 control names
+    LEGACY_PRESET_KEYS = {
+        "exposure_auto": "auto_exposure",
+        "exposure_absolute": "exposure_time_absolute",
+        "wb_auto": "white_balance_automatic",
+        "wb_temperature": "white_balance_temperature",
+    }
+
+    @classmethod
+    def to_control_names(cls, settings: dict) -> dict:
+        """Profile settings with V4L2 control names. Presets saved by the optimizer used the
+        CameraSettings field names, which no camera knows: exposure and white balance were
+        rejected as "unknown control" and the camera stayed on auto exposure."""
+        return {cls.LEGACY_PRESET_KEYS.get(k, k): v for k, v in settings.items()}
+
     @classmethod
     def lookup_camera_settings(cls, camera_settings: dict, device_path: str) -> dict | None:
         """Find a camera's saved settings whether they were keyed by port path or legacy /dev/videoN."""
@@ -407,7 +422,7 @@ WantedBy=default.target
             settings = cls.lookup_camera_settings(prof_cams, dev)
             if settings:
                 vdev = V4L2Device(dev)
-                vdev.set_controls_dict(settings)
+                vdev.set_controls_dict(cls.to_control_names(settings))
             else:
                 cls.reset_defaults(dev)
 
@@ -442,7 +457,7 @@ WantedBy=default.target
         if active_name == "Default":
             active_name = "CAM-librator"
         cams = cls.normalize_camera_settings(data.get("profiles", {}).get(active_name, {}))
-        cams[cls.stable_camera_path(device_path)] = settings
+        cams[cls.stable_camera_path(device_path)] = cls.to_control_names(settings)
         return cls.save_profile(active_name, cams, config_path=target, set_active=True)
 
     @classmethod
