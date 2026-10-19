@@ -1,17 +1,18 @@
-"""Multi-camera dart tip detector (no empty-board reference needed).
+"""Multi-camera dart tip detector against an empty-board reference.
 
 Pipeline:
- 1. per-pixel median of the burst per camera
- 2. warp every camera onto the board plane (full 1000x1000 board grid, cached remap tables) and
-    match the cameras photometrically (per-channel quantile mapping in Lab)
- 3. 3-camera consensus: a board pixel where camera i disagrees with BOTH others while the other
-    two agree is "off-plane in camera i" -> dart evidence (wires, numbers and segments cancel)
- 4. back-project the evidence into camera i and find narrow runs along the camera's tip
-    direction -> dart axes; the barrel end is the lowest point of each run
- 5. every image axis maps to a line on the board plane that passes through the tip (true for any
+ 1. per-pixel median of the burst per camera, for the darts and for the empty-board reference
+ 2. colour change (Lab) between reference and darts in every camera -> dart silhouettes
+ 3. straight barrel strips in each silhouette, leaning within the camera's tip direction -> dart
+    axes; the barrel end is the last silhouette pixel on the axis
+ 4. every image axis maps to a line on the board plane that passes through the tip (true for any
     dart tilt). Intersect the axes across cameras (3 cameras preferred, 2 allowed), gated by a
     pose-based prior of the visible point length -> board tip
- 6. project the board tip into every camera -> pixel tip, axis direction, point length, UI box
+ 5. project the board tip into every camera -> pixel tip, axis direction, point length, UI box
+
+Without a reference for every camera the detector returns no tips and WARN_NEED_REFERENCE. An
+earlier reference-free mode (3-camera consensus on the board plane) missed darts and invented
+tips on real rigs, so it was removed.
 
 Pure numpy / OpenCV, no GTK. Board coordinates use the Autodarts 1000-unit space (bull at 500,500,
 1.9 units per mm, y grows away from the 20).
@@ -32,14 +33,6 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 UNITS_PER_MM = 1.9
-MERGE_END_PX = 10.0                     # collinear-axis merge: end / top offset from the kept axis line
-MERGE_TOP_PX = 12.0
-BOARD_UNITS = 1000
-# Board-space working grid (px). 500 was tried: it halves the runtime but drops axes on the rig
-# fixtures (tips matched in only 2 cameras), so the grid stays at the calibrated 1000-unit scale.
-WORK_SIZE = 1000
-WORK_SCALE = WORK_SIZE / BOARD_UNITS
-EVIDENCE_R = 470.0                      # board units; consensus is evaluated inside this radius
 SEARCH_R = 440.0                        # board units; evidence outside is ignored in the image
 ON_BOARD_R = 345.0                      # board units; a tip prior beyond this is off the board
 POINT_MM = 20.0                         # assumed visible steel-point length (pose prior)
@@ -47,13 +40,14 @@ DEFAULT_WIDTH_PX = 13.0                 # barrel width used when a camera saw no
 
 # Warning keys in TipDetection.warnings (the UI maps them to plain-language text).
 WARN_NEED_THREE_CAMERAS = "need_three_cameras"
+WARN_NEED_REFERENCE = "need_reference"
 WARN_FEWER_DARTS = "fewer_darts"
 WARN_DARTS_CLOSE = "darts_close"
 WARN_HIGH_RESIDUAL = "high_residual"
 
 SIL_MIN_LEN = 50                        # silhouette: a barrel + shaft is straight inside the mask for this long (px)
 SIL_MAX_WIDTH = 32.0                    # widest barrel accepted (px)
-REF_MIN_DIFF = 12.0                     # Lab units; reference mode never thresholds below this
+REF_MIN_DIFF = 12.0                     # Lab units; the change mask never thresholds below this
 REF_NOISE_K = 6.0                       # ... nor below this multiple of the median change on the board
 REF_TIP_LOW = 0.45                      # tip walk: the needle continues while the change stays above this part of thr
 REF_TIP_MAX_PX = 40                     # tip walk: never further than this past the mask end
@@ -144,7 +138,7 @@ def h_apply(H: np.ndarray, pts) -> np.ndarray:
 
 
 def _prepare(model: CameraModel) -> dict:
-    """Per-camera geometry that only depends on the homography: remap tables, pose, search crop."""
+    """Per-camera geometry that only depends on the homography: pose, search crop."""
     c = model._cache
     key = (model.H_img2board.tobytes(), model.size, model.focal)
     if c.get("key") == key:
@@ -156,14 +150,7 @@ def _prepare(model: CameraModel) -> dict:
     Hinv = np.linalg.inv(Hm)
     c["H"], c["Hinv"] = Hm, Hinv
 
-    # Board work grid -> image coordinates (replaces warpPerspective onto the board plane).
-    vv, uu = np.mgrid[0:WORK_SIZE, 0:WORK_SIZE].astype(np.float64)
-    src = h_apply(Hinv, np.c_[uu.ravel() / WORK_SCALE, vv.ravel() / WORK_SCALE]).reshape(WORK_SIZE, WORK_SIZE, 2)
-    mx, my = src[..., 0].astype(np.float32), src[..., 1].astype(np.float32)
-    c["valid"] = (mx >= 0) & (mx <= W - 1) & (my >= 0) & (my <= H - 1)
-    c["to_board"] = cv2.convertMaps(mx, my, cv2.CV_16SC2)
-
-    # Image crop that covers the board search radius, with its image -> work-grid tables.
+    # Image crop that covers the board search radius.
     yy, xx = np.mgrid[0:H, 0:W]
     b = h_apply(Hm, np.c_[xx.ravel(), yy.ravel()]).reshape(H, W, 2)
     r_img = np.hypot(b[..., 0] - 500.0, b[..., 1] - 500.0)
@@ -175,8 +162,6 @@ def _prepare(model: CameraModel) -> dict:
         x0, y0 = max(0, int(xs.min()) - 8), max(0, int(ys.min()) - 8)
         x1, y1 = min(W, int(xs.max()) + 9), min(H, int(ys.max()) + 9)
     c["crop"] = (x0, y0, x1, y1)
-    bc = b[y0:y1, x0:x1] * WORK_SCALE
-    c["to_image"] = cv2.convertMaps(bc[..., 0].astype(np.float32), bc[..., 1].astype(np.float32), cv2.CV_16SC2)
     c["far"] = r_img[y0:y1, x0:x1] > SEARCH_R
 
     # Pose from the homography (K from the undistorted calibration, distortion ignored).
@@ -227,42 +212,6 @@ def _tol_diff(a: np.ndarray, b: np.ndarray, k: np.ndarray) -> np.ndarray:
     return np.sqrt(d)
 
 
-def _anomaly_maps(meds: List[np.ndarray], preps: List[dict]) -> List[np.ndarray]:
-    labs, vals = [], []
-    for med, c in zip(meds, preps):
-        w = cv2.remap(cv2.GaussianBlur(med, (0, 0), 1.0), *c["to_board"], cv2.INTER_LINEAR)
-        labs.append(cv2.cvtColor(w.astype(np.float32) / 255.0, cv2.COLOR_BGR2Lab))
-        vals.append(c["valid"])
-    yy, xx = np.mgrid[0:WORK_SIZE, 0:WORK_SIZE]
-    half = WORK_SIZE / 2.0
-    m = ((xx - half) ** 2 + (yy - half) ** 2) < (EVIDENCE_R * WORK_SCALE) ** 2
-    for v in vals:
-        m &= v
-    if m.sum() < 1000:
-        return [np.zeros((WORK_SIZE, WORK_SIZE), np.float32) for _ in labs]
-    # Photometric normalisation: per-channel piecewise-linear quantile mapping to the cross-camera mean.
-    qs = np.linspace(1, 99, 25)
-    srcq = [[np.percentile(l[..., ch][m], qs) for ch in range(3)] for l in labs]
-    refq = np.mean(srcq, axis=0)
-    for l, sq in zip(labs, srcq):
-        for ch in range(3):
-            l[..., ch] = np.interp(l[..., ch], sq[ch], refq[ch]).astype(np.float32)
-    # Misregistration tolerance of ~3.5 board units (homography error, board relief).
-    kk = max(3, int(round(7 * WORK_SCALE)) | 1)
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kk, kk))
-    D = {}
-    for i in range(3):
-        for j in range(i + 1, 3):
-            D[i, j] = D[j, i] = _tol_diff(labs[i], labs[j], k)
-    out = []
-    for i in range(3):
-        j, k2 = [x for x in range(3) if x != i]
-        s = np.clip(np.minimum(D[i, j], D[i, k2]) - D[j, k2], 0, None)
-        s[~m] = 0
-        out.append(s.astype(np.float32))
-    return out
-
-
 def _reference_evidence(ref: np.ndarray, cur: np.ndarray) -> np.ndarray:
     """Colour change (Lab distance) between the empty-board reference and the frame with darts.
 
@@ -284,7 +233,7 @@ def _reference_mask(E: np.ndarray, valid: np.ndarray) -> np.ndarray:
     return _dart_mask(E, thr)
 
 
-def _dart_mask(E: np.ndarray, thr: float = 7.0) -> np.ndarray:
+def _dart_mask(E: np.ndarray, thr: float) -> np.ndarray:
     m = (E > thr).astype(np.uint8) * 255
     m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 11)))
     m = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 15)))
@@ -296,104 +245,8 @@ def _dart_mask(E: np.ndarray, thr: float = 7.0) -> np.ndarray:
     return m
 
 
-def _axes_from_mask(m: np.ndarray, tip_dir: np.ndarray, band: int = 13, up: int = 140, max_dev: float = 40,
-                    corridor: bool = False) -> List[dict]:
-    """Dart axes in a binary evidence mask: narrow runs along tip_dir, ending at the barrel end."""
-    ang = math.degrees(math.atan2(tip_dir[0], tip_dir[1]))      # rotate so tip_dir -> +y
-    Hh, Ww = m.shape
-    Mrot = cv2.getRotationMatrix2D((Ww / 2.0, Hh / 2.0), -ang, 1.0)
-    # Expand the canvas so nothing is rotated out of view.
-    cos, sin = abs(Mrot[0, 0]), abs(Mrot[0, 1])
-    nW, nH = int(Hh * sin + Ww * cos) + 2, int(Hh * cos + Ww * sin) + 2
-    Mrot[0, 2] += nW / 2.0 - Ww / 2.0
-    Mrot[1, 2] += nH / 2.0 - Hh / 2.0
-    mr = cv2.warpAffine(m, Mrot, (nW, nH), flags=cv2.INTER_NEAREST)
-    Minv = cv2.invertAffineTransform(Mrot)
-    Hh, Ww = mr.shape
-    on = mr > 0
-    B = on & np.vstack([~on[1:], np.ones((1, Ww), bool)])         # lowest pixel of each vertical run
-    Bd = cv2.dilate(B.astype(np.uint8), np.ones((3, 7), np.uint8))
-    n, lab, st, _ = cv2.connectedComponentsWithStats(Bd)
-    cands = []
-    for k in range(1, n):
-        if st[k, cv2.CC_STAT_WIDTH] > 44:
-            continue
-        x, y, w, h = st[k, cv2.CC_STAT_LEFT], st[k, cv2.CC_STAT_TOP], st[k, cv2.CC_STAT_WIDTH], st[k, cv2.CC_STAT_HEIGHT]
-        yy, xx = np.where((lab[y:y + h, x:x + w] == k) & B[y:y + h, x:x + w])
-        if len(xx) < 3:
-            continue
-        cands.append((int(round(xx.mean())) + x, float(yy.max() + y)))
-    axes = []
-    for xc, yb in cands:
-        # Contiguous run upward in the column band.
-        x0, x1 = max(0, xc - band), min(Ww, xc + band + 1)
-        ytop = int(max(0, yb - up))
-        sub = on[ytop:int(yb) + 1, x0:x1]
-        centre = xc - x0
-        pts, widths = [], []
-        for r in range(sub.shape[0] - 1, -1, -1):
-            row = sub[r]
-            cols = np.flatnonzero(row)
-            if len(cols) == 0:
-                if pts and (sub.shape[0] - 1 - r) > len(pts) + 6:
-                    break
-                continue
-            # Keep the run of columns nearest the centre.
-            c0 = int(cols[np.argmin(np.abs(cols - centre))])
-            lo = c0
-            while lo > 0 and row[lo - 1]:
-                lo -= 1
-            hi = c0
-            while hi < len(row) - 1 and row[hi + 1]:
-                hi += 1
-            widths.append(hi - lo + 1)
-            pts.append((x0 + (lo + hi) / 2.0, ytop + r))
-            centre = (lo + hi) / 2.0       # follow a dart that leans away from the tip direction
-        if len(pts) < 35:
-            continue
-        P = np.array(pts, float)
-        wmed = float(np.median(widths))
-        if wmed > 32 or wmed < 4:
-            continue
-        # Robust line fit x = a*y + b on the lowest 100 px (the barrel).
-        P = P[P[:, 1] > yb - 100]
-        A = np.c_[P[:, 1], np.ones(len(P))]
-        coef = np.linalg.lstsq(A, P[:, 0], rcond=None)[0]
-        res = np.abs(A @ coef - P[:, 0])
-        keep = res < max(2.5, np.percentile(res, 80))
-        coef = np.linalg.lstsq(A[keep], P[keep, 0], rcond=None)[0]
-        if abs(math.degrees(math.atan(coef[0]))) > max_dev:
-            continue
-        end = np.array([coef[0] * yb + coef[1], yb])
-        top = np.array([coef[0] * (yb - len(pts)) + coef[1], yb - len(pts)])
-        e = Minv @ np.r_[end, 1]
-        tp = Minv @ np.r_[top, 1]
-        d = (e - tp) / np.linalg.norm(e - tp)
-        axes.append(dict(end=e, top=tp, d=d, width=wmed, length=float(len(pts))))
-    # Merge collinear axes (barrel grooves split the mask): keep the lowest end, longest support.
-    out: List[dict] = []
-    for a in sorted(axes, key=lambda a: -(a["end"] @ tip_dir)):
-        dup = False
-        for b in out:
-            nb = np.array([-b["d"][1], b["d"][0]])
-            if abs((a["end"] - b["end"]) @ nb) < MERGE_END_PX and abs((a["top"] - b["end"]) @ nb) < MERGE_TOP_PX \
-                    and (b["end"] - a["end"]) @ b["d"] >= -3:
-                b["length"] = max(b["length"], a["length"] + float((b["end"] - a["end"]) @ b["d"]))
-                dup = True
-                break
-            # A complete silhouette (reference mode) also yields "ends" on the barrel rings and the
-            # flight: any end inside a longer dart's body corridor is part of that dart.
-            behind = (b["end"] - a["end"]) @ b["d"]
-            if corridor and abs((a["end"] - b["end"]) @ nb) < b["width"] / 2 + 4 and 0 < behind < b["length"] + 20:
-                dup = True
-                break
-        if not dup:
-            out.append(a)
-    return out
-
-
 def _axes_from_silhouette(m: np.ndarray, tip_dir: np.ndarray, max_dev: float = 45.0) -> List[dict]:
-    """Dart axes in a complete dart silhouette (reference mode).
+    """Dart axes in a complete dart silhouette (change against the empty-board reference).
 
     Every pixel on the lower boundary of the mask (no mask just ahead of it along the tip
     direction) is a candidate barrel end. From each candidate, rays are cast back toward the flight
@@ -583,11 +436,11 @@ def detect_dart_tips(frames: Dict[str, List[np.ndarray]], cams: Dict[str, Camera
     """Find the dart tips seen by exactly three calibrated cameras.
 
     `frames` maps camera id -> burst (BGR, capture resolution; 1..N frames, 3 recommended).
-    `references` (same keys) are bursts of the EMPTY board taken with the same settings. With
-    them every camera finds its darts on its own by change detection (robust to leaning,
-    overlapping and dark darts) and the tip is measured in the image; without them the darts are
-    found by 3-camera consensus on the board plane.
-    Fewer than 3 usable cameras gives an empty result with WARN_NEED_THREE_CAMERAS.
+    `references` (same keys) are bursts of the EMPTY board taken with the same settings; every
+    camera finds its darts on its own by change detection (robust to leaning, overlapping and
+    dark darts) and the tip is measured in the image.
+    Fewer than 3 usable cameras gives an empty result with WARN_NEED_THREE_CAMERAS, a missing
+    reference for one of them an empty result with WARN_NEED_REFERENCE.
     """
     t0 = time.perf_counter()
     ids = [cid for cid in cams if frames.get(cid)]
@@ -596,35 +449,25 @@ def detect_dart_tips(frames: Dict[str, List[np.ndarray]], cams: Dict[str, Camera
     if len(ids) > 3:
         logger.warning("Tip detection uses 3 cameras, ignoring %s", ids[3:])
         ids = ids[:3]
+    if references is None or not all(references.get(cid) for cid in ids):
+        logger.warning("Tip detection needs an empty-board picture from every camera")
+        return TipDetection([], {}, time.perf_counter() - t0, [WARN_NEED_REFERENCE])
     models = [cams[cid] for cid in ids]
     preps = [_prepare(m) for m in models]
     meds = [_burst_median(frames[m.id], m.size) for m in models]
-    use_ref = references is not None and all(references.get(m.id) for m in models)
-    if use_ref:
-        A = [_reference_evidence(_burst_median(references[m.id], m.size), med) for m, med in zip(models, meds)]
-    else:
-        A = _anomaly_maps(meds, preps)
+    A = [_reference_evidence(_burst_median(references[m.id], m.size), med) for m, med in zip(models, meds)]
     dbg: Optional[Dict[str, np.ndarray]] = {} if debug else None
 
     per: List[List[dict]] = []
-    ref_thr: List[float] = []
     for i, (m, c, med) in enumerate(zip(models, preps, meds)):
         x0, y0, x1, y1 = c["crop"]
-        if use_ref:
-            Aimg = A[i][y0:y1, x0:x1]
-            mask = _reference_mask(Aimg, ~c["far"])
-            vals = Aimg[~c["far"]]
-            ref_thr.append(max(REF_MIN_DIFF, REF_NOISE_K * float(np.median(vals)) if vals.size else REF_MIN_DIFF))
-        else:
-            Aimg = cv2.remap(A[i], *c["to_image"], cv2.INTER_LINEAR)
-            Aimg[c["far"]] = 0
-            mask = _dart_mask(Aimg)
+        mask = _reference_mask(A[i][y0:y1, x0:x1], ~c["far"])
         if dbg is not None:
             full = np.zeros((m.size[1], m.size[0]), np.uint8)
             full[y0:y1, x0:x1] = mask
             dbg[f"mask:{m.id}"] = full
             dbg[f"evidence:{m.id}"] = A[i]
-        axes = _axes_from_silhouette(mask, c["tip_dir"]) if use_ref else _axes_from_mask(mask, c["tip_dir"])
+        axes = _axes_from_silhouette(mask, c["tip_dir"])
         g = cv2.GaussianBlur(cv2.cvtColor(med, cv2.COLOR_BGR2GRAY).astype(np.float32), (0, 0), 0.8)
         off = np.array([x0, y0], float)
         for ax in axes:
@@ -683,10 +526,9 @@ def detect_dart_tips(frames: Dict[str, List[np.ndarray]], cams: Dict[str, Camera
             ax = members.get(i)
             if ax is not None:
                 d, w = ax["d"], ax["width"]
-                if use_ref:
-                    # The silhouette axis is exact in this camera; the board point carries the
-                    # homography error, so keep only its position along the axis.
-                    p = ax["end"] + ((p - ax["end"]) @ d) * d
+                # The silhouette axis is exact in this camera; the board point carries the
+                # homography error, so keep only its position along the axis.
+                p = ax["end"] + ((p - ax["end"]) @ d) * d
             else:
                 d, w = c["tip_dir"], DEFAULT_WIDTH_PX
             L = _point_len_px(c, X)

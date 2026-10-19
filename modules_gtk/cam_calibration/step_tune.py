@@ -205,7 +205,11 @@ class TuneStep:
             v.ui(session, self._on_finished, cancel.is_set(), moved)
 
     def _final_check(self, session: int, cams: list) -> List[int]:
-        """Three-camera re-detection after the last camera; ids of tips that moved since step 2."""
+        """Three-camera re-detection after the last camera; ids of tips that moved since step 2.
+
+        Every camera is back on its step-2 settings here (the optimizer always restores its
+        snapshot), so the empty-board pictures of step 1 still match.
+        """
         v = self.view
         det0 = v.detection
         if det0 is None or not det0.tips:
@@ -218,10 +222,12 @@ class TuneStep:
                 burst = v.source.capture_burst(cam, 3, w, h)
                 if burst:
                     frames[cam_key(cam)] = burst
-            models = {k: m for k, m in v.models.items() if k in frames}
+            models = {k: m for k, m in v.models.items() if k in frames and k in v.reference_frames}
             if len(models) < 3:
+                logger.warning("End-of-run dart check skipped: no burst or empty-board picture from every camera")
                 return []
-            det1 = detect_dart_tips({k: frames[k] for k in models}, models, expected=len(det0.tips))
+            det1 = detect_dart_tips({k: frames[k] for k in models}, models, expected=len(det0.tips),
+                                    references={k: v.reference_frames[k] for k in models})
             moved = compare_tips(det0, det1)
             if moved:
                 logger.warning("End-of-run check: tips %s moved or are missing", moved)

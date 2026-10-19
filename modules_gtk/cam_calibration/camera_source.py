@@ -90,6 +90,18 @@ class CameraSource:
         except Exception as e:
             logger.warning("Failed to save calibration session telemetry: %s", e)
 
+    def export_sample(self, cams: Sequence[CameraDevice], empty: Dict[str, List[np.ndarray]],
+                      darts: Dict[str, List[np.ndarray]], capture_size: Tuple[int, int],
+                      detection=None, tip_rois=None):
+        """Save a dart sample zip for the SUIT team (worker thread); returns its path."""
+        from core.camera_manual_service import CameraManualService
+        from core.sample_exporter import SampleCamera, export_sample
+        sample_cams = [SampleCamera(key=cam_key(c), number=c.index, dev_node=c.dev_node, name=c.name,
+                                    sensor_model=c.sensor_model,
+                                    controls=CameraManualService.get_camera_controls(c.dev_node))
+                       for c in cams]
+        return export_sample(sample_cams, empty, darts, capture_size, detection=detection, tip_rois=tip_rois)
+
     @staticmethod
     def settle(seconds: float) -> None:
         # Gives the kernel a moment to release a stream before the next open

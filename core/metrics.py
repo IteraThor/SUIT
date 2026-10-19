@@ -624,7 +624,7 @@ def _line_coverage(gray: np.ndarray, roi: TipROI) -> float:
     dx, dy = roi.direction
     tx, ty = roi.tip[0] - x0, roi.tip[1] - y0
     covered = np.zeros(PROFILE_START + PROFILE_LEN + 1, dtype=bool)
-    for (ax, ay, bx, by) in lines[:, 0, :]:
+    for (ax, ay, bx, by) in lines.reshape(-1, 4):      # (N, 1, 4) in OpenCV 4, (N, 4) in OpenCV 5
         vx, vy = bx - ax, by - ay
         L = math.hypot(vx, vy)
         if L < 1:

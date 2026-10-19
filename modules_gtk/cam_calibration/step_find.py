@@ -15,6 +15,7 @@ from gi.repository import Gtk
 
 from core.dart_tip_detector import (
     WARN_HIGH_RESIDUAL,
+    WARN_NEED_REFERENCE,
     WARN_NEED_THREE_CAMERAS,
     TipDetection,
     darts_close_together,
@@ -61,6 +62,11 @@ def classify(det: Optional[TipDetection], rois: Dict[str, List[TipROI]], keys: S
         rows = {k: ("Tunes on the whole board", "neutral", "Board") for k in keys}
         return FindOutcome("warn", "Tuning on the whole board",
                            "Dart finding needs a picture from all 3 cameras.", True, True, rows)
+    if WARN_NEED_REFERENCE in det.warnings:
+        rows = {k: ("No picture of the empty board", "bad", "No picture") for k in keys}
+        return FindOutcome("bad", "No picture of the empty board",
+                           "Tap Retake empty board and take the darts out first. Then put them back "
+                           "and search again.", False, rows=rows)
 
     n = len(det.tips)
     rows: Dict[str, Tuple[str, str, str]] = {}
@@ -172,6 +178,12 @@ class FindStep:
         self.zoomed = True
         self.banner = W.ResultBanner("ok", "", "", compact=True)
         self.debug_state: Optional[str] = os.environ.get(DEBUG_ENV) or None
+        # Saves what this step worked with as a zip for the SUIT team (training / test data)
+        self.save_button = Gtk.Button(label="Save sample")
+        self.save_button.add_css_class("flat")
+        self.save_button.set_tooltip_text("Save the pictures and the tips SUIT found as a file "
+                                          "you can send to the SUIT team")
+        self.save_button.connect("clicked", lambda *_: self._save_sample())
 
         # Tap the large view to switch between the darts and the whole board
         click = Gtk.GestureClick()
@@ -216,6 +228,7 @@ class FindStep:
             v.camera_list.set_row(cam_key(cam), "Looking for tips", spinning=True)
         v.action_bar.set_secondary("Search again", sensitive=False)
         v.action_bar.set_primary("Start tuning", sensitive=False)
+        v.action_bar.set_center(None)
         prev = self.worker
         self.worker = threading.Thread(target=self._worker, args=(v.session, prev), daemon=True, name="optimizer-find")
         self.worker.start()
@@ -243,8 +256,7 @@ class FindStep:
             rois: Dict[str, List[TipROI]] = {}
             if len(models) >= 3:
                 refs = {k: v.reference_frames[k] for k in models if k in v.reference_frames}
-                det = detect_dart_tips({k: frames[k] for k in models}, models, expected=3,
-                                       references=refs if len(refs) == len(models) else None)
+                det = detect_dart_tips({k: frames[k] for k in models}, models, expected=3, references=refs)
                 for k in models:
                     rois[k] = tip_rois_for_camera(det, k, frames[k])
             else:
@@ -311,9 +323,48 @@ class FindStep:
             sub, kind, text = o.rows.get(k, ("No picture", "bad", "No tips"))
             v.camera_list.set_row(k, sub, kind, text)
         bad = not o.can_tune
-        v.action_bar.set_secondary("Search again", suggested=bad, callback=self._start_search)
+        if v.detection is not None and WARN_NEED_REFERENCE in v.detection.warnings:
+            v.action_bar.set_secondary("Retake empty board", suggested=True, callback=self._retake_reference)
+        else:
+            v.action_bar.set_secondary("Search again", suggested=bad, callback=self._start_search)
         v.action_bar.set_primary("Start tuning", sensitive=o.can_tune, suggested=not bad,
                                  callback=self._start_tuning)
+        can_save = bool(v.find_frames) and bool(v.reference_frames) and not o.board_only
+        v.action_bar.set_center(self.save_button if can_save else None)
+
+    # -- sample export ------------------------------------------------------------------
+
+    def _save_sample(self):
+        v = self.view
+        self.save_button.set_sensitive(False)
+        self.save_button.set_label("Saving...")
+        # Copies: the user may drag a tip or search again while the zip is written
+        args = (list(v.cameras), dict(v.reference_frames), dict(v.find_frames), tuple(v.capture_size),
+                v.detection, {k: list(rs) for k, rs in v.tip_rois.items()})
+        threading.Thread(target=self._save_worker, args=(v.session, *args), daemon=True,
+                         name="optimizer-sample").start()
+
+    def _save_worker(self, session: int, cams, empty, darts, size, det, rois):
+        try:
+            path = self.view.source.export_sample(cams, empty, darts, size, detection=det, tip_rois=rois)
+            self.view.ui(session, self._on_sample_saved, str(path))
+        except Exception:
+            logger.exception("Saving the dart sample failed")
+            self.view.ui(session, self._on_sample_saved, None)
+
+    def _on_sample_saved(self, path: Optional[str]):
+        self.save_button.set_sensitive(True)
+        self.save_button.set_label("Save sample")
+        if path:
+            self.view.toast(f"Sample saved: {os.path.basename(path)} in {os.path.dirname(path)}. "
+                            "Send this file to the SUIT team.")
+        else:
+            self.view.toast("Could not save the sample. See the SUIT log for details.")
+
+    def _retake_reference(self):
+        """Back to step 1 without an empty-board picture: it opens on Take all darts out."""
+        self.view.reference_frames = {}
+        self.view.show_step("insert")
 
     def _on_tip_moved(self, dart_id: int, x: float, y: float):
         """A box was dragged: the tip of this dart in the selected camera is where the user put it."""
