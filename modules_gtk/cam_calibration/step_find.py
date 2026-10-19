@@ -308,7 +308,8 @@ class FindStep:
         else:
             v.heading.set_text("Check the darts SUIT found",
                                "Yellow boxes mark the tips. Drag a box onto its tip to correct it. "
-                               "Tap a camera to check it.")
+                               "Tap a camera to check it. Something wrong? Tap Save sample and send "
+                               "the file to the SUIT team.")
         self._apply_outcome(keys)
         v.select_camera(v.selected)
         self._show_camera(v.selected)
@@ -353,13 +354,15 @@ class FindStep:
             self.view.ui(session, self._on_sample_saved, None)
 
     def _on_sample_saved(self, path: Optional[str]):
+        """The result stays in the banner: a toast is gone after 3 seconds."""
         self.save_button.set_sensitive(True)
         self.save_button.set_label("Save sample")
         if path:
-            self.view.toast(f"Sample saved: {os.path.basename(path)} in {os.path.dirname(path)}. "
-                            "Send this file to the SUIT team.")
+            self.banner.set_result("ok", "Sample saved",
+                                   f"{os.path.basename(path)} is in {os.path.dirname(path)}. "
+                                   "Send this file to the SUIT team.")
         else:
-            self.view.toast("Could not save the sample. See the SUIT log for details.")
+            self.banner.set_result("bad", "Could not save the sample", "See the SUIT log for details.")
 
     def _retake_reference(self):
         """Back to step 1 without an empty-board picture: it opens on Take all darts out."""
