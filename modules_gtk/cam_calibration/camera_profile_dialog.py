@@ -9,20 +9,26 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gtk
 
 from core.camera_probe import usb_identity
-from core.camera_profiles import PROFILES, CameraProfile, load_selected, save_selected
+from core.camera_profiles import PROFILES, CameraProfile, load_selected, profile_for_usb, save_selected
 from core.v4l2_topology import CameraDevice
 
 
-def reported_brands(cameras: Sequence[CameraDevice]) -> List[str]:
-    """What the connected cameras report over USB ("HBVCAM Camera (0bdc:2710)"), one entry per kind."""
-    seen: List[str] = []
+def _identities(cameras: Sequence[CameraDevice]) -> List[dict]:
+    out = []
     for cam in cameras:
         try:
             ident = usb_identity(cam.dev_node)
         except Exception:
             continue
-        if not ident:
-            continue
+        if ident:
+            out.append(ident)
+    return out
+
+
+def reported_brands(cameras: Sequence[CameraDevice]) -> List[str]:
+    """What the connected cameras report over USB ("HBVCAM Camera (0bdc:2710)"), one entry per kind."""
+    seen: List[str] = []
+    for ident in _identities(cameras):
         label = f"{ident.get('manufacturer') or ident.get('product') or 'Unknown'} ({ident.get('idVendor')}:{ident.get('idProduct')})"
         if label not in seen:
             seen.append(label)
@@ -46,7 +52,9 @@ class CameraProfileDialog(Adw.Dialog):
         if reported:
             description += f"\nYour cameras report: {', '.join(reported)}"
         group = Adw.PreferencesGroup(title="Which cameras do you use?", description=description)
-        current = load_selected()
+        # Last choice; the first time, the profile measured on these cameras' USB ids
+        current = load_selected() or profile_for_usb(
+            [f"{i.get('idVendor')}:{i.get('idProduct')}" for i in _identities(cameras)])
         first: Optional[Gtk.CheckButton] = None
         for profile in PROFILES.values():
             check = Gtk.CheckButton(valign=Gtk.Align.CENTER)

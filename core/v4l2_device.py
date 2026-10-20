@@ -191,7 +191,17 @@ class V4L2Device:
         """Set a single V4L2 control on the device."""
         try:
             cmd = ["v4l2-ctl", "-d", self.dev_node, f"--set-ctrl={name}={value}"]
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            try:
+                subprocess.run(cmd, capture_output=True, text=True, check=True)
+            except subprocess.CalledProcessError as e:
+                if name != "exposure_time_absolute" or "Permission denied" not in (e.stderr or ""):
+                    raise
+                # GXI (Sonix) cameras: a stream opened in auto exposure refuses exposure writes after a
+                # plain switch to manual until auto exposure is toggled once more
+                for mode in (3, 1):
+                    subprocess.run(["v4l2-ctl", "-d", self.dev_node, f"--set-ctrl=auto_exposure={mode}"],
+                                   capture_output=True, text=True)
+                subprocess.run(cmd, capture_output=True, text=True, check=True)
             return True
         except subprocess.CalledProcessError as e:
             logger.error("Failed to set control %s=%d on %s: %s", name, value, self.dev_node, e.stderr.strip() if e.stderr else "")

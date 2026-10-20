@@ -321,7 +321,8 @@ class ReviewStep:
                     path = getattr(cam, "by_path", None) or CameraManualService.stable_camera_path(cam.dev_node)
                     s = res.optimized_settings
                     if s.exposure_lock and res.lock_reference:
-                        locks[path] = LockEntry(path, s.backlight_compensation, s.gain, res.lock_reference)
+                        locks[path] = LockEntry(path, s.backlight_compensation, s.gain, res.lock_reference,
+                                                approach_below=v.camera_profile.ae_approach_below)
                     else:
                         unlocked.append(path)
                 except Exception as e:

@@ -550,8 +550,13 @@ class CameraOptimizer:
         exp_min, exp_max, _ = rng("exposure_time_absolute", 1, 1250, 166)
         gain_min, gain_max, _ = rng("gain", 0, 128, 64)
         g_min, g_max, g_def = rng("gamma", 100, 500, 300)
-        _, _, con_def = rng("contrast", 0, 100, 34)
-        _, _, sharp_def = rng("sharpness", 0, 100, 40)
+        con_min, con_max, con_def = rng("contrast", 0, 100, 34)
+        sharp_min, sharp_max, sharp_def = rng("sharpness", 0, 100, 40)
+        # A profile can fix tone controls its tip measurements found better than the camera default
+        if p.contrast is not None:
+            con_def = max(con_min, min(con_max, p.contrast))
+        if p.sharpness is not None:
+            sharp_def = max(sharp_min, min(sharp_max, p.sharpness))
         _, _, bright_def = rng("brightness", -64, 64, 0)
         e_long = max(exp_min, min(exp_max, p.max_exposure))
 
@@ -587,35 +592,40 @@ class CameraOptimizer:
                         white_p999=float(np.percentile(st[:, white], 99.9)) if white.any() else float(np.percentile(st, 99.9)),
                         frame=burst[0])
 
-        # Sensor ceiling: where a saturated white pixel lands at minimum gain.
-        report(STAGE_BRIGHTNESS, 0.06, "Finding the brightest the sensor can see")
-        s_long, s_short = stats(e_long), stats(int(e_long * 0.8))
-        if s_long is None or s_short is None:
-            return None
-        ceiling = s_long["white"]
-        saturated = abs(s_long["white"] - s_short["white"]) <= p.saturated_tol
-        note("sensor ceiling %.1f DN at exposure %d (%.1f at %d)%s", ceiling, e_long, s_short["white"],
-             int(e_long * 0.8), "" if saturated else ": white never saturates, using the longest exposure")
-
         exposure, lock_blc = e_long, None
-        if saturated:
-            lo, hi = exp_min, e_long
-            while hi - lo > max(2, lo // 50):
-                mid = (lo + hi) // 2
-                s = stats(mid)
-                if s is None:
-                    return None
-                if s["white"] <= p.knee_frac * ceiling:
-                    lo = mid
-                else:
-                    hi = mid
-                report(STAGE_BRIGHTNESS, min(0.30, 0.08 + 0.025 * steps[0]), "Finding the right exposure", frame=s["frame"])
-            knee = lo
-            exposure = max(exp_min, min(e_long, int(round(knee * p.knee_overshoot))))
-            note("knee exposure %d (white %.0f%% of the ceiling), aiming at %d", knee, p.knee_frac * 100, exposure)
-            lock = self._pick_ae_lock(report, note, stats, ctrls, knee, exp_min, e_long)
-            if lock is not None:
-                lock_blc, exposure = lock
+        if p.exposure_strategy == "ae_target":
+            lock_blc = self._pick_ae_target(report, note, stats, ctrls)
+            exposure = 0  # the firmware does not report the exposure auto exposure picked
+        if lock_blc is None:
+            # Sensor ceiling: where a saturated white pixel lands at minimum gain.
+            report(STAGE_BRIGHTNESS, 0.06, "Finding the brightest the sensor can see")
+            s_long, s_short = stats(e_long), stats(int(e_long * 0.8))
+            if s_long is None or s_short is None:
+                return None
+            ceiling = s_long["white"]
+            saturated = abs(s_long["white"] - s_short["white"]) <= p.saturated_tol
+            note("sensor ceiling %.1f DN at exposure %d (%.1f at %d)%s", ceiling, e_long, s_short["white"],
+                 int(e_long * 0.8), "" if saturated else ": white never saturates, using the longest exposure")
+
+            exposure = e_long
+            if saturated:
+                lo, hi = exp_min, e_long
+                while hi - lo > max(2, lo // 50):
+                    mid = (lo + hi) // 2
+                    s = stats(mid)
+                    if s is None:
+                        return None
+                    if s["white"] <= p.knee_frac * ceiling:
+                        lo = mid
+                    else:
+                        hi = mid
+                    report(STAGE_BRIGHTNESS, min(0.30, 0.08 + 0.025 * steps[0]), "Finding the right exposure", frame=s["frame"])
+                knee = lo
+                exposure = max(exp_min, min(e_long, int(round(knee * p.knee_overshoot))))
+                note("knee exposure %d (white %.0f%% of the ceiling), aiming at %d", knee, p.knee_frac * 100, exposure)
+                lock = self._pick_ae_lock(report, note, stats, ctrls, knee, exp_min, e_long)
+                if lock is not None:
+                    lock_blc, exposure = lock
         if lock_blc is None:
             self.device.set_control("auto_exposure", 1)
             self.device.set_control("exposure_time_absolute", exposure)
@@ -624,10 +634,7 @@ class CameraOptimizer:
             # exposure_auto stays as found: to_controls() / Autodarts' config store a lock as auto exposure
             settings = dataclasses.replace(settings, exposure_auto=3, exposure_lock=1, exposure_absolute=exposure,
                                            backlight_compensation=lock_blc)
-            self.device.set_control("backlight_compensation", lock_blc)
-            self.device.set_control("auto_exposure", 3)
-            self._settle_fn()
-            self.device.set_control("auto_exposure", 1)  # lock: no exposure written
+            self._lock_ae(lock_blc, ctrls)  # lock: no exposure written
         self.device.set_control("gamma", settings.gamma)
 
         # Gain: white median at p.white_target (monotonic in gain -> bisection).
@@ -657,6 +664,19 @@ class CameraOptimizer:
             s = stats(gain=settings.gain, n=VERIFY_BURST)
             if s is None:
                 return None
+        # Gain at its minimum and white still clipping: an auto-exposure target can step down instead
+        # (it moves in steps and can land one step higher than where it was measured)
+        blc_ctrl = ctrls.get("backlight_compensation")
+        for _ in range(10):
+            if not (s["white_p999"] >= p.clip_p999 and p.exposure_strategy == "ae_target" and settings.exposure_lock
+                    and blc_ctrl is not None and settings.backlight_compensation - 2 >= blc_ctrl.min_val):
+                break
+            settings = dataclasses.replace(settings, backlight_compensation=settings.backlight_compensation - 2)
+            self._lock_ae(settings.backlight_compensation, ctrls)
+            s = stats(n=VERIFY_BURST)
+            if s is None:
+                return None
+            note("white clips: auto exposure locked again with backlight compensation %d", settings.backlight_compensation)
         while s["black"] > p.black_max_mean and settings.gamma - p.gamma_step >= max(g_min, g_def):
             settings = dataclasses.replace(settings, gamma=settings.gamma - p.gamma_step)
             self.device.set_control("gamma", settings.gamma)
@@ -678,6 +698,50 @@ class CameraOptimizer:
         elif s["black_p2"] < p.black_floor_p2 / 2:
             veto = f"black sisal crushed ({s['black_p2']:.1f} DN)"
         return settings, veto
+
+    def _pick_ae_target(self, report, note, stats, ctrls) -> Optional[int]:
+        """backlight_compensation at which auto exposure puts the white sisal at white_target.
+
+        For cameras whose auto exposure uses backlight_compensation as a fine, repeatable brightness
+        target (and whose written exposure is not repeatable): white rises with it, so bisect for the
+        brightest target whose white sisal stays at white_target and below the clip guard.
+        """
+        p = self.profile
+        c = ctrls.get("backlight_compensation")
+        if c is None or "auto_exposure" not in ctrls:
+            return None
+        self.device.set_control("auto_exposure", 3)
+
+        def fits(blc: int) -> Optional[bool]:
+            self.device.set_control("backlight_compensation", blc)
+            self._settle_fn()
+            st = stats()
+            if st is None:
+                return None
+            note("auto exposure with backlight compensation %d: white %.0f (p99.9 %.0f) DN", blc, st["white"],
+                 st["white_p999"])
+            report(STAGE_BRIGHTNESS, min(0.40, 0.08 + 0.03 * steps), "Finding the right exposure", frame=st["frame"])
+            return st["white"] <= p.white_target and st["white_p999"] < p.clip_p999
+
+        steps = 0
+        lo, hi = c.min_val, c.max_val
+        ok = fits(hi)
+        if ok is None:
+            return None
+        if ok:
+            lo = hi  # even the brightest target stays below: use it, gain makes up the rest
+        while hi - lo > max(1, c.step):
+            steps += 1
+            mid = lo + (hi - lo) // 2
+            ok = fits(mid)
+            if ok is None:
+                return None
+            if ok:
+                lo = mid
+            else:
+                hi = mid
+        note("locking auto exposure with backlight compensation %d", lo)
+        return lo
 
     def _pick_ae_lock(self, report, note, stats, ctrls, knee: int, exp_min: int, e_long: int) -> Optional[Tuple[int, int]]:
         """(backlight_compensation, equivalent exposure) of the locked auto exposure nearest the target.
@@ -749,14 +813,29 @@ class CameraOptimizer:
         for name in ("gain", "gamma", "contrast", "sharpness", "brightness"):
             self.device.set_control(name, getattr(s, name))
         if s.exposure_lock:
-            self.device.set_control("backlight_compensation", s.backlight_compensation)
-            self.device.set_control("auto_exposure", 3)
-            self._settle_fn()
-            self.device.set_control("auto_exposure", 1)
+            self._lock_ae(s.backlight_compensation)
         else:
             self.device.set_control("auto_exposure", 1)
             self.device.set_control("exposure_time_absolute", s.exposure_absolute)
         self._sleep(0.08)
+
+    def _lock_ae(self, blc: int, ctrls=None) -> None:
+        """Auto exposure metered with `blc`, settled, then locked (manual mode, no exposure written).
+
+        With a profile's ae_approach_below it first settles that much lower, so auto exposure always
+        reaches its target from below and lands on the same step as the lock watcher's re-lock.
+        """
+        below = self.profile.ae_approach_below
+        if below:
+            c = (ctrls or {}).get("backlight_compensation")
+            lo = c.min_val if c is not None else 0
+            self.device.set_control("backlight_compensation", max(lo, blc - below))
+            self.device.set_control("auto_exposure", 3)
+            self._settle_fn()
+        self.device.set_control("backlight_compensation", blc)
+        self.device.set_control("auto_exposure", 3)
+        self._settle_fn()
+        self.device.set_control("auto_exposure", 1)
 
     def _settle(self, get_frame, mask: Optional[np.ndarray], note) -> None:
         """Wait until auto exposure has converged (after a restore, or before a lock).
@@ -784,7 +863,10 @@ class CameraOptimizer:
 
     @staticmethod
     def _fmt(s: CameraSettings) -> str:
-        e = f"AE-lock(blc {s.backlight_compensation}) ~{s.exposure_absolute}" if s.exposure_lock else str(s.exposure_absolute)
+        if s.exposure_lock:
+            e = f"AE-lock(blc {s.backlight_compensation})" + (f" ~{s.exposure_absolute}" if s.exposure_absolute > 0 else "")
+        else:
+            e = str(s.exposure_absolute)
         return f"E={e} G={s.gain} S={s.sharpness} C={s.contrast} gamma={s.gamma}"
 
     @staticmethod

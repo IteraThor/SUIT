@@ -11,6 +11,10 @@ them on auto exposure, which is a good picture on its own). This watcher re-crea
     the user changed since then is left alone),
   * Autodarts' own frames of that camera held still for STEADY_READINGS readings (auto exposure has
     settled) within LEVEL_TOL of the level measured at calibration (nobody standing in the view).
+A camera whose auto exposure has hysteresis (GXI) can settle one step above the calibrated level when
+it starts from a brighter state. For an entry with approach_below, a steady level above the tolerance
+makes the watcher meter that much lower for a moment and go back, so auto exposure comes from below
+as it did at calibration (at most MAX_NUDGES times per camera while Autodarts keeps running).
 
 Run as a user service: python -m core.exposure_lock
 """
@@ -42,6 +46,8 @@ IDLE_POLL_S = 5.0  # all cameras locked (or nothing to do): look less often
 STEADY_READINGS = 3  # consecutive frame levels within STEADY_TOL of each other
 STEADY_TOL = 0.015
 LEVEL_TOL = 0.15  # frame level within this share of the calibrated one (Autodarts' re-encoded frames read ~5 % brighter)
+MAX_NUDGES = 3
+NUDGE_S = 1.5  # time auto exposure meters at the lower target before going back
 
 
 @dataclasses.dataclass
@@ -50,6 +56,7 @@ class LockEntry:
     backlight_compensation: int
     gain: int
     reference: float  # mean frame level (DN) with the calibrated settings
+    approach_below: int = 0  # backlight_compensation steps to approach the target from below (0 = never)
 
 
 class LockTracker:
@@ -58,19 +65,29 @@ class LockTracker:
     def __init__(self, entry: LockEntry):
         self.entry = entry
         self.levels: List[float] = []
+        self.too_bright = False  # last update: steady, but above the tolerance
+        self.nudges = 0
 
     def reset(self) -> None:
         self.levels = []
+        self.too_bright = False
 
     def update(self, level: float) -> bool:
         """Feed one frame level; True when the camera should be locked now."""
+        self.too_bright = False
         self.levels = (self.levels + [level])[-STEADY_READINGS:]
         if len(self.levels) < STEADY_READINGS:
             return False
         lo, hi = min(self.levels), max(self.levels)
         if hi - lo > STEADY_TOL * max(hi, 1.0):
             return False
+        if level > (1.0 + LEVEL_TOL) * self.entry.reference:
+            self.too_bright = True
+            return False
         return abs(level - self.entry.reference) <= LEVEL_TOL * self.entry.reference
+
+    def should_nudge(self) -> bool:
+        return self.too_bright and self.entry.approach_below > 0 and self.nudges < MAX_NUDGES
 
 
 def load_entries(path: Optional[Path] = None) -> List[LockEntry]:
@@ -188,9 +205,18 @@ def run(stop_after: Optional[float] = None) -> None:
                     _v4l2("-d", e.path, "-c", "auto_exposure=1")
                     logger.info("Locked exposure on %s (frame level %.1f, calibrated %.1f)", e.path, level, e.reference)
                     t.reset()
+                elif t.should_nudge():
+                    t.nudges += 1
+                    logger.info("%s settled above calibration (frame level %.1f, calibrated %.1f): metering from below",
+                                e.path, level, e.reference)
+                    _v4l2("-d", e.path, "-c", f"backlight_compensation={max(0, e.backlight_compensation - e.approach_below)}")
+                    time.sleep(NUDGE_S)
+                    _v4l2("-d", e.path, "-c", f"backlight_compensation={e.backlight_compensation}")
+                    t.reset()
         else:
             for t in trackers.values():
                 t.reset()
+                t.nudges = 0  # a new Autodarts start may need its own nudges
         time.sleep(POLL_S if busy else IDLE_POLL_S)
 
 

@@ -40,13 +40,22 @@ def _arrow(a, b, fmt="{}") -> str:
     return sa if sa == sb else f"{sa} → {sb}"
 
 
+def _exposure_text(s: CameraSettings) -> str:
+    if s.exposure_lock:
+        ms = f" ~{s.exposure_absolute / 10.0:.1f} ms" if s.exposure_absolute > 0 else ""
+        return f"locked auto (blc {s.backlight_compensation}){ms}"
+    if s.exposure_auto != 1:
+        return "auto"
+    return f"{s.exposure_absolute / 10.0:.1f} ms"
+
+
 def settings_rows(res: Optional[OptimizationResult]) -> List[str]:
     if res is None:
         return ["–"] * 5
     a: CameraSettings = res.initial_settings
     b: CameraSettings = res.optimized_settings
     return [
-        _arrow(a.exposure_absolute / 10.0, b.exposure_absolute / 10.0, "{:.1f} ms"),
+        _arrow(_exposure_text(a), _exposure_text(b)),
         _arrow(a.gain, b.gain),
         _arrow(a.sharpness, b.sharpness),
         _arrow(a.contrast, b.contrast),
