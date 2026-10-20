@@ -174,7 +174,7 @@ class TuneStep:
                     v.ui(session, self._on_progress, _key, _idx, total, stage, fraction, text, frame)
 
                 try:
-                    optimizer = v.source.optimizer(cam)
+                    optimizer = v.source.optimizer(cam, profile=v.camera_profile)
                     res = optimizer.run_optimization(progress_cb=cb, cancel_event=cancel, tips=tips,
                                                      homography=model.H_img2board if model is not None else None)
                 except Exception as e:

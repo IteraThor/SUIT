@@ -1,6 +1,7 @@
 """Camera Optimizer engine: sensor-referred exposure for one camera, with a not-worse check.
 
-The settings are measured, not searched. On the rig (3 OV2710 USB cameras, 1280x960 MJPEG):
+The settings are measured, not searched. On the rig (3 HBV OV2710 USB cameras, 1280x960 MJPEG; the
+numbers per camera brand are in core.camera_profiles):
   * White sisal saturates IN THE SENSOR long before the 8-bit output clips: at gain 0 a saturated
     pixel reads ~127-140 DN, so a DN-based "no clipping" test never sees it. Past that point the dark
     groove of a wire on white (stand-in for a dark steel point on a white segment) collapses.
@@ -20,10 +21,10 @@ tip contrast +36 %, clipped board pixels 23 % -> 0 %.
 Sequence per camera:
   1. Snapshot, initial burst; darts-moved check against step 2.
   2. Brightness: sensor ceiling (white median at a long exposure, gain 0), bisection for the knee
-     exposure (white median = KNEE_FRAC of the ceiling). Each backlight_compensation level: auto
+     exposure (white median = knee_frac of the ceiling). Each backlight_compensation level: auto
      exposure converges, is locked, and its exposure is read off the written-exposure response; the
-     level landing nearest KNEE_OVERSHOOT x knee is used. None in range: written exposure at that point.
-  3. Sensitivity: bisection for the gain that puts the white median at WHITE_TARGET.
+     level landing nearest knee_overshoot x knee is used. None in range: written exposure at that point.
+  3. Sensitivity: bisection for the gain that puts the white median at white_target.
   4. Detail: tone guards (black floor not crushed, blacks not washed out, no 8-bit clipping).
   5. Check: interleaved A/B (initial / new / initial / new) on tip CNR; the new settings are applied
      unless they are measurably worse (non-inferiority) or a guard fails.
@@ -58,34 +59,19 @@ from core.metrics import (
     tip_metrics,
     _gray_stack,
 )
+from core.camera_profiles import DEFAULT_PROFILE, CameraProfile
 from core.v4l2_device import CameraSettings, V4L2Device
 
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[..., None]
 
-# Exposure (V4L2 exposure_time_absolute units). On these cameras the brightness keeps rising up to
-# ~650 while the stream stays at 30 fps; at 700 frames became unstable, so the search stops at 600.
-MAX_EXPOSURE = 600
-KNEE_FRAC = 0.98  # knee: white-sisal median at this share of the sensor ceiling
-KNEE_OVERSHOOT = 1.15  # final exposure past the knee: more light for dark tips, white side still >= 2.5x Autodarts' threshold
-SATURATED_TOL = 1.5  # DN; white median equal at MAX and 0.8 * MAX exposure = the sensor is saturated there
-LOCK_RANGE = (0.85, 1.25)  # a lock is used within this multiple of the knee; past 1.25 the dark-on-white groove fell below 40 DN
-RESPONSE_STEPS = (0.5, 0.7, 0.85, 1.0, 1.15, 1.3, 1.5, 1.75, 2.0)  # x knee: written-exposure response table
-
-WHITE_TARGET = 231.0  # DN, white-sisal median after gain: the saturated white lands just under 8-bit clipping
-GAMMA_LIFT = 0.75  # gamma = default + this share of (max - default): 300 -> 450 on a 100..500 control
-
-# Tone guards on the black sisal (DN)
-BLACK_FLOOR_P2 = 6.0  # darkest 2 % above this, or the dark steel on black is crushed: contrast steps down
-BLACK_MAX_MEAN = 70.0  # above this (30 % of white) the blacks are washed out: gamma steps down
-CLIP_P999 = 250.0  # white-sisal p99.9 below this: gain steps down otherwise
-CONTRAST_STEP, GAMMA_STEP = 2, 25
+# The camera-specific numbers (exposure range, knee, AE lock, tone targets and guards) live in the
+# selected CameraProfile (core.camera_profiles); what follows is the measurement method itself.
 
 # Burst lengths (a candidate is only compared with a reference of the same N).
 SEARCH_BURST = 4
 VERIFY_BURST = 10
-FLUSH = 4  # frames to drop after a control change (the change shows up within 2 frames)
 
 # Not-worse rule: the new settings are applied unless the tip score drops by more than this, or by more
 # than twice the repeat-to-repeat spread of the A/B measurement, whichever is larger (capped).
@@ -279,8 +265,9 @@ class _Cancelled(Exception):
 class CameraOptimizer:
     """Measures the exposure, gain and tone settings of one camera and verifies them A/B."""
 
-    def __init__(self, device: V4L2Device):
+    def __init__(self, device: V4L2Device, profile: Optional[CameraProfile] = None):
         self.device = device
+        self.profile = profile or DEFAULT_PROFILE
         self.detector = BoardDetector()
         self.evaluator = QualityEvaluator()
         self._sleep = time.sleep  # replaced by tests
@@ -341,12 +328,14 @@ class CameraOptimizer:
             except Exception:
                 cap = None
 
-            def get_frame(flush: int = FLUSH) -> Optional[np.ndarray]:
+            def get_frame(flush: Optional[int] = None) -> Optional[np.ndarray]:
+                flush = self.profile.flush if flush is None else flush
                 if cap is not None and cap.isOpened():
                     return self.device.read_stream_frame(cap, flush_frames=flush)
                 return self.device.capture_frame(width=cap_w, height=cap_h, warmup_frames=max(3, flush))
 
-            def get_burst(count: int, flush: int = FLUSH) -> Optional[List[np.ndarray]]:
+            def get_burst(count: int, flush: Optional[int] = None) -> Optional[List[np.ndarray]]:
+                flush = self.profile.flush if flush is None else flush
                 # A short burst would break the burst-length rule, so retry once, then give up.
                 for _ in range(2):
                     if cap is not None and cap.isOpened():
@@ -394,6 +383,7 @@ class CameraOptimizer:
         report(STAGE_BRIGHTNESS, 0.04, "Looking at the current picture", frame=initial_frame)
 
         initial_ctrls = self.device.query_controls() or {}
+        note("camera profile: %s", self.profile.name)
         initial_settings = self._settings_from_controls(initial_ctrls)
 
         tips = list(tips or [])
@@ -551,9 +541,11 @@ class CameraOptimizer:
 
     def _measure_settings(self, report, note, check_abort, get_burst, ctrls, initial: CameraSettings,
                           white: np.ndarray, black: np.ndarray) -> Optional[Tuple[CameraSettings, Optional[str]]]:
+        p = self.profile
+
         def rng(name: str, lo: int, hi: int, default: int) -> Tuple[int, int, int]:
             c = ctrls.get(name)
-            return (c.min_val, c.max_val, c.default_val) if c is not None else (lo, hi, default)
+            return (c.min_val, c.max_val, c.default_val) if c is not None else p.fallback(name, lo, hi, default)
 
         exp_min, exp_max, _ = rng("exposure_time_absolute", 1, 1250, 166)
         gain_min, gain_max, _ = rng("gain", 0, 128, 64)
@@ -561,9 +553,9 @@ class CameraOptimizer:
         _, _, con_def = rng("contrast", 0, 100, 34)
         _, _, sharp_def = rng("sharpness", 0, 100, 40)
         _, _, bright_def = rng("brightness", -64, 64, 0)
-        e_long = max(exp_min, min(exp_max, MAX_EXPOSURE))
+        e_long = max(exp_min, min(exp_max, p.max_exposure))
 
-        gamma = int(round(g_def + GAMMA_LIFT * (g_max - g_def))) if g_max > g_def else g_def
+        gamma = int(round(g_def + p.gamma_lift * (g_max - g_def))) if g_max > g_def else g_def
         gamma = max(g_min, min(g_max, gamma))
         settings = dataclasses.replace(initial, exposure_auto=1, gain=gain_min, gamma=gamma, contrast=con_def,
                                        sharpness=sharp_def, brightness=bright_def)
@@ -601,7 +593,7 @@ class CameraOptimizer:
         if s_long is None or s_short is None:
             return None
         ceiling = s_long["white"]
-        saturated = abs(s_long["white"] - s_short["white"]) <= SATURATED_TOL
+        saturated = abs(s_long["white"] - s_short["white"]) <= p.saturated_tol
         note("sensor ceiling %.1f DN at exposure %d (%.1f at %d)%s", ceiling, e_long, s_short["white"],
              int(e_long * 0.8), "" if saturated else ": white never saturates, using the longest exposure")
 
@@ -613,14 +605,14 @@ class CameraOptimizer:
                 s = stats(mid)
                 if s is None:
                     return None
-                if s["white"] <= KNEE_FRAC * ceiling:
+                if s["white"] <= p.knee_frac * ceiling:
                     lo = mid
                 else:
                     hi = mid
                 report(STAGE_BRIGHTNESS, min(0.30, 0.08 + 0.025 * steps[0]), "Finding the right exposure", frame=s["frame"])
             knee = lo
-            exposure = max(exp_min, min(e_long, int(round(knee * KNEE_OVERSHOOT))))
-            note("knee exposure %d (white %.0f%% of the ceiling), aiming at %d", knee, KNEE_FRAC * 100, exposure)
+            exposure = max(exp_min, min(e_long, int(round(knee * p.knee_overshoot))))
+            note("knee exposure %d (white %.0f%% of the ceiling), aiming at %d", knee, p.knee_frac * 100, exposure)
             lock = self._pick_ae_lock(report, note, stats, ctrls, knee, exp_min, e_long)
             if lock is not None:
                 lock_blc, exposure = lock
@@ -638,7 +630,7 @@ class CameraOptimizer:
             self.device.set_control("auto_exposure", 1)  # lock: no exposure written
         self.device.set_control("gamma", settings.gamma)
 
-        # Gain: white median at WHITE_TARGET (monotonic in gain -> bisection).
+        # Gain: white median at p.white_target (monotonic in gain -> bisection).
         lo, hi = gain_min, gain_max
         k = 0
         while hi - lo > 1:
@@ -646,33 +638,33 @@ class CameraOptimizer:
             s = stats(gain=mid, n=2)
             if s is None:
                 return None
-            if s["white"] <= WHITE_TARGET:
+            if s["white"] <= p.white_target:
                 lo = mid
             else:
                 hi = mid
             k += 1
             report(STAGE_SENSITIVITY, min(0.60, 0.42 + 0.025 * k), "Adjusting sensitivity", frame=s["frame"])
         settings = dataclasses.replace(settings, gain=lo)
-        note("gain %d puts white at %.0f DN", lo, WHITE_TARGET)
+        note("gain %d puts white at %.0f DN", lo, p.white_target)
 
         # Tone guards.
         report(STAGE_DETAIL, 0.62, "Checking blacks and whites")
         s = stats(gain=settings.gain, n=VERIFY_BURST)
         if s is None:
             return None
-        while s["white_p999"] >= CLIP_P999 and settings.gain > gain_min:
+        while s["white_p999"] >= p.clip_p999 and settings.gain > gain_min:
             settings = dataclasses.replace(settings, gain=settings.gain - 1)
             s = stats(gain=settings.gain, n=VERIFY_BURST)
             if s is None:
                 return None
-        while s["black"] > BLACK_MAX_MEAN and settings.gamma - GAMMA_STEP >= max(g_min, g_def):
-            settings = dataclasses.replace(settings, gamma=settings.gamma - GAMMA_STEP)
+        while s["black"] > p.black_max_mean and settings.gamma - p.gamma_step >= max(g_min, g_def):
+            settings = dataclasses.replace(settings, gamma=settings.gamma - p.gamma_step)
             self.device.set_control("gamma", settings.gamma)
             s = stats(n=VERIFY_BURST)
             if s is None:
                 return None
-        while s["black_p2"] < BLACK_FLOOR_P2 and settings.contrast - CONTRAST_STEP >= 0 and "contrast" in ctrls:
-            settings = dataclasses.replace(settings, contrast=settings.contrast - CONTRAST_STEP)
+        while s["black_p2"] < p.black_floor_p2 and settings.contrast - p.contrast_step >= 0 and "contrast" in ctrls:
+            settings = dataclasses.replace(settings, contrast=settings.contrast - p.contrast_step)
             self.device.set_control("contrast", settings.contrast)
             s = stats(n=VERIFY_BURST)
             if s is None:
@@ -681,9 +673,9 @@ class CameraOptimizer:
         note("%s: white %.0f (p99.9 %.0f), black %.0f (p2 %.1f) DN", self._fmt(settings), s["white"], s["white_p999"],
              s["black"], s["black_p2"])
         veto = None
-        if s["white_p999"] >= CLIP_P999:
+        if s["white_p999"] >= p.clip_p999:
             veto = f"white sisal clips ({s['white_p999']:.0f} DN)"
-        elif s["black_p2"] < BLACK_FLOOR_P2 / 2:
+        elif s["black_p2"] < p.black_floor_p2 / 2:
             veto = f"black sisal crushed ({s['black_p2']:.1f} DN)"
         return settings, veto
 
@@ -694,11 +686,12 @@ class CameraOptimizer:
         converges, is locked and measured, and its exposure is read off that response. Brightness is
         what matters for the comparison; the lock's lower noise comes on top.
         """
+        p = self.profile
         c = ctrls.get("backlight_compensation")
-        if c is None or "auto_exposure" not in ctrls:
+        if not p.ae_lock or c is None or "auto_exposure" not in ctrls:
             return None
         table = []
-        for f in RESPONSE_STEPS:
+        for f in p.response_steps:
             e = max(exp_min, min(e_long, int(round(knee * f))))
             st = stats(e)
             if st is None:
@@ -707,7 +700,7 @@ class CameraOptimizer:
         table.sort()
         es, bl = np.array([t[0] for t in table], float), np.array([t[1] for t in table], float)
         bl = np.maximum.accumulate(bl)  # noise must not make the ruler run backwards
-        target = knee * KNEE_OVERSHOOT
+        target = knee * p.knee_overshoot
         best = None
         for i, blc in enumerate(range(c.min_val, c.max_val + 1, max(1, c.step))):
             self.device.set_control("backlight_compensation", blc)
@@ -724,7 +717,7 @@ class CameraOptimizer:
             kf = e_eq / knee
             note("auto exposure with backlight compensation %d: like exposure %.0f (%.2f x knee)", blc, e_eq, kf)
             report(STAGE_BRIGHTNESS, min(0.40, 0.30 + 0.03 * (i + 1)), "Trying the camera's own exposure", frame=st["frame"])
-            if LOCK_RANGE[0] <= kf <= LOCK_RANGE[1] and (best is None or abs(math.log(e_eq / target)) < abs(math.log(best[1] / target))):
+            if p.lock_range[0] <= kf <= p.lock_range[1] and (best is None or abs(math.log(e_eq / target)) < abs(math.log(best[1] / target))):
                 best = (blc, int(round(e_eq)))
         self.device.set_control("backlight_compensation", c.default_val)
         if best is None:
@@ -735,10 +728,11 @@ class CameraOptimizer:
 
     def _tone_veto(self, burst: List[np.ndarray], white: np.ndarray, black: np.ndarray) -> Optional[str]:
         """Guards on the final B burst: no clipped white sisal, no crushed black sisal."""
+        p = self.profile
         st = _gray_stack(burst)
-        if white.any() and float(np.percentile(st[:, white], 99.9)) >= CLIP_P999 + 3:
+        if white.any() and float(np.percentile(st[:, white], 99.9)) >= p.clip_p999 + 3:
             return "white sisal clips"
-        if black.any() and float(np.percentile(st.mean(axis=0)[black], 2)) < BLACK_FLOOR_P2 / 2:
+        if black.any() and float(np.percentile(st.mean(axis=0)[black], 2)) < p.black_floor_p2 / 2:
             return "black sisal crushed"
         return None
 

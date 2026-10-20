@@ -31,6 +31,7 @@ from core.cv_utils import (
     draw_sweet_spot_overlay_suit,
     process_zoom_crop_suit,
 )
+from core.camera_profiles import DEFAULT_PROFILE, CameraProfile
 from core.dart_tip_detector import CameraModel, TipDetection
 from core.metrics import QualityEvaluator, TipROI
 from core.optimizer import OptimizationResult
@@ -38,6 +39,7 @@ from core.systemd_service import SystemdManager
 from core.v4l2_topology import CameraDevice
 from modules_gtk.cam_calibration import widgets as W
 from modules_gtk.cam_calibration.camera_picker_dialog import CameraPickerDialog, needs_camera_choice
+from modules_gtk.cam_calibration.camera_profile_dialog import CameraProfileDialog
 from modules_gtk.cam_calibration.camera_source import CameraSource, cam_key
 from modules_gtk.cam_calibration.step_find import FindStep
 from modules_gtk.cam_calibration.step_insert import InsertStep
@@ -86,6 +88,7 @@ class CamCalibrationView(Adw.Bin):
 
         # Session state (reset by start_session)
         self.cameras: List[CameraDevice] = []
+        self.camera_profile: CameraProfile = DEFAULT_PROFILE   # the brand picked when the page opened
         self.models: Dict[str, CameraModel] = {}       # kept between searches (remap caches)
         self.capture_size = (1280, 960)
         self.detection: Optional[TipDetection] = None
@@ -439,6 +442,11 @@ class CamCalibrationPage(Adw.NavigationPage):
             hb.pack_end(self.details_button)
             self._details_packed = True
         self.view.refresh_cameras()
+        # The brand decides the optimizer's numbers: ask before Autodarts is paused
+        CameraProfileDialog(self.view.cameras, self._on_profile_chosen, self._on_back).present(self)
+
+    def _on_profile_chosen(self, profile: CameraProfile):
+        self.view.camera_profile = profile
         if needs_camera_choice(self.view.cameras):
             # Only 3 cameras can be calibrated: let the user pick before Autodarts is paused
             CameraPickerDialog(self.view.cameras, self._on_cameras_chosen, self._on_back).present(self)

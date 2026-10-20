@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 
 from core.board_detector import get_autodarts_resolution
+from core.camera_profiles import CameraProfile
 from core.dart_tip_detector import CameraModel, load_camera_models
 from core.optimizer import CameraOptimizer, OptimizationResult
 from core.v4l2_device import V4L2Device
@@ -78,8 +79,8 @@ class CameraSource:
     def camera_models(self, cams: Sequence[CameraDevice], width: int, height: int) -> Dict[str, CameraModel]:
         return load_camera_models(list(cams), width, height)
 
-    def optimizer(self, cam: CameraDevice) -> CameraOptimizer:
-        return CameraOptimizer(V4L2Device(cam.dev_node))
+    def optimizer(self, cam: CameraDevice, profile: Optional[CameraProfile] = None) -> CameraOptimizer:
+        return CameraOptimizer(V4L2Device(cam.dev_node), profile=profile)
 
     def export_session(self, results: Dict[str, OptimizationResult], log_text: str) -> None:
         """Save before/after telemetry of a finished run (best effort, worker thread)."""
