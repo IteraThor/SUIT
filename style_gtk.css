@@ -774,3 +774,10 @@ list.boxed-list.camera-list > row.camera-row > box.header > box.title { padding-
 .placement-card { padding: 12px; }
 .placement-num { font-weight: 700; min-width: 12px; }
 .placement-text { font-size: 13px; color: alpha(@window_fg_color, 0.65); }
+
+/* Main menu update button when a new SUIT version is available */
+button.update-available-btn {
+    background: #e5a50a;
+    color: #1e1e1e;
+}
+button.update-available-btn:hover { background: #f5c211; }

@@ -165,6 +165,9 @@ class MainMenuView(Adw.NavigationPage):
         self.btn_update.connect("clicked", self._on_check_updates)
         self.update_group.append(self.btn_update)
 
+        self._update_available = False
+        GLib.idle_add(self._check_updates_on_start)
+
 
     def _open_autodarts(self):
         logger.debug("Navigating to Autodarts view")
@@ -211,11 +214,33 @@ class MainMenuView(Adw.NavigationPage):
             upd_icon = Gtk.Image.new_from_icon_name("software-update-available-symbolic")
             upd_icon.set_pixel_size(22)
             box.append(upd_icon)
-            lbl = Gtk.Label(label="Check for Updates")
+            lbl = Gtk.Label(label="Update Available" if self._update_available else "Check for Updates")
             lbl.add_css_class("heading")
             box.append(lbl)
 
         self.btn_update.set_child(box)
+
+    def _set_update_available(self, available: bool):
+        self._update_available = available
+        if available:
+            self.btn_update.remove_css_class("suggested-action")
+            self.btn_update.add_css_class("update-available-btn")
+        else:
+            self.btn_update.remove_css_class("update-available-btn")
+            self.btn_update.add_css_class("suggested-action")
+        self._set_update_button_loading(False)
+
+    def _check_updates_on_start(self):
+        """Quiet background check at launch; only recolors the button when an update exists."""
+        def worker():
+            return UpdateService.check_update()
+
+        def on_done(info):
+            if info and info.get("has_update"):
+                self._set_update_available(True)
+
+        run_async(worker, on_done=on_done)
+        return False
 
     def _on_check_updates(self, btn):
         logger.info("Check for updates and requirements triggered")
@@ -235,6 +260,8 @@ class MainMenuView(Adw.NavigationPage):
                 self._show_missing_requirements_dialog(missing_reqs, next_info=info)
                 return
 
+            if not info.get("error"):
+                self._set_update_available(bool(info.get("has_update")))
             self._process_update_info(info)
 
         run_async(worker, on_done=on_done)
@@ -318,6 +345,7 @@ class MainMenuView(Adw.NavigationPage):
                 self.window.show_toast(msg)
                 return
 
+            self._set_update_available(False)
             dialog = Adw.AlertDialog(
                 heading="Update Complete",
                 body="SUIT has been successfully updated.\n\nRestart now to apply the changes?"
