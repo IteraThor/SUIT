@@ -55,6 +55,11 @@ class CameraSettings:
     gamma: int = 300  # 100 - 500 (default 300)
     saturation: int = 68  # 0 - 128 (default 68)
     power_line_frequency: int = 1  # 1 = 50Hz, 2 = 60Hz, 0 = Disabled
+    backlight_compensation: int = 0  # auto-exposure metering bias (no effect in manual mode)
+    # 1 = "AE lock": auto exposure (metered with backlight_compensation) converges, then the camera is
+    # switched to manual WITHOUT writing an exposure value. On these cameras a written exposure costs
+    # ~15 % more noise than the same brightness reached by auto exposure. exposure_auto stays 3 here.
+    exposure_lock: int = 0
 
     def to_dict(self) -> Dict[str, int]:
         return dataclasses.asdict(self)
@@ -71,8 +76,11 @@ class CameraSettings:
             "gamma": self.gamma,
             "saturation": self.saturation,
             "power_line_frequency": self.power_line_frequency,
+            "backlight_compensation": self.backlight_compensation,
         }
-        if self.exposure_auto == 1:
+        if self.exposure_lock:
+            ctrls["auto_exposure"] = 3  # the lock itself happens once auto exposure has converged
+        elif self.exposure_auto == 1:
             ctrls["exposure_time_absolute"] = self.exposure_absolute
         if self.wb_auto == 0:
             ctrls["white_balance_temperature"] = self.wb_temperature

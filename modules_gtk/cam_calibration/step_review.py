@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import logging
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -11,7 +11,9 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk
 
 from core.autodarts_controls import persist_camera_settings
+from core import exposure_lock
 from core.camera_manual_service import CameraManualService
+from core.exposure_lock import LockEntry
 from core.metrics import TipMetrics
 from core.optimizer import OptimizationResult
 from core.v4l2_device import V4L2Device
@@ -42,10 +44,12 @@ def review_row(res: Optional[OptimizationResult]) -> Tuple[str, str, str]:
         return "Not changed", "warn", label
     if res.fallback_board_only:
         return "Tuned on the whole board", "ok" if res.is_improvement else "neutral", label
-    if res.is_improvement:
+    if res.clearer:
         pct = res.improvement_percentage
         sub = "Much clearer tips" if pct >= 25 else "Clearer tips" if pct >= 10 else "A little clearer"
         return sub, "ok", label
+    if res.is_improvement:
+        return "Fixed exposure, tips as clear", "ok", label
     return "Already well tuned", "neutral", label
 
 
@@ -98,7 +102,11 @@ def outcome_text(title: str, res: Optional[OptimizationResult]) -> str:
     if res.darts_moved:
         return f"{title}: the darts moved while it was tuned, so nothing was changed. Find the darts again to retry."
     if not res.is_improvement:
-        return f"{title}: already well tuned. The new settings were not better, so it keeps its current ones."
+        why = f" ({res.veto})" if res.veto else ""
+        return f"{title}: the new settings were worse here{why}, so it keeps its current ones."
+    if not res.clearer:
+        return (f"{title}: fixed exposure with no blown-out white, tips as clear as before. "
+                "Its brightness no longer changes when the scene does.")
     pct = res.improvement_percentage
     if res.fallback_board_only:
         head = "a clearer picture of the board" if pct >= 10 else "a slightly clearer picture"
@@ -290,6 +298,8 @@ class ReviewStep:
         v.action_bar.set_secondary_sensitive(False)
         applied: List[str] = []
         not_in_autodarts: List[str] = []
+        locks: Dict[str, LockEntry] = {}
+        unlocked: List[str] = []
         try:
             for key, res in v.results.items():
                 cam = v.camera_for(key)
@@ -307,6 +317,13 @@ class ReviewStep:
                     # puts exposure back on auto: the calibration has to be in that config as well
                     if not persist_camera_settings(cam.dev_node, getattr(cam, "by_path", None), res.optimized_settings):
                         not_in_autodarts.append(cam.dev_node)
+                    # An exposure lock is re-created by the watcher whenever Autodarts (re)opens the camera
+                    path = getattr(cam, "by_path", None) or CameraManualService.stable_camera_path(cam.dev_node)
+                    s = res.optimized_settings
+                    if s.exposure_lock and res.lock_reference:
+                        locks[path] = LockEntry(path, s.backlight_compensation, s.gain, res.lock_reference)
+                    else:
+                        unlocked.append(path)
                 except Exception as e:
                     logger.error("Failed to apply settings to %s: %s", cam.dev_node, e)
 
@@ -314,6 +331,10 @@ class ReviewStep:
             if applied:
                 all_nodes = [c.dev_node for c in v.cameras] or applied
                 CameraManualService.enable_boot_service(all_nodes)
+                if exposure_lock.update_entries(locks, unlocked):
+                    exposure_lock.enable_service()
+                else:
+                    exposure_lock.disable_service()
         except Exception:
             logger.exception("Applying the optimizer settings failed")
         finally:

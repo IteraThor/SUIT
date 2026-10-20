@@ -68,7 +68,7 @@ def score_rows(res: Optional[OptimizationResult]) -> List[str]:
     return [
         _arrow(a, b, "{:.1f}"),
         _arrow(res.tip_component_before, res.tip_component_after, "{:.3f}"),
-        f"{res.improvement_percentage:+.1f} % (needs {res.required_improvement_pct:.1f} %)",
+        f"{res.improvement_percentage:+.1f} % (allowed down to {res.required_improvement_pct:+.1f} %)",
         f"{res.ab_spread_pct:.1f} %",
         res.veto or "none",
         ("board only · " if res.fallback_board_only else "") + decision,

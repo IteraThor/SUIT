@@ -71,8 +71,10 @@ def result_row(res: Optional[OptimizationResult]):
         return "Could not be tuned", "bad", "Failed"
     if res.darts_moved:
         return "Nothing changed", "warn", "Darts moved"
-    if res.is_improvement:
+    if res.clearer:
         return ("Clearer picture" if res.fallback_board_only else "Tips clearer"), "ok", "Done"
+    if res.is_improvement:
+        return "Fixed exposure, tips as clear", "ok", "Done"
     return "Already well tuned", "neutral", "Done"
 
 
@@ -152,7 +154,6 @@ class TuneStep:
         v = self.view
         results: Dict[str, OptimizationResult] = {}
         moved: List[int] = []
-        lums: List[float] = []      # board luminance each tuned camera ended on: the next ones match it
         try:
             # A run of an earlier session may still be restoring its camera
             if prev is not None and prev.is_alive():
@@ -174,10 +175,8 @@ class TuneStep:
 
                 try:
                     optimizer = v.source.optimizer(cam)
-                    extra = {"target_lum": float(np.median(lums))} if lums else {}
                     res = optimizer.run_optimization(progress_cb=cb, cancel_event=cancel, tips=tips,
-                                                     homography=model.H_img2board if model is not None else None,
-                                                     **extra)
+                                                     homography=model.H_img2board if model is not None else None)
                 except Exception as e:
                     logger.exception("Tuning failed on %s", cam.dev_node)
                     v.ui(session, self._on_cam_failed, key, str(e))
@@ -188,8 +187,6 @@ class TuneStep:
                     v.ui(session, self._on_cam_failed, key, "no frames from the camera")
                     continue
                 results[key] = res
-                if getattr(res, "board_lum_final", None):
-                    lums.append(float(res.board_lum_final))
                 v.ui(session, self._on_cam_done, key, res)
 
             if results and not cancel.is_set() and not board_only:

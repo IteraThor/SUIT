@@ -29,10 +29,16 @@ logger = logging.getLogger("suit.autodarts_controls")
 AUTODARTS_CONFIG = Path.home() / ".config" / "autodarts" / "config.toml"
 
 
-def controls_from_settings(s: CameraSettings) -> Dict[str, int]:
-    """CameraSettings as the control names of Autodarts' config (exposureMode 1 = manual, 3 = auto)."""
+def controls_from_settings(s: CameraSettings) -> Dict[str, Optional[int]]:
+    """CameraSettings as the control names of Autodarts' config (exposureMode 1 = manual, 3 = auto).
+
+    An exposure lock is stored as auto exposure with its metering bias: Autodarts reopens the camera
+    at every start, which drops a lock, and a manual mode without an exposure value would come up on a
+    stale exposure. The lock watcher (core.exposure_lock) freezes it again once auto exposure settled.
+    """
+    mode = 3 if s.exposure_lock else s.exposure_auto
     ctrls = {
-        "exposureMode": s.exposure_auto,
+        "exposureMode": mode,
         "gain": s.gain,
         "whiteBalanceAuto": s.wb_auto,
         "sharpness": s.sharpness,
@@ -41,9 +47,10 @@ def controls_from_settings(s: CameraSettings) -> Dict[str, int]:
         "gamma": s.gamma,
         "saturation": s.saturation,
         "powerLineFrequency": s.power_line_frequency,
+        "backlightCompensation": s.backlight_compensation,
     }
-    if s.exposure_auto == 1:
-        ctrls["exposureTime"] = s.exposure_absolute
+    # None removes the key: a stale exposureTime must not come back if the mode is ever switched
+    ctrls["exposureTime"] = s.exposure_absolute if mode == 1 else None
     if s.wb_auto == 0:
         ctrls["whiteBalanceTemperature"] = s.wb_temperature
     return ctrls
@@ -91,16 +98,20 @@ def persist_camera_settings(dev_node: Optional[str], by_path: Optional[str], set
         return False
 
 
-def _write_controls(path: Path, text: str, section: str, controls: Dict[str, int]) -> bool:
+def _write_controls(path: Path, text: str, section: str, controls: Dict[str, Optional[int]]) -> bool:
     new_text = _edit_table(text, section, controls)
     if new_text == text:
         return True
     old, new = tomllib.loads(text), tomllib.loads(new_text)          # raises on a broken edit
     table = new.get("cam", {}).get("controls", {}).get(section, {})
-    if any(table.get(k) != v for k, v in controls.items()):
+    if any(table.get(k) != v for k, v in controls.items() if v is not None) \
+            or any(k in table for k, v in controls.items() if v is None):
         raise ValueError("edited table does not hold the new values")
-    old.get("cam", {}).get("controls", {}).pop(section, None)
-    new.get("cam", {}).get("controls", {}).pop(section, None)
+    for cfg in (old, new):
+        cam = cfg.get("cam", {})
+        cam.get("controls", {}).pop(section, None)
+        if cam.get("controls") == {}:  # Autodarts drops the tables on exit: the edit may create the first one
+            cam.pop("controls")
     if old != new:
         raise ValueError("the edit changed more than the camera table")
     shutil.copy2(path, path.with_name(path.name + ".suit-backup"))
@@ -112,12 +123,12 @@ def _write_controls(path: Path, text: str, section: str, controls: Dict[str, int
     return True
 
 
-def _edit_table(text: str, section: str, controls: Dict[str, int]) -> str:
-    """Set keys in the camera's table, adding the keys (or the table) that are missing."""
+def _edit_table(text: str, section: str, controls: Dict[str, Optional[int]]) -> str:
+    """Set keys in the camera's table, adding the keys (or the table) that are missing; None removes a key."""
     header = re.compile(r"^([ \t]*)\[cam\.controls\.'" + re.escape(section) + r"'\][ \t]*\n", re.M)
     m = header.search(text)
     if m is None:
-        lines = "".join(f"    {k} = {v}\n" for k, v in controls.items())
+        lines = "".join(f"    {k} = {v}\n" for k, v in controls.items() if v is not None)
         return text.rstrip("\n") + f"\n\n    [cam.controls.'{section}']\n{lines}"
     start = m.end()
     nxt = re.compile(r"^[ \t]*\[", re.M).search(text, start)
@@ -127,6 +138,10 @@ def _edit_table(text: str, section: str, controls: Dict[str, int]) -> str:
     for key, value in controls.items():
         assign = re.compile(r"^([ \t]*)" + re.escape(key) + r"([ \t]*=[ \t]*)[^\n]*$", re.M)
         found = assign.search(body)
+        if value is None:
+            if found:
+                body = body[:found.start()] + body[found.end() + 1:]
+            continue
         if found:
             body = body[:found.start()] + f"{found.group(1)}{key}{found.group(2)}{value}" + body[found.end():]
             continue

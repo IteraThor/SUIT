@@ -138,7 +138,8 @@ class CameraManualService:
                 parts.append(f"white_balance_temperature={ctrls['white_balance_temperature'].get('value', 4600)}")
 
         # Additional standard controls
-        for k in ("gain", "sharpness", "contrast", "gamma", "brightness", "saturation", "power_line_frequency"):
+        for k in ("gain", "sharpness", "contrast", "gamma", "brightness", "saturation", "power_line_frequency",
+                  "backlight_compensation"):
             if k in ctrls and "value" in ctrls[k]:
                 parts.append(f"{k}={ctrls[k]['value']}")
 
