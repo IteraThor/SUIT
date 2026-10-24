@@ -1,0 +1,1354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dartboard Camera Focus Tool - Oscilloscope HUD</title>
+  <style>
+    :root {
+      --bg-main: #07090e;
+      --bg-card: rgba(13, 17, 26, 0.82);
+      --bg-card-hover: rgba(22, 28, 42, 0.92);
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-highlight: rgba(56, 189, 248, 0.35);
+      --text-main: #f3f4f6;
+      --text-muted: #94a3b8;
+      
+      /* HUD State Colors */
+      --state-idle: #64748b;
+      --state-idle-glow: rgba(100, 116, 139, 0.2);
+      --state-improving: #10b981;
+      --state-improving-glow: rgba(16, 185, 129, 0.35);
+      --state-peak: #06b6d4;
+      --state-peak-glow: rgba(6, 182, 212, 0.4);
+      --state-overdriven: #f59e0b;
+      --state-overdriven-glow: rgba(245, 158, 11, 0.35);
+      --state-alert: #ef4444;
+      
+      --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header Bar */
+    header {
+      background: rgba(10, 13, 20, 0.92);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      z-index: 50;
+      flex-shrink: 0;
+    }
+
+    .controls-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    select, button {
+      background: var(--bg-card);
+      color: var(--text-main);
+      border: 1px solid var(--border-subtle);
+      padding: 7px 14px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    select:hover, button:hover {
+      background: var(--bg-card-hover);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    select:focus, button:focus {
+      outline: none;
+      border-color: var(--state-peak);
+      box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.2);
+    }
+
+    button.btn-active {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--state-improving);
+      border-color: var(--state-improving);
+    }
+
+    button.btn-danger:hover {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--state-alert);
+      border-color: var(--state-alert);
+    }
+
+    /* Main Viewport Container */
+    main {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      background: radial-gradient(circle at center, #111522 0%, #06080d 100%);
+      overflow: hidden;
+    }
+
+    .viewport-wrapper {
+      position: relative;
+      width: 100%;
+      max-width: 1280px;
+      height: 100%;
+      max-height: calc(100vh - 100px);
+      aspect-ratio: 4 / 3;
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.8), 0 0 0 1px var(--border-subtle);
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    video {
+      display: none;
+    }
+
+    canvas#viewCanvas {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      cursor: crosshair;
+      display: block;
+    }
+
+    /* =========================================================
+       OSCILLOSCOPE WAVEFORM HUD OVERLAY (Cinema / Broadcast HUD)
+       ========================================================= */
+    .oscilloscope-hud {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      background: var(--bg-card);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 16px;
+      width: 380px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      pointer-events: auto;
+      z-index: 25;
+      display: none; /* Shown after camera starts */
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .hud-header {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 2px 0;
+    }
+
+    .hud-instruction {
+      font-size: 0.74rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    /* Waveform Canvas */
+    .waveform-container {
+      position: relative;
+      width: 100%;
+      height: 120px;
+      background: rgba(8, 10, 16, 0.9);
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.07);
+    }
+
+    canvas#oscilloscopeCanvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .hud-meta-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .hud-meta-val {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+
+    /* Prominent Turn-Back Warning Banner */
+    .turnback-alert {
+      position: absolute;
+      top: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(245, 158, 11, 0.92);
+      backdrop-filter: blur(12px);
+      color: #000;
+      padding: 10px 22px;
+      border-radius: 10px;
+      font-size: 0.88rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 10px 30px rgba(245, 158, 11, 0.4), 0 0 0 2px rgba(255, 255, 255, 0.25);
+      z-index: 40;
+      text-transform: uppercase;
+      animation: bannerPulse 1s infinite alternate ease-in-out;
+    }
+
+    @keyframes bannerPulse {
+      0% { transform: translateX(-50%) scale(1); }
+      100% { transform: translateX(-50%) scale(1.03); }
+    }
+
+    .turnback-icon {
+      width: 22px;
+      height: 22px;
+      fill: none;
+      stroke: #000;
+      stroke-width: 2.5;
+    }
+
+    /* Initial Call-to-Action Banner */
+    .initial-cta-banner {
+      position: absolute;
+      top: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.94);
+      backdrop-filter: blur(16px);
+      color: #38bdf8;
+      border: 1.5px solid rgba(56, 189, 248, 0.45);
+      padding: 18px 36px;
+      border-radius: 16px;
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      max-width: 90%;
+      line-height: 1.5;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75), 0 0 20px rgba(56, 189, 248, 0.15);
+      z-index: 35;
+    }
+
+    /* Magnifier Loupe Picture-in-Picture */
+    .loupe-panel {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      background: #000;
+      border: 2px solid rgba(56, 189, 248, 0.4);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75), 0 0 15px rgba(56, 189, 248, 0.15);
+      z-index: 25;
+      display: none;
+      padding: 0;
+    }
+
+    canvas#loupeCanvas {
+      width: 200px;
+      height: 200px;
+      display: block;
+      background: #000;
+    }
+
+    /* Initial state / No camera overlay */
+    .empty-state {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      background: radial-gradient(circle at center, #191f2e 0%, #0a0d13 100%);
+      z-index: 45;
+      padding: 32px;
+      text-align: center;
+    }
+
+    .empty-state-icon {
+      width: 64px;
+      height: 64px;
+      stroke: var(--state-peak);
+      stroke-width: 1.5;
+      fill: none;
+      background: rgba(6, 182, 212, 0.08);
+      padding: 14px;
+      border-radius: 20px;
+      border: 1px solid rgba(6, 182, 212, 0.2);
+    }
+
+    .empty-state h2 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .empty-state p {
+      color: var(--text-muted);
+      max-width: 460px;
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+
+    .empty-state-btn {
+      background: var(--state-improving);
+      color: #000;
+      font-weight: 700;
+      font-size: 1rem;
+      padding: 12px 28px;
+      border-radius: 10px;
+      border: none;
+      box-shadow: 0 4px 18px rgba(16, 185, 129, 0.4);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .empty-state-btn:hover {
+      background: #059669;
+      color: #fff;
+      transform: translateY(-1px);
+    }
+
+    @media (max-width: 768px) {
+      .oscilloscope-hud {
+        bottom: 10px;
+        left: 10px;
+        width: calc(100% - 20px);
+        max-width: 320px;
+        padding: 12px;
+      }
+      .loupe-panel {
+        display: none !important; /* Hide loupe on small screens to prioritize waveform */
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="controls-group">
+      <select id="cameraSelect" title="Select Video Device">
+        <option value="">Detecting cameras...</option>
+      </select>
+
+      <select id="resSelect" title="Select Resolution">
+        <option value="1280x960">1280x960</option>
+      </select>
+
+      <button id="btnPeaking" class="btn-active" title="Toggle Green Focus Peaking Overlay">
+        <span>Peaking: ON</span>
+      </button>
+
+      <button id="btnResetPeak" class="btn-danger" title="Clear Waveform History & Reset Peak">
+        <span>Reset Wave</span>
+      </button>
+
+      <button id="btnFullscreen" title="Toggle Fullscreen">
+        <span>⛶</span>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <div class="viewport-wrapper" id="viewportWrapper">
+      <video id="webcamVideo" playsinline autoplay muted></video>
+      <canvas id="viewCanvas" width="1280" height="960"></canvas>
+
+      <!-- Prominent Turn-Back Warning Overlay -->
+      <div class="turnback-alert" id="turnbackAlert">
+        <svg class="turnback-icon" viewBox="0 0 24 24">
+          <path d="M9 14L4 9l5-5"></path>
+          <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"></path>
+        </svg>
+        <span>Rotation Needed / Turn Back</span>
+      </div>
+
+      <!-- Initial Call to Action Banner -->
+      <div class="initial-cta-banner" id="initialCta">
+        <span>Select desired focus point by clicking on it<br><small style="opacity: 0.9; font-size: 0.95rem; font-weight: 500;">(Recommended: furthest double field or T20. Tip: Stick a dart into the target segment for maximum edge contrast)</small></span>
+      </div>
+
+      <!-- OSCILLOSCOPE WAVEFORM HUD OVERLAY -->
+      <div class="oscilloscope-hud" id="oscilloscopeHud">
+        <div class="hud-header">
+          <span class="hud-instruction">Rotate focus ring slowly, look for highest peak.</span>
+        </div>
+
+        <!-- Oscilloscope Waveform Display -->
+        <div class="waveform-container">
+          <canvas id="oscilloscopeCanvas" width="348" height="120"></canvas>
+        </div>
+
+        <div class="hud-meta-row">
+          <span>Active Stream: <strong class="hud-meta-val" id="resValue">1280 × 960</strong></span>
+          <span>Frame Rate: <strong class="hud-meta-val" id="fpsValue">0 FPS</strong></span>
+        </div>
+      </div>
+
+      <!-- Picture-in-Picture Magnifier Loupe -->
+      <div class="loupe-panel" id="loupePanel">
+        <canvas id="loupeCanvas" width="200" height="200"></canvas>
+      </div>
+
+      <!-- Start Prompt / Empty State -->
+      <div class="empty-state" id="emptyState">
+        <svg class="empty-state-icon" viewBox="0 0 24 24">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+          <circle cx="12" cy="13" r="4"></circle>
+        </svg>
+        <h2>Dartboard Focus Calibrator</h2>
+        <p>
+          Connect your USB camera and rotate the focus ring. The oscilloscope HUD tracks relative sharpness progression and alerts you the moment you pass the optical peak.
+        </p>
+        <button class="empty-state-btn" id="btnStartCamera">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+          Start Camera
+        </button>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    (function () {
+      // DOM Elements
+      const video = document.getElementById("webcamVideo");
+      const canvas = document.getElementById("viewCanvas");
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const loupeCanvas = document.getElementById("loupeCanvas");
+      const loupeCtx = loupeCanvas.getContext("2d");
+      const oscCanvas = document.getElementById("oscilloscopeCanvas");
+      const oscCtx = oscCanvas.getContext("2d");
+
+      const cameraSelect = document.getElementById("cameraSelect");
+      const resSelect = document.getElementById("resSelect");
+      const btnPeaking = document.getElementById("btnPeaking");
+      const btnResetPeak = document.getElementById("btnResetPeak");
+      const btnFullscreen = document.getElementById("btnFullscreen");
+      const btnStartCamera = document.getElementById("btnStartCamera");
+      const emptyState = document.getElementById("emptyState");
+      const oscilloscopeHud = document.getElementById("oscilloscopeHud");
+      const loupePanel = document.getElementById("loupePanel");
+      const turnbackAlert = document.getElementById("turnbackAlert");
+      const initialCta = document.getElementById("initialCta");
+
+      const resValueEl = document.getElementById("resValue");
+      const fpsValueEl = document.getElementById("fpsValue");
+
+      // State
+      let currentStream = null;
+      let isStreaming = false;
+      let hasSelectedFocusPoint = false;
+      let peakingEnabled = true;
+
+      // Oscilloscope History Buffer (100 samples @ 100ms = 10s timeline window)
+      const MAX_WAVE_SAMPLES = 100;
+      const waveHistory = [];
+      let peakScore = 0.0;
+      let minSessionScore = Infinity;
+      let peakSampleIndex = -1;
+      let lastRawScore = 0.0;
+      let smoothedScore = 0.0;
+      let baselineEstablished = false;
+      let initialSampleCount = 0;
+      let initialAvgScore = 0.0;
+      let initialBaseline = 0.0;
+      let hasCalibrated = false;
+      let lastWaveSampleTime = 0;
+      const WAVE_SAMPLE_INTERVAL_MS = 100; // 10 samples/sec (calm, readable waveform scrolling)
+
+      // Lifecycle States: "INITIAL" | "IMPROVING" | "PEAK" | "OVERDRIVEN"
+      let currentLifecycleState = "INITIAL";
+
+      // Target ROI in normalized coordinates (0.0 to 1.0)
+      let targetNormX = 0.5;
+      let targetNormY = 0.28;
+      const targetBoxSize = 90; // Pixels in native video resolution
+
+      let isDragging = false;
+      let frameCount = 0;
+      let currentFps = 0;
+      let fpsTimer = performance.now();
+
+      // Preallocated typed buffers for 60fps zero-allocation CV
+      const patchSize = targetBoxSize;
+      const patchPixels = patchSize * patchSize;
+      const staticGray = new Float32Array(patchPixels);
+      const cvCanvas = document.createElement("canvas");
+      cvCanvas.width = patchSize;
+      cvCanvas.height = patchSize;
+      const cvCtx = cvCanvas.getContext("2d", { willReadFrequently: true });
+      const loupeOffscreen = document.createElement("canvas");
+      loupeOffscreen.width = patchSize;
+      loupeOffscreen.height = patchSize;
+      const loupeOffCtx = loupeOffscreen.getContext("2d", { willReadFrequently: true });
+
+      let lastAnalysisTime = 0;
+      let currentLighting = "optimal";
+
+      // Init or refresh cameras list
+      async function populateCameras(activeDeviceId = null) {
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const videoDevices = devices.filter(d => d.kind === "videoinput");
+          
+          const currentVal = activeDeviceId || cameraSelect.value;
+          cameraSelect.innerHTML = "";
+
+          if (videoDevices.length === 0) {
+            cameraSelect.innerHTML = '<option value="">Default Camera</option>';
+            return;
+          }
+
+          videoDevices.forEach((dev, idx) => {
+            const opt = document.createElement("option");
+            opt.value = dev.deviceId;
+            opt.textContent = dev.label || `Camera ${idx + 1}`;
+            if (dev.deviceId === currentVal || (!currentVal && idx === 0)) {
+              opt.selected = true;
+            }
+            cameraSelect.appendChild(opt);
+          });
+
+          if (currentVal && Array.from(cameraSelect.options).some(o => o.value === currentVal)) {
+            cameraSelect.value = currentVal;
+          }
+        } catch (err) {
+          console.error("Camera enumeration error:", err);
+        }
+      }
+
+      // Discover and populate resolutions supported by the active camera (>= 800x600)
+      async function updateSupportedResolutions(track, requestedRes = null) {
+        if (!track) return;
+
+        const candidateResolutions = [
+          [3840, 2160],
+          [2560, 1440],
+          [1920, 1080],
+          [1600, 1200],
+          [1280, 1024],
+          [1280, 960],
+          [1280, 720],
+          [1024, 768],
+          [1000, 1000],
+          [800, 600]
+        ];
+
+        const supported = [];
+        const initialSettings = track.getSettings() || {};
+        const currentW = initialSettings.width;
+        const currentH = initialSettings.height;
+
+        for (const [w, h] of candidateResolutions) {
+          try {
+            await track.applyConstraints({ width: { exact: w }, height: { exact: h } });
+            const s = track.getSettings();
+            if (s && s.width === w && s.height === h && w >= 800 && h >= 600) {
+              supported.push(`${w}x${h}`);
+            }
+          } catch (_) {
+            // Resolution not supported by hardware/driver
+          }
+        }
+
+        const validResolutions = supported.length > 0 
+          ? supported 
+          : (currentW >= 800 && currentH >= 600 ? [`${currentW}x${currentH}`] : ["1280x960"]);
+
+        // Select resolution (prefer requested, or 1280x960 if supported, or first available)
+        let chosen = validResolutions[0];
+        if (requestedRes && validResolutions.includes(requestedRes)) {
+          chosen = requestedRes;
+        } else if (validResolutions.includes("1280x960")) {
+          chosen = "1280x960";
+        }
+
+        resSelect.innerHTML = "";
+        validResolutions.forEach((resStr) => {
+          const opt = document.createElement("option");
+          opt.value = resStr;
+          opt.textContent = resStr;
+          if (resStr === chosen) {
+            opt.selected = true;
+          }
+          resSelect.appendChild(opt);
+        });
+
+        const [tw, th] = chosen.split("x").map(Number);
+        try {
+          await track.applyConstraints({ width: { exact: tw }, height: { exact: th } });
+        } catch (_) {
+          try {
+            await track.applyConstraints({ width: { ideal: tw }, height: { ideal: th } });
+          } catch (_) {}
+        }
+      }
+
+      // Start video stream with robust hardware release and multi-tier fallback
+      async function startStream(targetDeviceId = null, targetResolution = null) {
+        const deviceId = targetDeviceId || (cameraSelect.value && cameraSelect.value !== "" ? cameraSelect.value : null);
+        const chosenRes = targetResolution || resSelect.value || "1280x960";
+        let widthIdeal = 1280;
+        let heightIdeal = 960;
+
+        if (chosenRes && chosenRes.includes("x")) {
+          const [w, h] = chosenRes.split("x").map(Number);
+          if (!isNaN(w) && !isNaN(h)) {
+            widthIdeal = w;
+            heightIdeal = h;
+          }
+        }
+
+        // 1. Cleanly stop old tracks and pause briefly for OS driver handle release
+        if (currentStream) {
+          currentStream.getTracks().forEach(track => {
+            track.stop();
+          });
+          currentStream = null;
+          video.srcObject = null;
+          await new Promise(r => setTimeout(r, 80));
+        }
+
+        // Tiered attempts to ensure the camera ALWAYS starts
+        const attemptConfigs = [];
+
+        if (deviceId) {
+          attemptConfigs.push({
+            video: {
+              deviceId: { exact: deviceId },
+              width: { ideal: widthIdeal },
+              height: { ideal: heightIdeal }
+            },
+            audio: false
+          });
+          attemptConfigs.push({
+            video: { deviceId: { exact: deviceId } },
+            audio: false
+          });
+          attemptConfigs.push({
+            video: { deviceId: { ideal: deviceId } },
+            audio: false
+          });
+        } else {
+          attemptConfigs.push({
+            video: {
+              width: { ideal: widthIdeal },
+              height: { ideal: heightIdeal }
+            },
+            audio: false
+          });
+        }
+
+        // Final fallback: Standard generic video
+        attemptConfigs.push({ video: true, audio: false });
+
+        let streamAcquired = null;
+        let lastError = null;
+
+        for (let i = 0; i < attemptConfigs.length; i++) {
+          try {
+            streamAcquired = await navigator.mediaDevices.getUserMedia(attemptConfigs[i]);
+            if (streamAcquired) break;
+          } catch (err) {
+            lastError = err;
+            await new Promise(r => setTimeout(r, 50));
+          }
+        }
+
+        if (!streamAcquired) {
+          console.error("Camera acquisition failed across all tiers:", lastError);
+          const msg = lastError ? (lastError.name === "NotReadableError"
+            ? "Camera is in use by another app or browser tab. Please close Autodarts or other camera apps and try again."
+            : lastError.message) : "Unknown error";
+          alert("Could not access camera: " + msg);
+          return;
+        }
+
+        currentStream = streamAcquired;
+        video.srcObject = currentStream;
+        await video.play();
+
+        emptyState.style.display = "none";
+        isStreaming = true;
+        hasSelectedFocusPoint = false;
+        oscilloscopeHud.style.display = "none";
+        loupePanel.style.display = "none";
+        initialCta.style.display = "flex";
+        frameCount = 0;
+        fpsTimer = performance.now();
+        resetWaveform();
+
+        const track = currentStream.getVideoTracks()[0];
+        const settings = track ? track.getSettings() : {};
+        const activeId = settings.deviceId || deviceId;
+
+        await populateCameras(activeId);
+        await updateSupportedResolutions(track, chosenRes);
+      }
+
+      // Reset Oscilloscope Waveform & Peak
+      function resetWaveform() {
+        waveHistory.length = 0;
+        peakScore = 0.0;
+        minSessionScore = Infinity;
+        peakSampleIndex = -1;
+        lastRawScore = 0.0;
+        smoothedScore = 0.0;
+        baselineEstablished = false;
+        initialSampleCount = 0;
+        initialAvgScore = 0.0;
+        initialBaseline = 0.0;
+        hasCalibrated = false;
+        lastWaveSampleTime = 0;
+        currentLifecycleState = "INITIAL";
+        updateStateUI("INITIAL");
+      }
+
+      // Single-pass Focus Sharpness Calculation (Laplacian + Sobel variance)
+      function processPatch(imgData) {
+        const data = imgData.data;
+        let lumSum = 0;
+
+        for (let i = 0, g = 0; i < data.length; i += 4, g++) {
+          const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+          staticGray[g] = luma;
+          lumSum += luma;
+        }
+        const meanLuma = lumSum / patchPixels;
+
+        let lightingState = "optimal";
+        if (meanLuma < 35) lightingState = "dark";
+        else if (meanLuma > 200) lightingState = "bright";
+
+        if (lightingState !== "optimal") {
+          return { score: 0.0, meanLuma, lightingState };
+        }
+
+        let lapSum = 0;
+        let lapSqSum = 0;
+        let sobelSum = 0;
+        let count = 0;
+        const sqPeakingThreshold = 140 * 140;
+
+        for (let y = 1; y < patchSize - 1; y++) {
+          const rowPrev = (y - 1) * patchSize;
+          const rowCurr = y * patchSize;
+          const rowNext = (y + 1) * patchSize;
+
+          for (let x = 1; x < patchSize - 1; x++) {
+            const lapVal =
+              staticGray[rowPrev + x] +
+              staticGray[rowCurr + (x - 1)] -
+              4 * staticGray[rowCurr + x] +
+              staticGray[rowCurr + (x + 1)] +
+              staticGray[rowNext + x];
+
+            lapSum += lapVal;
+            lapSqSum += lapVal * lapVal;
+
+            const gx =
+              -staticGray[rowPrev + (x - 1)] + staticGray[rowPrev + (x + 1)] -
+              2 * staticGray[rowCurr + (x - 1)] + 2 * staticGray[rowCurr + (x + 1)] -
+              staticGray[rowNext + (x - 1)] + staticGray[rowNext + (x + 1)];
+
+            const gy =
+              -staticGray[rowPrev + (x - 1)] - 2 * staticGray[rowPrev + x] - staticGray[rowPrev + (x + 1)] +
+              staticGray[rowNext + (x - 1)] + 2 * staticGray[rowNext + x] + staticGray[rowNext + (x + 1)];
+
+            const gradSq = gx * gx + gy * gy;
+            sobelSum += gradSq;
+            count++;
+
+            // Highlight sharp wire edges on patch
+            if (peakingEnabled && gradSq > sqPeakingThreshold) {
+              const idx = (rowCurr + x) * 4;
+              data[idx] = (data[idx] * 3 + 16 * 7) >> 3;
+              data[idx + 1] = (data[idx + 1] * 3 + 245 * 7) >> 3; // Neon Emerald
+              data[idx + 2] = (data[idx + 2] * 3 + 130 * 7) >> 3;
+            }
+          }
+        }
+
+        if (count === 0) return { score: 0.0, meanLuma, lightingState };
+
+        const lapVar = Math.max(0, (lapSqSum / count) - (lapSum / count) ** 2);
+        const tenengrad = sobelSum / count;
+
+        // Raw relative sharpness metric (combining Laplacian variance + Tenengrad gradient)
+        const rawMetric = Math.sqrt(lapVar) + Math.sqrt(tenengrad);
+
+        return {
+          score: rawMetric,
+          meanLuma,
+          lightingState
+        };
+      }
+
+      // Update Lifecycle State & UI Banner
+      function updateStateUI(state) {
+        currentLifecycleState = state;
+
+        if (state === "INITIAL") {
+          initialCta.style.display = "flex";
+          turnbackAlert.style.display = "none";
+        } else if (state === "IMPROVING" || state === "PEAK") {
+          initialCta.style.display = "none";
+          turnbackAlert.style.display = "none";
+        } else if (state === "OVERDRIVEN") {
+          initialCta.style.display = "none";
+          turnbackAlert.style.display = "flex";
+        }
+      }
+
+      // Render Oscilloscope Waveform Curve & Peak Line (Bulletproof)
+      function renderOscilloscope() {
+        const w = Math.max(10, oscCanvas.width || 348);
+        const h = Math.max(10, oscCanvas.height || 120);
+
+        oscCtx.clearRect(0, 0, w, h);
+
+        // 1. Draw subtle tech grid background
+        oscCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+        oscCtx.lineWidth = 1;
+
+        for (let y = 20; y < h; y += 25) {
+          oscCtx.beginPath();
+          oscCtx.moveTo(0, y);
+          oscCtx.lineTo(w, y);
+          oscCtx.stroke();
+        }
+
+        for (let x = 30; x < w; x += 40) {
+          oscCtx.beginPath();
+          oscCtx.moveTo(x, 0);
+          oscCtx.lineTo(x, h);
+          oscCtx.stroke();
+        }
+
+        const validSamples = waveHistory.map(v => (isFinite(v) && !isNaN(v) ? Math.max(0, v) : 0));
+
+        if (validSamples.length < 2) {
+          oscCtx.strokeStyle = "#475569";
+          oscCtx.lineWidth = 2;
+          oscCtx.beginPath();
+          oscCtx.moveTo(0, h * 0.7);
+          oscCtx.lineTo(w, h * 0.7);
+          oscCtx.stroke();
+          return;
+        }
+
+        // 2. Relative auto-scaling window calculation (Guaranteed Finite)
+        let minVal = Math.min(...validSamples);
+        let maxVal = Math.max(...validSamples, (hasCalibrated && isFinite(peakScore)) ? peakScore : 0);
+        if (!isFinite(minVal)) minVal = 0;
+        if (!isFinite(maxVal) || maxVal <= minVal + 1.0) {
+          maxVal = minVal + 5.0;
+        }
+
+        const valRange = Math.max(0.1, maxVal - minVal);
+        const paddingBottom = 16;
+        const paddingTop = 22;
+        const usableHeight = Math.max(10, h - paddingBottom - paddingTop);
+
+        function valToY(v) {
+          const clampedV = isFinite(v) ? v : minVal;
+          const norm = Math.max(0, Math.min(1, (clampedV - minVal) / valRange));
+          return Math.round(h - paddingBottom - norm * usableHeight);
+        }
+
+        // 3. Draw Peak Recorded Horizontal Ghost-Line
+        if (hasCalibrated && peakScore > 0 && isFinite(peakScore)) {
+          const peakY = valToY(peakScore);
+
+          oscCtx.save();
+          oscCtx.setLineDash([4, 4]);
+          oscCtx.strokeStyle = "rgba(6, 182, 212, 0.65)";
+          oscCtx.lineWidth = 1.5;
+          oscCtx.beginPath();
+          oscCtx.moveTo(0, peakY);
+          oscCtx.lineTo(w, peakY);
+          oscCtx.stroke();
+
+          oscCtx.setLineDash([]);
+          oscCtx.fillStyle = "rgba(6, 182, 212, 0.9)";
+          oscCtx.font = "bold 9px monospace";
+          oscCtx.textAlign = "left";
+          oscCtx.fillText("PEAK RECORDED", 10, Math.max(12, peakY - 5));
+          oscCtx.restore();
+        }
+
+        // 4. Draw Oscilloscope History Curve
+        const stepX = w / Math.max(1, MAX_WAVE_SAMPLES - 1);
+        const startIndex = MAX_WAVE_SAMPLES - validSamples.length;
+
+        let waveColor = "#10b981";
+        let glowColor = "rgba(16, 185, 129, 0.4)";
+        let fillColor = "rgba(16, 185, 129, 0.12)";
+
+        if (currentLifecycleState === "INITIAL") {
+          waveColor = "#64748b";
+          glowColor = "rgba(100, 116, 139, 0.3)";
+          fillColor = "rgba(100, 116, 139, 0.08)";
+        } else if (currentLifecycleState === "OVERDRIVEN") {
+          waveColor = "#f59e0b";
+          glowColor = "rgba(245, 158, 11, 0.5)";
+          fillColor = "rgba(245, 158, 11, 0.15)";
+        }
+
+        oscCtx.save();
+        oscCtx.strokeStyle = waveColor;
+        oscCtx.lineWidth = 2.5;
+        oscCtx.lineJoin = "round";
+        oscCtx.lineCap = "round";
+        oscCtx.shadowColor = glowColor;
+        oscCtx.shadowBlur = 8;
+
+        oscCtx.beginPath();
+        let firstX = 0;
+        let firstY = h;
+
+        for (let i = 0; i < validSamples.length; i++) {
+          const sample = validSamples[i];
+          const x = (startIndex + i) * stepX;
+          const y = valToY(sample);
+
+          if (i === 0) {
+            firstX = x;
+            firstY = y;
+            oscCtx.moveTo(x, y);
+          } else {
+            oscCtx.lineTo(x, y);
+          }
+        }
+        oscCtx.stroke();
+
+        // Fill subtle gradient under curve
+        try {
+          const lastX = (startIndex + validSamples.length - 1) * stepX;
+          oscCtx.lineTo(lastX, h);
+          oscCtx.lineTo(firstX, h);
+          oscCtx.closePath();
+          const gradY0 = Math.max(0, paddingTop);
+          const gradY1 = Math.max(1, h);
+          const grad = oscCtx.createLinearGradient(0, gradY0, 0, gradY1);
+          grad.addColorStop(0, fillColor);
+          grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+          oscCtx.fillStyle = grad;
+          oscCtx.fill();
+        } catch (gradErr) {
+          // Graceful fallback if gradient fails
+        }
+        oscCtx.restore();
+
+        // 5. Draw Glowing Triangular Marker at Peak
+        if (hasCalibrated && peakSampleIndex >= 0 && isFinite(peakScore)) {
+          const peakRelIndex = peakSampleIndex - (validSamples.length - MAX_WAVE_SAMPLES > 0 ? validSamples.length - MAX_WAVE_SAMPLES : 0);
+          if (peakRelIndex >= 0 && peakRelIndex < validSamples.length) {
+            const pkX = (startIndex + peakRelIndex) * stepX;
+            const pkY = valToY(peakScore);
+
+            oscCtx.save();
+            oscCtx.fillStyle = "#06b6d4";
+            oscCtx.shadowColor = "rgba(6, 182, 212, 0.9)";
+            oscCtx.shadowBlur = 10;
+
+            oscCtx.beginPath();
+            oscCtx.moveTo(pkX, pkY - 2);
+            oscCtx.lineTo(pkX - 5, pkY - 9);
+            oscCtx.lineTo(pkX + 5, pkY - 9);
+            oscCtx.closePath();
+            oscCtx.fill();
+            oscCtx.restore();
+          }
+        }
+      }
+
+      // Main Render Loop (Protected 60 FPS)
+      function processFrame() {
+        try {
+          if (isStreaming && video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+            const vw = video.videoWidth;
+            const vh = video.videoHeight;
+
+            if (canvas.width !== vw || canvas.height !== vh) {
+              canvas.width = vw;
+              canvas.height = vh;
+              cvCanvas.width = targetBoxSize;
+              cvCanvas.height = targetBoxSize;
+              if (resValueEl) {
+                resValueEl.textContent = `${vw} × ${vh}`;
+              }
+            }
+
+            // 1. Draw raw video feed (Background) at 60 FPS
+            ctx.drawImage(video, 0, 0, vw, vh);
+
+            // FPS Calculation (Updated every 500ms for fast, accurate response)
+            const now = performance.now();
+            frameCount++;
+            const fpsElapsed = now - fpsTimer;
+            if (fpsElapsed >= 500) {
+              currentFps = Math.round((frameCount * 1000) / fpsElapsed);
+              if (fpsValueEl) {
+                fpsValueEl.textContent = `${currentFps} FPS`;
+              }
+              frameCount = 0;
+              fpsTimer = now;
+            }
+
+            // Only run focus tracking and loupe once the user selects a target focus point
+            if (!hasSelectedFocusPoint) {
+              return;
+            }
+
+            // Calculate Target ROI bounding box
+            const tx = Math.round(targetNormX * vw);
+            const ty = Math.round(targetNormY * vh);
+            const rx = Math.max(0, Math.min(vw - targetBoxSize, tx - targetBoxSize / 2));
+            const ry = Math.max(0, Math.min(vh - targetBoxSize, ty - targetBoxSize / 2));
+
+            // 2. Throttled CV Focus & Loupe (~30 FPS)
+            if (now - lastAnalysisTime >= 33) {
+              lastAnalysisTime = now;
+
+              cvCtx.drawImage(video, rx, ry, targetBoxSize, targetBoxSize, 0, 0, targetBoxSize, targetBoxSize);
+              const patchData = cvCtx.getImageData(0, 0, targetBoxSize, targetBoxSize);
+              const metrics = processPatch(patchData);
+              const rawScore = (metrics && isFinite(metrics.score)) ? metrics.score : 0.0;
+              currentLighting = (metrics && metrics.lightingState) ? metrics.lightingState : "optimal";
+
+              // Light exponential moving average to filter out single-frame camera sensor jitter
+              smoothedScore = smoothedScore === 0 ? rawScore : (smoothedScore * 0.65 + rawScore * 0.35);
+
+              // 3. Human-paced Oscilloscope Waveform Sampling (100ms = 10 samples/sec, 10s history)
+              if (now - lastWaveSampleTime >= WAVE_SAMPLE_INTERVAL_MS) {
+                lastWaveSampleTime = now;
+
+                if (waveHistory.length >= MAX_WAVE_SAMPLES) {
+                  waveHistory.shift();
+                  if (peakSampleIndex > 0) peakSampleIndex--;
+                }
+                waveHistory.push(smoothedScore);
+
+                // Track baseline vs active movement (first 8 samples = ~800ms)
+                if (!baselineEstablished) {
+                  initialSampleCount++;
+                  initialAvgScore += smoothedScore;
+                  if (initialSampleCount >= 8) {
+                    initialBaseline = initialAvgScore / initialSampleCount;
+                    peakScore = initialBaseline;
+                    minSessionScore = initialBaseline;
+                    baselineEstablished = true;
+                  }
+                }
+
+                // Evaluate 4 Lifecycle States
+                if (!baselineEstablished || waveHistory.length < 4) {
+                  updateStateUI("INITIAL");
+                } else if (!hasCalibrated) {
+                  // Awaiting user lens rotation before leaving INITIAL state
+                  const currentVal = smoothedScore;
+                  const thresholdUp = initialBaseline * 1.05 + 0.8;
+                  const thresholdDown = initialBaseline * 0.90 - 0.8;
+
+                  if (currentVal > thresholdUp) {
+                    // Significant sharpness improvement detected!
+                    hasCalibrated = true;
+                    peakScore = currentVal;
+                    peakSampleIndex = waveHistory.length - 1;
+                    updateStateUI("IMPROVING");
+                  } else if (currentVal < thresholdDown) {
+                    // Turned focus ring the wrong way
+                    hasCalibrated = true;
+                    updateStateUI("OVERDRIVEN");
+                  } else {
+                    // Natural baseline noise fluctuation: strictly stay in INITIAL state
+                    updateStateUI("INITIAL");
+                  }
+                } else {
+                  // Active focus calibration tracking
+                  const currentVal = smoothedScore;
+                  const scoreDelta = currentVal - (waveHistory[waveHistory.length - 3] || currentVal);
+
+                  // Peak Tracking
+                  if (currentVal > peakScore + 0.25) {
+                    peakScore = currentVal;
+                    peakSampleIndex = waveHistory.length - 1;
+                    updateStateUI("IMPROVING");
+                  } else if (peakScore > 0 && (peakScore - currentVal) > Math.max(2.5, peakScore * 0.06)) {
+                    updateStateUI("OVERDRIVEN");
+                  } else if (Math.abs(currentVal - peakScore) <= Math.max(1.0, peakScore * 0.03)) {
+                    updateStateUI("PEAK");
+                  } else if (scoreDelta > 0.3) {
+                    updateStateUI("IMPROVING");
+                  }
+                }
+
+                lastRawScore = smoothedScore;
+
+                // Render Oscilloscope Waveform Canvas
+                renderOscilloscope();
+              }
+
+              // Render Loupe Picture-in-Picture directly from processed patch
+              loupeOffCtx.putImageData(patchData, 0, 0);
+              loupeCtx.imageSmoothingEnabled = false;
+              loupeCtx.drawImage(loupeOffscreen, 0, 0, targetBoxSize, targetBoxSize, 0, 0, loupeCanvas.width, loupeCanvas.height);
+
+              // Center reticle marker on Loupe for 1:1 visual confirmation
+              loupeCtx.save();
+              loupeCtx.strokeStyle = "rgba(56, 189, 248, 0.8)";
+              loupeCtx.lineWidth = 1.5;
+              const lcx = loupeCanvas.width / 2;
+              const lcy = loupeCanvas.height / 2;
+              loupeCtx.beginPath();
+              loupeCtx.moveTo(lcx - 8, lcy);
+              loupeCtx.lineTo(lcx + 8, lcy);
+              loupeCtx.moveTo(lcx, lcy - 8);
+              loupeCtx.lineTo(lcx, lcy + 8);
+              loupeCtx.stroke();
+              loupeCtx.restore();
+            }
+
+            // 3. Draw Interactive Reticle on Main Canvas
+            drawReticle(ctx, rx, ry, targetBoxSize, targetBoxSize, currentLifecycleState);
+          }
+        } catch (renderError) {
+          console.error("Non-fatal render loop exception:", renderError);
+        } finally {
+          requestAnimationFrame(processFrame);
+        }
+      }
+
+      // Draw Focus Target Reticle
+      function drawReticle(context, x, y, w, h, state) {
+        context.save();
+
+        let color = "#38bdf8"; // Cyan default
+        if (state === "IMPROVING" || state === "PEAK") color = "#10b981"; // Green
+        else if (state === "OVERDRIVEN") color = "#f59e0b"; // Amber
+
+        context.strokeStyle = color;
+        context.lineWidth = 2.5;
+        context.shadowColor = "rgba(0, 0, 0, 0.8)";
+        context.shadowBlur = 6;
+
+        const cornerSize = 16;
+
+        // Top-Left
+        context.beginPath();
+        context.moveTo(x, y + cornerSize);
+        context.lineTo(x, y);
+        context.lineTo(x + cornerSize, y);
+        context.stroke();
+
+        // Top-Right
+        context.beginPath();
+        context.moveTo(x + w - cornerSize, y);
+        context.lineTo(x + w);
+        context.lineTo(x + w, y + cornerSize);
+        context.stroke();
+
+        // Bottom-Left
+        context.beginPath();
+        context.moveTo(x, y + h - cornerSize);
+        context.lineTo(x, y + h);
+        context.lineTo(x + cornerSize, y + h);
+        context.stroke();
+
+        // Bottom-Right
+        context.beginPath();
+        context.moveTo(x + w - cornerSize, y + h);
+        context.lineTo(x + w, y + h);
+        context.lineTo(x + w, y + h - cornerSize);
+        context.stroke();
+
+        // Center Crosshair
+        const cx = x + w / 2;
+        const cy = y + h / 2;
+        context.beginPath();
+        context.arc(cx, cy, 3.5, 0, 2 * Math.PI);
+        context.fillStyle = color;
+        context.fill();
+
+        context.restore();
+      }
+
+      // Handle Reticle Dragging & Clicking with Exact Aspect-Ratio Letterbox Offsets
+      function updateTargetFromPointer(clientX, clientY) {
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0 || canvas.width === 0 || canvas.height === 0) return;
+
+        const canvasAspect = canvas.width / canvas.height;
+        const rectAspect = rect.width / rect.height;
+
+        let renderW = rect.width;
+        let renderH = rect.height;
+        let offsetX = 0;
+        let offsetY = 0;
+
+        if (rectAspect > canvasAspect) {
+          // Pillarbox (black bars on left/right)
+          renderW = rect.height * canvasAspect;
+          offsetX = (rect.width - renderW) / 2;
+        } else {
+          // Letterbox (black bars on top/bottom)
+          renderH = rect.width / canvasAspect;
+          offsetY = (rect.height - renderH) / 2;
+        }
+
+        const clickX = (clientX - rect.left - offsetX) / renderW;
+        const clickY = (clientY - rect.top - offsetY) / renderH;
+
+        const newNormX = Math.max(0.05, Math.min(0.95, clickX));
+        const newNormY = Math.max(0.05, Math.min(0.95, clickY));
+
+        const dist = Math.hypot(newNormX - targetNormX, newNormY - targetNormY);
+
+        if (!hasSelectedFocusPoint) {
+          hasSelectedFocusPoint = true;
+          initialCta.style.display = "none";
+          oscilloscopeHud.style.display = "flex";
+          loupePanel.style.display = "flex";
+          targetNormX = newNormX;
+          targetNormY = newNormY;
+          resetWaveform();
+        } else if (dist > 0.005) {
+          targetNormX = newNormX;
+          targetNormY = newNormY;
+          resetWaveform();
+        }
+      }
+
+      canvas.addEventListener("mousedown", (e) => {
+        isDragging = true;
+        updateTargetFromPointer(e.clientX, e.clientY);
+      });
+
+      window.addEventListener("mousemove", (e) => {
+        if (isDragging) updateTargetFromPointer(e.clientX, e.clientY);
+      });
+
+      window.addEventListener("mouseup", () => { isDragging = false; });
+
+      canvas.addEventListener("touchstart", (e) => {
+        if (e.touches.length > 0) {
+          isDragging = true;
+          updateTargetFromPointer(e.touches[0].clientX, e.touches[0].clientY);
+        }
+      }, { passive: true });
+
+      window.addEventListener("touchmove", (e) => {
+        if (isDragging && e.touches.length > 0) {
+          updateTargetFromPointer(e.touches[0].clientX, e.touches[0].clientY);
+        }
+      }, { passive: true });
+
+      window.addEventListener("touchend", () => { isDragging = false; });
+
+      // Event Listeners
+      btnStartCamera.addEventListener("click", () => startStream());
+
+      cameraSelect.addEventListener("change", () => {
+        if (cameraSelect.value) {
+          startStream(cameraSelect.value);
+        }
+      });
+
+      resSelect.addEventListener("change", async () => {
+        if (!isStreaming || !currentStream) return;
+        const track = currentStream.getVideoTracks()[0];
+        const chosen = resSelect.value;
+        if (!track || !chosen) return;
+
+        const [w, h] = chosen.split("x").map(Number);
+        try {
+          await track.applyConstraints({ width: { exact: w }, height: { exact: h } });
+          resetWaveform();
+        } catch (err) {
+          console.warn("Direct applyConstraints failed on resolution change, restarting stream:", err);
+          await startStream(cameraSelect.value || null, chosen);
+        }
+      });
+
+      btnResetPeak.addEventListener("click", resetWaveform);
+
+      btnPeaking.addEventListener("click", () => {
+        peakingEnabled = !peakingEnabled;
+        btnPeaking.classList.toggle("btn-active", peakingEnabled);
+        btnPeaking.querySelector("span").textContent = peakingEnabled ? "Peaking: ON" : "Peaking: OFF";
+      });
+
+      btnFullscreen.addEventListener("click", () => {
+        const wrapper = document.getElementById("viewportWrapper");
+        if (!document.fullscreenElement) {
+          wrapper.requestFullscreen().catch(err => console.error(err));
+        } else {
+          document.exitFullscreen();
+        }
+      });
+
+      // Populate camera list on page load
+      if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+        populateCameras();
+      }
+
+      // Start animation loop
+      requestAnimationFrame(processFrame);
+    })();
+  </script>
+</body>
+</html>

@@ -28,10 +28,6 @@ docs/assets/screenshots/08-usb-bandwidth.png
 docs/AUTODARTS_ARCHITECTURE.md
 docs/AUTODARTS_CAMERA_OPTIMIZATION_GUIDE.md
 
-# Standalone web camera focus tool and deployment workflow
-tools/camera-focus-web/
-.github/workflows/deploy-pages.yml
-
 # Research & retired modules
 core/recognition_arbiter.py
 core/vision_critic.py

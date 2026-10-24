@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SUIT Camera Optimizer Preview</title>
+  <meta name="description" content="Interactive preview of SUIT's one-click camera calibration for HBV OV2710 cameras, on simulated cameras." />
+  <style>
+    :root {
+      --bg: #1d1d20;
+      --card: #2a2a2e;
+      --card-2: #34343a;
+      --line: rgba(255, 255, 255, 0.08);
+      --fg: #f6f6f7;
+      --dim: rgba(246, 246, 247, 0.62);
+      --faint: rgba(246, 246, 247, 0.42);
+      --accent: #3584e4;
+      --accent-hover: #4a92ea;
+      --ok: #57e389;
+      --warn: #f8e45c;
+      --bad: #ff7b63;
+      --ok-bg: rgba(46, 194, 126, 0.18);
+      --bad-bg: rgba(224, 27, 36, 0.2);
+      --font: "Cantarell", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { background: var(--bg); color: var(--fg); font-family: var(--font); font-size: 14px; }
+    body { min-height: 100vh; display: flex; flex-direction: column; }
+    button { font: inherit; color: inherit; }
+    a { color: #78aeed; }
+
+    /* Header bar, like an Adwaita navigation page */
+    .headerbar {
+      display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+      padding: 8px 12px; border-bottom: 1px solid var(--line); background: #232327;
+    }
+    .headerbar h1 { font-size: 15px; font-weight: 700; text-align: center; }
+    .back { justify-self: start; visibility: hidden; }
+    .back.shown { visibility: visible; }
+
+    .preview-ribbon {
+      margin: 10px 12px 0; padding: 8px 12px; border-radius: 10px;
+      background: rgba(53, 132, 228, 0.14); color: var(--dim); font-size: 13px; line-height: 1.4;
+    }
+    .preview-ribbon strong { color: var(--fg); }
+
+    main { flex: 1; display: flex; flex-direction: column; padding: 8px 12px 12px; gap: 8px; min-height: 0; }
+    .page { display: none; flex: 1; flex-direction: column; gap: 8px; min-height: 0; }
+    .page.active { display: flex; }
+
+    .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .spacer { flex: 1; }
+
+    .btn {
+      border: none; border-radius: 8px; padding: 7px 14px; cursor: pointer;
+      background: rgba(255, 255, 255, 0.1); font-weight: 600; display: inline-flex; align-items: center; gap: 6px;
+    }
+    .btn:hover { background: rgba(255, 255, 255, 0.15); }
+    .btn:disabled { opacity: 0.45; cursor: default; }
+    .btn.suggested { background: var(--accent); color: #fff; }
+    .btn.suggested:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn.destructive { background: #c01c28; color: #fff; }
+    .btn.flat { background: transparent; }
+    .btn.flat:hover { background: rgba(255, 255, 255, 0.08); }
+    .btn.pill { border-radius: 999px; padding: 10px 22px; }
+    .btn.compact { padding: 4px 10px; font-size: 13px; }
+    .btn svg { width: 16px; height: 16px; }
+
+    .card { background: var(--card); border-radius: 12px; border: 1px solid var(--line); }
+    .panel { padding: 12px 14px; }
+
+    .heading { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; color: var(--faint); text-transform: uppercase; }
+    .caption { font-size: 13px; color: var(--dim); line-height: 1.4; }
+    .title { font-size: 17px; font-weight: 800; line-height: 1.25; }
+
+    .dot { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; }
+    .dot::before { content: "●"; font-size: 10px; }
+    .dot.ok::before { color: var(--ok); }
+    .dot.warn::before { color: var(--warn); }
+    .dot.bad::before { color: var(--bad); }
+    .dot.neutral::before { color: var(--faint); }
+
+    /* Optimizer page */
+    .cols { display: flex; gap: 12px; flex: 1; min-height: 0; }
+    .left { width: 340px; flex: none; display: flex; flex-direction: column; gap: 10px; }
+    .right { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+    .cam-line { display: flex; align-items: center; gap: 8px; }
+    .steps { display: flex; flex-direction: column; gap: 5px; max-height: 300px; overflow-y: auto; }
+    .step { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--dim); line-height: 1.35; }
+    .step .ic { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+    .step.done .ic { color: var(--ok); }
+    .step.failed .ic { color: var(--bad); }
+    .spinner {
+      width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.18);
+      border-top-color: var(--fg); animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .note { border-radius: 10px; padding: 10px 14px; background: rgba(255, 255, 255, 0.06); font-size: 13px; line-height: 1.4; }
+    .note.ok { background: var(--ok-bg); }
+    .note.bad { background: var(--bad-bg); }
+    .job-actions { display: flex; gap: 6px; align-items: center; position: relative; }
+    .log {
+      display: none; position: absolute; left: 0; right: 0; bottom: 34px; z-index: 5; max-height: 280px; overflow: auto;
+      background: #18181b; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px;
+      font: 12px/1.45 var(--mono); color: var(--dim); white-space: pre-wrap; word-break: break-word;
+    }
+    .log.open { display: block; }
+
+    .ba-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .seg { display: inline-flex; background: rgba(255, 255, 255, 0.07); border-radius: 8px; padding: 2px; gap: 2px; }
+    .seg button {
+      border: none; background: transparent; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+      font-size: 13px; font-weight: 600; color: var(--dim);
+    }
+    .seg button.on { background: rgba(255, 255, 255, 0.16); color: var(--fg); }
+    .seg button:disabled { opacity: 0.4; cursor: default; }
+    .frame-wrap {
+      flex: 1; min-height: 240px; position: relative; border-radius: 10px; background: #000; overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .frame-wrap canvas { max-width: 100%; max-height: 100%; display: block; touch-action: none; }
+    .empty { color: var(--faint); font-size: 13px; padding: 20px; text-align: center; }
+    .slider-row { display: flex; align-items: center; gap: 10px; }
+    input[type=range] { flex: 1; accent-color: var(--accent); min-width: 0; }
+
+    /* Camera Controls page */
+    .ctl-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .keep { display: flex; align-items: center; gap: 8px; }
+    .ctl-cols { display: flex; gap: 12px; flex: 1; min-height: 0; }
+    .ctl-live { flex: 1.2; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+    .ctl-groups { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-content: start; min-width: 0; }
+    .ctl-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+    .group { display: flex; flex-direction: column; gap: 6px; }
+    .ctl-row { display: grid; grid-template-columns: 110px 1fr 66px; align-items: center; gap: 8px; min-height: 28px; }
+    .ctl-row.disabled { opacity: 0.45; }
+    .ctl-row label { font-size: 13px; }
+    .ctl-row .val { font-size: 12px; color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
+    .changed { color: var(--accent-hover); margin-left: 4px; font-size: 10px; }
+    .hidden-tag {
+      display: inline-block; margin-left: 5px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700;
+      letter-spacing: 0.04em; background: rgba(248, 228, 92, 0.16); color: var(--warn); vertical-align: 1px;
+    }
+    select {
+      grid-column: 2 / 4; background: rgba(255, 255, 255, 0.08); color: var(--fg); border: none; border-radius: 6px;
+      padding: 4px 8px; font: inherit; font-size: 13px;
+    }
+    select option { background: var(--card); }
+    .switch { grid-column: 2 / 4; justify-self: start; position: relative; width: 42px; height: 24px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch span { position: absolute; inset: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.18); cursor: pointer; transition: 0.15s; }
+    .switch span::after {
+      content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+      background: #fff; transition: 0.15s;
+    }
+    .switch input:checked + span { background: var(--accent); }
+    .switch input:checked + span::after { transform: translateX(18px); }
+    .live-badge {
+      position: absolute; top: 10px; left: 10px; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px;
+      background: rgba(0, 0, 0, 0.55); color: var(--ok); letter-spacing: 0.05em;
+    }
+    .check-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 30px; }
+    .popover {
+      display: none; position: absolute; top: 38px; right: 0; z-index: 10; min-width: 270px;
+      background: #2f2f34; border: 1px solid var(--line); border-radius: 12px; padding: 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    .popover.open { display: block; }
+    .preset { display: flex; align-items: center; gap: 8px; padding: 6px 6px; border-radius: 8px; font-size: 13px; }
+    .preset:hover { background: rgba(255, 255, 255, 0.05); }
+
+    /* Dialog */
+    .scrim {
+      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: none; align-items: center; justify-content: center;
+      z-index: 50; padding: 16px;
+    }
+    .scrim.open { display: flex; }
+    .dialog { background: #2f2f34; border-radius: 16px; width: 100%; max-width: 380px; overflow: hidden; }
+    .dialog-body { padding: 22px 22px 18px; text-align: center; }
+    .dialog-body h2 { font-size: 18px; margin-bottom: 10px; }
+    .dialog-body p { color: var(--dim); font-size: 14px; line-height: 1.5; white-space: pre-line; text-align: left; }
+    .dialog-actions { display: flex; border-top: 1px solid var(--line); }
+    .dialog-actions button {
+      flex: 1; padding: 13px; border: none; background: transparent; cursor: pointer; font-weight: 600;
+    }
+    .dialog-actions button + button { border-left: 1px solid var(--line); }
+    .dialog-actions button:hover { background: rgba(255, 255, 255, 0.05); }
+    .dialog-actions .suggested { color: #78aeed; }
+    .dialog-actions .destructive { color: var(--bad); }
+
+    .status-page { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 30px; }
+    .status-page h2 { font-size: 22px; }
+    .status-page p { color: var(--dim); max-width: 420px; line-height: 1.5; }
+
+    @media (max-width: 860px) {
+      .cols, .ctl-cols { flex-direction: column; }
+      .left { width: 100%; }
+      .frame-wrap { min-height: 0; aspect-ratio: 4 / 3; flex: none; }
+    }
+    @media (max-width: 560px) {
+      .ctl-groups { grid-template-columns: 1fr; }
+      .ctl-row { grid-template-columns: 96px 1fr 60px; }
+      .headerbar h1 { font-size: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="headerbar">
+    <button class="btn flat compact back" id="back" aria-label="Back">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M10.7 2.3a1 1 0 0 1 0 1.4L6.4 8l4.3 4.3a1 1 0 1 1-1.4 1.4l-5-5a1 1 0 0 1 0-1.4l5-5a1 1 0 0 1 1.4 0z"/></svg>
+      Back
+    </button>
+    <h1 id="page-title">Camera Optimizer</h1>
+    <span></span>
+  </header>
+
+  <div class="preview-ribbon">
+    <strong>Preview.</strong> Three simulated HBV OV2710 cameras look at a simulated board; the run is sped up about 8×.
+    Nothing is sent to a camera and nothing is saved. The real tool is part of
+    <a href="https://github.com/IteraThor/SUIT" target="_blank" rel="noopener">SUIT for Linux</a>.
+  </div>
+
+  <main>
+    <!-- Camera Optimizer -->
+    <section class="page active" id="page-optimizer">
+      <div class="toolbar">
+        <button class="btn" id="open-controls">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M2 4h7.2a2 2 0 0 1 3.6 0H14v1.5h-1.2a2 2 0 0 1-3.6 0H2zm0 6.5h1.2a2 2 0 0 1 3.6 0H14V12H6.8a2 2 0 0 1-3.6 0H2z"/></svg>
+          Camera Controls
+        </button>
+        <span class="spacer"></span>
+        <span class="dot ok" id="ad-status">Autodarts running</span>
+      </div>
+
+      <div class="cols" id="overview">
+        <div class="left card panel">
+          <div class="title" id="hero-title">Loading…</div>
+          <div class="caption" id="hero-text"></div>
+          <button class="btn suggested pill" id="btn-optimize" disabled>Optimize cameras</button>
+          <button class="btn flat compact" id="btn-restore" style="align-self:center;display:none">Restore original settings</button>
+
+          <div class="heading">Cameras</div>
+          <div id="cam-list" style="display:flex;flex-direction:column;gap:4px"></div>
+
+          <div id="job-box" style="display:none;flex-direction:column;gap:6px">
+            <div class="heading" id="job-heading">Progress</div>
+            <div class="steps" id="steps"></div>
+            <div class="note" id="job-note" style="display:none"></div>
+            <div class="job-actions">
+              <button class="btn compact" id="btn-save-preset" style="display:none" title="Keep these calibrated settings under a name, to load them again later">Save as Preset…</button>
+              <span class="spacer"></span>
+              <button class="btn flat compact" id="btn-log" title="Details of the last run">Log</button>
+              <div class="log" id="log"></div>
+            </div>
+          </div>
+
+          <span class="spacer"></span>
+          <div class="caption">Nothing is flashed: settings live in camera memory and are re-applied by the keeper.</div>
+        </div>
+
+        <div class="right card panel">
+          <div class="ba-head">
+            <span class="heading">Before and after</span>
+            <span class="spacer"></span>
+            <div class="seg" id="ba-ports"></div>
+            <div class="seg" id="ba-zoom" title="Zoom"></div>
+          </div>
+          <div class="frame-wrap" id="ba-wrap">
+            <div class="empty" id="ba-empty">Before and after pictures appear here after an optimization.</div>
+            <canvas id="ba-canvas" width="960" height="720" style="display:none" title="Double-tap or scroll to zoom into a spot; drag to move around when zoomed"></canvas>
+          </div>
+          <div class="slider-row">
+            <span class="caption">Before</span>
+            <input type="range" id="ba-split" min="0" max="100" value="50" disabled />
+            <span class="caption">After</span>
+          </div>
+          <div class="caption" id="ba-note"></div>
+        </div>
+      </div>
+
+      <div class="status-page card" id="declined" style="display:none">
+        <svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.6" style="color:var(--faint)"><path d="M3 3l18 18M9 5h6l1.5 2H20a1 1 0 0 1 1 1v9m-3 2H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h2"/><circle cx="12" cy="13" r="3"/></svg>
+        <h2>Optimization is off</h2>
+        <p>This tool changes hidden settings that were only tested on HBV OV2710 cameras, so it stays off for other cameras.</p>
+        <button class="btn pill" id="btn-reconsent">I do use HBV OV2710 cameras</button>
+      </div>
+    </section>
+
+    <!-- Camera Controls -->
+    <section class="page" id="page-controls">
+      <div class="ctl-top">
+        <div class="seg" id="ctl-ports"></div>
+        <div class="keep card" style="padding:5px 10px">
+          <span style="font-size:13px">Keep these settings</span>
+          <label class="switch" style="grid-column:auto"><input type="checkbox" id="keep"><span></span></label>
+        </div>
+        <span class="spacer"></span>
+        <div style="position:relative">
+          <button class="btn compact" id="btn-presets">
+            <svg viewBox="0 0 16 16" fill="currentColor"><path d="M2 3h12v1.6H2zm0 4.2h12v1.6H2zm0 4.2h12V13H2z"/></svg>
+            Presets
+          </button>
+          <div class="popover" id="presets-pop"></div>
+        </div>
+      </div>
+
+      <div class="ctl-cols">
+        <div class="ctl-live card panel">
+          <div class="frame-wrap">
+            <canvas id="live-canvas" width="960" height="720"></canvas>
+            <span class="live-badge">LIVE</span>
+          </div>
+          <div class="check-row">
+            <span class="dot neutral" id="check-result">Brightness not checked</span>
+            <button class="btn compact" id="btn-fix" style="display:none">Fix</button>
+            <span class="spacer"></span>
+            <button class="btn compact" id="btn-check">Check brightness</button>
+            <button class="btn compact" id="btn-reset">Reset to defaults</button>
+          </div>
+        </div>
+        <div class="ctl-groups card panel" id="ctl-groups"></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="scrim" id="scrim">
+    <div class="dialog" role="dialog" aria-modal="true">
+      <div class="dialog-body"><h2 id="dlg-head"></h2><p id="dlg-body"></p></div>
+      <div class="dialog-actions" id="dlg-actions"></div>
+    </div>
+  </div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------------------------
+// Constants mirrored from SUIT (core/hbvcal/autocal.py, modules_gtk/camera_controls_view.py)
+// ---------------------------------------------------------------------------------------------
+const W = 960, H = 720;
+const FPS = 30;
+const EXPOSURE_UNIT_S = 50e-6;
+const EXPOSURE_MAX = Math.floor(0.98 / FPS / EXPOSURE_UNIT_S);  // 653
+const WHITE_FRACTION = 0.92;
+const WHITE_TARGET = 232;
+const TONE = { sharpness: 10, gamma: 250, contrast: 34, brightness: 0, saturation: 68, hue: 0,
+               white_balance_automatic: 1, backlight_compensation: 0 };
+const Q_STOCK = 22;
+const SENSOR_STEPS = [0x00, 0x04, 0x08, 0x0C, 0x10, 0x14, 0x18, 0x30, 0x38, 0x70];
+const SPEED = 8;  // the preview runs this much faster than the real job
+
+// Simulated sensor (made-up but plausible numbers; only the direction of each effect matters here)
+const K_SENSOR = 1.25;   // linear scene radiance -> sensor fraction at max exposure, 1x gain
+const OUT_SCALE = 0.57;  // sensor ceiling ~145 DN of 255 before digital gain
+const PHOTONS = 2600;    // full-well-ish scale for shot noise
+const READ_NOISE = 0.003;
+
+function sensorGain(code) {
+  let n = 0;
+  for (const b of [1, 2, 4]) if ((code >> 4) & b) n++;
+  return (1 << n) * (1 + (code & 15) / 16);
+}
+const gainLabel = code => sensorGain(code).toFixed(2).replace(/0+$/, "").replace(/\.$/, "") + "×";
+
+const DEVICE = n => `/dev/v4l/by-path/pci-0000:00:14.0-usb-0:${n}:1.0-video-index0`;
+
+// What Autodarts leaves on the cameras (what "before" shows and "Reset to defaults" goes back to)
+const AUTODARTS_SETTINGS = {
+  auto_exposure: 3, exposure_time_absolute: 156, gain: 0, sensor_gain: 0x30, brightness: 0, contrast: 32,
+  gamma: 300, saturation: 64, hue: 0, sharpness: 30, backlight_compensation: 1, white_balance_automatic: 1,
+  white_balance_temperature: 4600, q: Q_STOCK, power_line_frequency: 1,
+};
+
+// ---------------------------------------------------------------------------------------------
+// Simulated cameras: one board, three viewing angles and slightly different light
+// ---------------------------------------------------------------------------------------------
+const CAMS = [
+  { port: "1", light: 0.86, cx: 486, cy: 372, axis: 28, squash: 0.70, spin: -6 },
+  { port: "2", light: 1.0, cx: 474, cy: 352, axis: -4, squash: 0.77, spin: 2 },
+  { port: "3", light: 1.13, cx: 470, cy: 368, axis: -36, squash: 0.68, spin: 7 },
+];
+const NUMBERS = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5];
+
+function drawBoard(ctx) {
+  const seg = Math.PI / 10;
+  const wedge = (r0, r1, a0, a1, color) => {
+    ctx.beginPath();
+    ctx.arc(0, 0, r1, a0, a1);
+    ctx.arc(0, 0, r0, a1, a0, true);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+  };
+  ctx.beginPath(); ctx.arc(0, 0, 236, 0, Math.PI * 2); ctx.fillStyle = "#151515"; ctx.fill();
+  for (let i = 0; i < 20; i++) {
+    const a0 = -Math.PI / 2 + i * seg - seg / 2, a1 = a0 + seg;
+    const dark = i % 2 === 0;
+    const single = dark ? "#1c1c1c" : "#e9ddc2";
+    const ring = dark ? "#c62a2f" : "#1d7d3c";
+    wedge(15.9, 99, a0, a1, single);
+    wedge(99, 107, a0, a1, ring);
+    wedge(107, 162, a0, a1, single);
+    wedge(162, 170, a0, a1, ring);
+  }
+  ctx.beginPath(); ctx.arc(0, 0, 15.9, 0, Math.PI * 2); ctx.fillStyle = "#1d7d3c"; ctx.fill();
+  ctx.beginPath(); ctx.arc(0, 0, 6.35, 0, Math.PI * 2); ctx.fillStyle = "#c62a2f"; ctx.fill();
+  // spider wire
+  ctx.strokeStyle = "#c9c9c9"; ctx.lineWidth = 0.9;
+  for (const r of [6.35, 15.9, 99, 107, 162, 170]) { ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke(); }
+  for (let i = 0; i < 20; i++) {
+    const a = -Math.PI / 2 + i * seg - seg / 2;
+    ctx.beginPath(); ctx.moveTo(Math.cos(a) * 15.9, Math.sin(a) * 15.9); ctx.lineTo(Math.cos(a) * 170, Math.sin(a) * 170); ctx.stroke();
+  }
+  ctx.fillStyle = "#e8e8e8"; ctx.font = "bold 22px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  NUMBERS.forEach((n, i) => {
+    const a = -Math.PI / 2 + i * seg;
+    ctx.fillText(String(n), Math.cos(a) * 198, Math.sin(a) * 198);
+  });
+}
+
+function buildScene(cam) {
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const ctx = c.getContext("2d");
+  const wall = ctx.createLinearGradient(0, 0, 0, H);
+  wall.addColorStop(0, "#3a3936"); wall.addColorStop(1, "#2a2927");
+  ctx.fillStyle = wall; ctx.fillRect(0, 0, W, H);
+  const m = new DOMMatrix().translate(cam.cx, cam.cy).rotate(cam.axis).scale(1, cam.squash)
+    .rotate(-cam.axis + cam.spin).scale(1.42);
+  ctx.setTransform(m);
+  drawBoard(ctx);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  const mask = document.createElement("canvas");
+  mask.width = W; mask.height = H;
+  const mctx = mask.getContext("2d");
+  mctx.setTransform(m);
+  mctx.beginPath(); mctx.arc(0, 0, 170, 0, Math.PI * 2); mctx.fillStyle = "#fff"; mctx.fill();
+
+  const px = ctx.getImageData(0, 0, W, H).data;
+  const mk = mctx.getImageData(0, 0, W, H).data;
+  const lin = new Float32Array(W * H * 3);
+  const inMask = new Uint8Array(W * H);
+  const lut = new Float32Array(256);
+  for (let i = 0; i < 256; i++) lut[i] = Math.pow(i / 255, 2.2);
+  const boardLuma = [];
+  const rr = 0.62 * W;
+  for (let y = 0, i = 0; y < H; y++) {
+    for (let x = 0; x < W; x++, i++) {
+      const dx = x - cam.cx, dy = y - cam.cy;
+      const fall = cam.light * (1 - 0.42 * (dx * dx + dy * dy) / (rr * rr));  // LED ring light falls off outwards
+      const r = lut[px[i * 4]] * fall, g = lut[px[i * 4 + 1]] * fall, b = lut[px[i * 4 + 2]] * fall;
+      lin[i * 3] = r; lin[i * 3 + 1] = g; lin[i * 3 + 2] = b;
+      if (mk[i * 4] > 128) { inMask[i] = 1; boardLuma.push(0.2126 * r + 0.7152 * g + 0.0722 * b); }
+    }
+  }
+  boardLuma.sort((a, b) => a - b);
+  const mean = boardLuma.reduce((s, v) => s + v, 0) / boardLuma.length;
+  return { lin, mask: inMask, meanL: mean, white97: boardLuma[Math.floor(boardLuma.length * 0.97)] };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Simulated camera pipeline: sensor (exposure, analog gain, noise, ceiling) -> ISP -> MJPEG
+// ---------------------------------------------------------------------------------------------
+const GAUSS = (() => {
+  const n = 1 << 20, g = new Float32Array(n);
+  for (let i = 0; i < n; i += 2) {
+    const u = Math.random() || 1e-9, v = Math.random();
+    const r = Math.sqrt(-2 * Math.log(u));
+    g[i] = r * Math.cos(2 * Math.PI * v); g[i + 1] = r * Math.sin(2 * Math.PI * v);
+  }
+  return g;
+})();
+const GMASK = GAUSS.length - 1;
+
+function exposureState(scene, s) {
+  if (s.auto_exposure !== 1) {
+    // auto exposure meters the board mean; backlight compensation moves its target
+    const target = 0.26 * [0.8, 1.0, 1.4][Math.min(2, s.backlight_compensation | 0)];
+    const need = target / (scene.meanL * K_SENSOR);
+    const e = Math.min(need, 0.33);
+    return { e, sg: Math.min(15.5, Math.max(1, need / e)) };
+  }
+  return { e: s.exposure_time_absolute / EXPOSURE_MAX, sg: sensorGain(s.sensor_gain) };
+}
+
+function toneCurve(s) {
+  const lut = new Float32Array(4096);
+  const ex = Math.min(1, Math.max(0.2, 100 / s.gamma));
+  const k = s.contrast / 34, br = s.brightness / 255;
+  for (let i = 0; i < 4096; i++) {
+    let v = Math.pow(i / 4095, ex);
+    v = (v - 0.5) * k + 0.5 + br;
+    lut[i] = v;
+  }
+  return lut;
+}
+
+const digitalGain = g => 1 + g / 32;
+
+function wbGains(s) {
+  if (s.white_balance_automatic === 1) return [0.93, 1.0, 1.22];  // neutral sisal
+  const f = (s.white_balance_temperature - 4600) / 3000;
+  return [0.93 * (1 + 0.35 * f), 1.0, 1.22 * (1 - 0.35 * f)];
+}
+
+/** Output white level (DN) of the white segments, without noise: what the calibration measures. */
+function whiteOut(scene, s) {
+  const { e, sg } = exposureState(scene, s);
+  const raw = Math.min(1, scene.white97 * K_SENSOR * e * sg);
+  const v = Math.min(1, raw * OUT_SCALE * digitalGain(s.gain));
+  const lut = toneCurve(s);
+  return Math.max(0, Math.min(255, lut[Math.round(v * 4095)] * 255));
+}
+
+function render(scene, s, seed = Math.random()) {
+  const { e, sg } = exposureState(scene, s);
+  const lut = toneCurve(s);
+  const dg = digitalGain(s.gain);
+  const wb = wbGains(s);
+  const sat = s.saturation / 68;
+  const hue = s.hue * Math.PI / 180, ch = Math.cos(hue), sh = Math.sin(hue);
+  const lin = scene.lin, n = W * H;
+  const rgb = new Float32Array(n * 3);
+  const Y = new Float32Array(n);
+  let off = Math.floor(seed * GAUSS.length);
+  const scale = K_SENSOR * e * sg, shot = sg * K_SENSOR / PHOTONS, read2 = (READ_NOISE * sg) ** 2;
+  for (let i = 0; i < n; i++) {
+    let r = 0, g = 0, b = 0;
+    for (let c = 0; c < 3; c++) {
+      let raw = lin[i * 3 + c] * scale;
+      raw += GAUSS[(off++) & GMASK] * Math.sqrt(Math.max(raw, 0) * shot + read2);
+      raw = raw < 0 ? 0 : raw > 1 ? 1 : raw;  // the sensor's own ceiling
+      let v = raw * OUT_SCALE * dg * wb[c];
+      v = v > 1 ? 1 : v;
+      const t = lut[(v * 4095) | 0];
+      if (c === 0) r = t; else if (c === 1) g = t; else b = t;
+    }
+    const yy = 0.299 * r + 0.587 * g + 0.114 * b;
+    // saturation + hue in YIQ
+    let iq = 0.596 * r - 0.274 * g - 0.322 * b, qq = 0.211 * r - 0.523 * g + 0.312 * b;
+    const i2 = (iq * ch - qq * sh) * sat, q2 = (iq * sh + qq * ch) * sat;
+    rgb[i * 3] = yy + 0.956 * i2 + 0.621 * q2;
+    rgb[i * 3 + 1] = yy - 0.272 * i2 - 0.647 * q2;
+    rgb[i * 3 + 2] = yy - 1.106 * i2 + 1.703 * q2;
+    Y[i] = yy;
+  }
+  // sharpening: unsharp mask on luma (it sharpens the noise too)
+  const amt = s.sharpness / 22;
+  const out = new ImageData(W, H);
+  const d = out.data;
+  if (amt > 0) {
+    const tmp = new Float32Array(n), blur = new Float32Array(n);
+    for (let y = 0; y < H; y++) {
+      const o = y * W;
+      for (let x = 1; x < W - 1; x++) tmp[o + x] = (Y[o + x - 1] + Y[o + x] + Y[o + x + 1]) / 3;
+      tmp[o] = Y[o]; tmp[o + W - 1] = Y[o + W - 1];
+    }
+    for (let y = 1; y < H - 1; y++) {
+      const o = y * W;
+      for (let x = 0; x < W; x++) blur[o + x] = (tmp[o + x - W] + tmp[o + x] + tmp[o + x + W]) / 3;
+    }
+    for (let x = 0; x < W; x++) { blur[x] = tmp[x]; blur[(H - 1) * W + x] = tmp[(H - 1) * W + x]; }
+    for (let i = 0; i < n; i++) {
+      const add = (Y[i] - blur[i]) * amt;
+      d[i * 4] = (rgb[i * 3] + add) * 255;
+      d[i * 4 + 1] = (rgb[i * 3 + 1] + add) * 255;
+      d[i * 4 + 2] = (rgb[i * 3 + 2] + add) * 255;
+      d[i * 4 + 3] = 255;
+    }
+  } else {
+    for (let i = 0; i < n; i++) {
+      d[i * 4] = rgb[i * 3] * 255; d[i * 4 + 1] = rgb[i * 3 + 1] * 255; d[i * 4 + 2] = rgb[i * 3 + 2] * 255; d[i * 4 + 3] = 255;
+    }
+  }
+  return out;
+}
+
+// MJPEG: the JPEG level (Q) of the camera, higher = more compression. Q22 is the camera's stock level.
+const jpegQuality = q => Math.max(0.3, 0.98 - (q - 1) * 0.022);
+const work = document.createElement("canvas");
+work.width = W; work.height = H;
+const wctx = work.getContext("2d");
+
+async function frame(cam, s) {
+  const img = render(cam.scene, s);
+  wctx.putImageData(img, 0, 0);
+  const blob = await new Promise(res => work.toBlob(res, "image/jpeg", jpegQuality(s.q)));
+  return { bitmap: await createImageBitmap(blob), img };
+}
+
+function measure(img, scene) {
+  const d = img.data, vals = [];
+  for (let i = 0; i < scene.mask.length; i += 3) {
+    if (scene.mask[i]) vals.push(0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]);
+  }
+  vals.sort((a, b) => a - b);
+  const p = f => vals[Math.floor(vals.length * f)];
+  return { white: p(0.97), black: p(0.03), mean: vals.reduce((a, b) => a + b, 0) / vals.length };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Calibration, as in core/hbvcal/autocal.py: longest exposure at 1x sensor gain that keeps the white sisal
+// at 92 % of the sensor ceiling, then digital gain until the white segments reach the common target.
+// ---------------------------------------------------------------------------------------------
+function calibrate(cam, log) {
+  const sc = cam.scene;
+  log(`calibrating ${DEVICE(cam.port)}`);
+  log(`  flicker: {'flicker_cv_1ms': ${(0.004 + Math.random() * 0.006).toFixed(4)}, 'flicker': False, 'step': 1}`);
+  const whiteAtMax = sc.white97 * K_SENSOR;
+  const exp = Math.min(EXPOSURE_MAX, Math.round(EXPOSURE_MAX * WHITE_FRACTION / whiteAtMax));
+  log(`  ceiling=145.0 DN (linear)  white@max exposure=${Math.min(145, whiteAtMax * 145).toFixed(1)}  -> exposure ${exp} ` +
+      `(${(exp * EXPOSURE_UNIT_S * 1000).toFixed(1)} ms), analog gain 1x`);
+  const s = { ...AUTODARTS_SETTINGS, ...TONE, auto_exposure: 1, exposure_time_absolute: exp, sensor_gain: 0x00, gain: 0 };
+  let lo = 0, hi = 100;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (whiteOut(sc, { ...s, gain: mid }) < WHITE_TARGET) lo = mid + 1; else hi = mid;
+  }
+  if (lo > 0 && Math.abs(whiteOut(sc, { ...s, gain: lo - 1 }) - WHITE_TARGET) < Math.abs(whiteOut(sc, { ...s, gain: lo }) - WHITE_TARGET)) lo--;
+  s.gain = lo;
+  const m = measure(render(sc, s), sc);
+  const tnoise = (0.9 + 0.4 * (1 - cam.light) + Math.random() * 0.15);
+  log(`  digital gain ${lo} -> white ${m.white.toFixed(1)} black ${m.black.toFixed(1)} mean ${m.mean.toFixed(1)} tnoise ${tnoise.toFixed(2)}`);
+  return s;
+}
+
+// ---------------------------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------------------------
+const state = {
+  consent: null,       // null = never asked, true / false = answer
+  autodarts: "active",
+  job: { running: false, name: "", steps: [], log: [], result: null, error: "" },
+  ba: { port: "1", zoom: 1, center: [0.5, 0.5], imgs: {} },
+  ctlPort: "1",
+  presets: [{ name: "Old boot settings", settings: null }],
+};
+for (const cam of CAMS) {
+  cam.scene = buildScene(cam);
+  cam.settings = { ...AUTODARTS_SETTINGS };
+  cam.calibrated = null;
+  cam.keep = false;
+}
+state.presets[0].settings = Object.fromEntries(CAMS.map(c => [c.port, { ...AUTODARTS_SETTINGS, sharpness: 20, contrast: 36 }]));
+
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const allOptimized = () => CAMS.every(c => c.calibrated);
+
+// ---------------------------------------------------------------------------------------------
+// Dialog
+// ---------------------------------------------------------------------------------------------
+function dialog(heading, body, responses) {
+  return new Promise(resolve => {
+    $("dlg-head").textContent = heading;
+    $("dlg-body").textContent = body;
+    const box = $("dlg-actions");
+    box.innerHTML = "";
+    for (const r of responses) {
+      const b = document.createElement("button");
+      b.textContent = r.label;
+      if (r.kind) b.className = r.kind;
+      b.onclick = () => { $("scrim").classList.remove("open"); resolve(r.id); };
+      box.appendChild(b);
+    }
+    $("scrim").classList.add("open");
+    box.lastChild.focus();
+  });
+}
+
+async function askConsent() {
+  const lines = CAMS.map(c => `✓  USB port ${c.port}: HBV camera detected`).join("\n");
+  const r = await dialog("Are these HBV OV2710 cameras?",
+    "The optimizer uses hidden camera settings (JPEG quality, sensor gain) that were verified on HBV OV2710 cameras only.\n\n" + lines,
+    [{ id: "no", label: "No / Not Sure" }, { id: "yes", label: "Yes, Continue", kind: "suggested" }]);
+  state.consent = r === "yes";
+  renderOptimizer();
+  renderControls();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Optimizer page
+// ---------------------------------------------------------------------------------------------
+function renderOptimizer() {
+  $("declined").style.display = state.consent === false ? "flex" : "none";
+  $("overview").style.display = state.consent === false ? "none" : "flex";
+  const ad = state.autodarts;
+  $("ad-status").className = "dot " + (ad === "active" ? "ok" : "neutral");
+  $("ad-status").textContent = ad === "active" ? "Autodarts running" : `Autodarts ${ad}`;
+
+  const list = $("cam-list");
+  list.innerHTML = "";
+  for (const c of CAMS) {
+    const line = document.createElement("div");
+    line.className = "cam-line";
+    line.title = "Firmware 07/28/26";
+    line.innerHTML = `<span class="dot ${c.calibrated ? "ok" : "warn"}">Port ${c.port}</span><span class="spacer"></span>` +
+      `<span class="caption">${c.calibrated ? "Optimized" : "Not optimized"}</span>`;
+    list.appendChild(line);
+  }
+  const j = state.job;
+  if (!j.running) {
+    if (allOptimized()) {
+      $("hero-title").textContent = `All ${CAMS.length} cameras are optimized`;
+      $("hero-text").textContent = "Settings stay applied, also after Autodarts restarts. Run it again after changing the lights or moving the board.";
+    } else {
+      $("hero-title").textContent = "Ready to optimize";
+      $("hero-text").textContent = `Calibrates exposure, gain and JPEG quality for ${CAMS.length} cameras and matches them. ` +
+        "Takes about 3 minutes (about 25 seconds in this preview).";
+    }
+  }
+  $("btn-optimize").textContent = allOptimized() ? "Optimize again" : "Optimize cameras";
+  $("btn-optimize").disabled = j.running;
+  $("btn-restore").style.display = CAMS.some(c => c.calibrated) && !j.running ? "" : "none";
+  renderJob();
+  renderBaControls();
+}
+
+function renderJob() {
+  const j = state.job;
+  if (!j.steps.length) return;
+  $("job-box").style.display = "flex";
+  const restoring = j.name === "restore";
+  if (j.running) {
+    $("hero-title").textContent = restoring ? "Restoring original settings…" : "Optimizing…";
+    $("hero-text").textContent = "Please don't touch the board or the cameras.";
+  }
+  $("job-heading").textContent = restoring ? "Restore" : "Progress";
+  const box = $("steps");
+  box.innerHTML = "";
+  for (const st of j.steps) {
+    const line = document.createElement("div");
+    line.className = "step " + st.state;
+    const icon = st.state === "running" ? '<div class="ic spinner"></div>'
+      : st.state === "done" ? '<svg class="ic" viewBox="0 0 16 16" fill="currentColor"><path d="M13.7 4.3a1 1 0 0 1 0 1.4l-6.5 6.5a1 1 0 0 1-1.4 0L2.3 8.7a1 1 0 1 1 1.4-1.4l2.8 2.8 5.8-5.8a1 1 0 0 1 1.4 0z"/></svg>'
+      : '<svg class="ic" viewBox="0 0 16 16" fill="currentColor"><path d="M4.3 4.3a1 1 0 0 1 1.4 0L8 6.6l2.3-2.3a1 1 0 1 1 1.4 1.4L9.4 8l2.3 2.3a1 1 0 0 1-1.4 1.4L8 9.4l-2.3 2.3a1 1 0 0 1-1.4-1.4L6.6 8 4.3 5.7a1 1 0 0 1 0-1.4z"/></svg>';
+    line.innerHTML = icon + "<span></span>";
+    line.lastChild.textContent = st.title;
+    box.appendChild(line);
+  }
+  box.scrollTop = box.scrollHeight;
+  $("log").textContent = j.log.slice(-40).join("\n");
+  let note = "", kind = "";
+  if (j.error) {
+    note = `Something went wrong: ${j.error}. Your previous settings are still in place.`; kind = "bad";
+  } else if (!j.running && !restoring && j.result) {
+    note = `All cameras calibrated and matched · JPEG level ${j.result.q}.`; kind = "ok";
+  } else if (!j.running && restoring) {
+    note = "Original settings restored.";
+  }
+  $("job-note").textContent = note;
+  $("job-note").style.display = note ? "" : "none";
+  $("job-note").className = "note" + (kind ? " " + kind : "");
+  $("btn-save-preset").style.display = kind === "ok" ? "" : "none";
+}
+
+function job(name) {
+  const j = state.job;
+  Object.assign(j, { running: true, name, steps: [], log: [], result: null, error: "" });
+  return {
+    step(title) {
+      const last = j.steps[j.steps.length - 1];
+      if (last && last.state === "running") last.state = "done";
+      j.steps.push({ title, state: "running" });
+      renderOptimizer();
+    },
+    fail(note) {
+      const last = j.steps[j.steps.length - 1];
+      if (last && last.state === "running") { last.state = "failed"; last.title += `: ${note}`; }
+      renderJob();
+    },
+    log(line) { j.log.push(line); renderJob(); },
+    finish() {
+      const last = j.steps[j.steps.length - 1];
+      if (last && last.state === "running") last.state = "done";
+      j.running = false;
+      renderOptimizer();
+      renderControls();
+    },
+  };
+}
+
+const real = s => sleep(s * 1000 / SPEED);
+
+async function optimize(fast = false) {
+  const t = job("optimize");
+  const wait = fast ? () => Promise.resolve() : real;
+  t.step("Stopping Autodarts");
+  state.autodarts = "inactive";
+  await wait(6);
+  t.step("Taking 'before' pictures");
+  const before = {};
+  for (const c of CAMS) before[c.port] = await frame(c, { ...AUTODARTS_SETTINGS });
+  await wait(8);
+  const results = {};
+  for (const c of CAMS) {
+    t.step(`Calibrating exposure and gain: port ${c.port}`);
+    await sleep(30);
+    results[c.port] = calibrate(c, t.log);
+    await wait(22);
+  }
+  const qs = [1, 2];
+  let chosen = null;
+  for (const [i, q] of qs.entries()) {
+    t.step(`Testing compression stability: level ${q} (${i === 0 ? "lowest" : "next"}, 20 s)`);
+    t.log(`bandwidth check: ${CAMS.length} cameras at Q${q}, ${FPS} fps, 20 s`);
+    await wait(20);
+    if (q === 1) {
+      const why = "port 3: 29.6 fps, 11 dropped, 3 gaps";
+      t.fail(`not stable (${why})`);
+      t.log(`  Q${q} not stable: ${why}`);
+      continue;
+    }
+    t.step(`Confirming level ${q} (60 s)`);
+    t.log(`  Q${q} clean; confirming for 60 s`);
+    await wait(30);
+    chosen = q;
+    break;
+  }
+  for (const c of CAMS) results[c.port].q = chosen;
+  t.log(`done: Q${chosen}; profiles saved to ~/.config/hbvcal/profiles.json`);
+  t.step("Taking 'after' pictures");
+  for (const c of CAMS) {
+    const after = await frame(c, results[c.port]);
+    state.ba.imgs[c.port] = { before: before[c.port].bitmap, after: after.bitmap, time: nowLabel() };
+  }
+  await wait(8);
+  t.step("Saving profiles");
+  for (const c of CAMS) {
+    c.calibrated = { ...results[c.port] };
+    c.settings = { ...results[c.port] };
+    c.keep = true;
+  }
+  await wait(2);
+  t.step("Starting Autodarts");
+  state.autodarts = "active";
+  await wait(8);
+  t.step("Applying settings after Autodarts opened the cameras");
+  await wait(6);
+  state.job.result = { q: chosen };
+  t.finish();
+  loadBeforeAfter();
+}
+
+async function restore() {
+  const t = job("restore");
+  t.step("Stopping Autodarts");
+  state.autodarts = "inactive";
+  await real(6);
+  t.step("Restoring stock JPEG quality and controls");
+  for (const c of CAMS) {
+    c.settings = { ...AUTODARTS_SETTINGS };
+    c.calibrated = null;
+    c.keep = false;
+  }
+  state.ba.imgs = {};
+  await real(6);
+  t.step("Starting Autodarts");
+  state.autodarts = "active";
+  await real(8);
+  t.finish();
+  loadBeforeAfter();
+}
+
+const nowLabel = () => {
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+$("btn-optimize").onclick = async () => {
+  if (!state.consent) { await askConsent(); if (!state.consent) return; }
+  const r = await dialog("Before You Start",
+    "1. Remove all darts from the board.\n2. Turn the lights on the way you play.\n" +
+    "3. Keep people and hands away from the board for about 3 minutes.\n\nAutodarts is stopped and restarted automatically.",
+    [{ id: "cancel", label: "Cancel" }, { id: "start", label: "Start", kind: "suggested" }]);
+  if (r === "start") optimize();
+};
+$("btn-restore").onclick = async () => {
+  const r = await dialog("Restore Original Settings?",
+    "Your cameras go back to the settings Autodarts uses. Autodarts will restart.",
+    [{ id: "cancel", label: "Cancel" }, { id: "restore", label: "Restore", kind: "destructive" }]);
+  if (r === "restore") restore();
+};
+$("btn-reconsent").onclick = askConsent;
+$("btn-log").onclick = () => $("log").classList.toggle("open");
+$("btn-save-preset").onclick = () => savePreset(`Optimized ${nowLabel()}`);
+
+function savePreset(name) {
+  state.presets.push({ name, settings: Object.fromEntries(CAMS.map(c => [c.port, { ...c.settings }])) });
+  renderPresets();
+  toast(`Preset “${name}” saved (for this visit only)`);
+}
+
+// --- before / after ---
+
+const BA_ZOOMS = [1, 2, 3, 4];
+function segButtons(el, items, active, onPick) {
+  el.innerHTML = "";
+  for (const [id, label] of items) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.className = id === active ? "on" : "";
+    b.onclick = () => onPick(id);
+    el.appendChild(b);
+  }
+}
+
+function renderBaControls() {
+  const has = Object.keys(state.ba.imgs).length > 0;
+  segButtons($("ba-ports"), CAMS.map(c => [c.port, `Port ${c.port}`]), state.ba.port, p => { state.ba.port = p; loadBeforeAfter(); });
+  segButtons($("ba-zoom"), BA_ZOOMS.map(z => [z, `${z}×`]), state.ba.zoom, z => setZoom(z));
+  for (const b of [...$("ba-ports").children, ...$("ba-zoom").children]) b.disabled = !has;
+  $("ba-split").disabled = !has;
+}
+
+function loadBeforeAfter() {
+  const info = state.ba.imgs[state.ba.port];
+  $("ba-empty").style.display = info ? "none" : "";
+  $("ba-canvas").style.display = info ? "" : "none";
+  $("ba-note").textContent = info ? `Optimized ${info.time} · double-tap or scroll to zoom, drag to move` : "";
+  renderBaControls();
+  renderBa();
+}
+
+function baCrop() {
+  const z = state.ba.zoom, cw = W / z, ch = H / z;
+  const x0 = Math.min(Math.max(state.ba.center[0] * W - cw / 2, 0), W - cw);
+  const y0 = Math.min(Math.max(state.ba.center[1] * H - ch / 2, 0), H - ch);
+  return [x0, y0, cw, ch];
+}
+
+function renderBa() {
+  const info = state.ba.imgs[state.ba.port];
+  if (!info) return;
+  const cv = $("ba-canvas"), ctx = cv.getContext("2d");
+  const [x0, y0, cw, ch] = baCrop();
+  const x = Math.round(W * $("ba-split").value / 100);
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(info.after, x0, y0, cw, ch, 0, 0, W, H);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, x, H); ctx.clip();
+  ctx.drawImage(info.before, x0, y0, cw, ch, 0, 0, W, H);
+  ctx.restore();
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(x - 1, 0, 2, H);
+  cv.style.cursor = state.ba.zoom > 1 ? "grab" : "ew-resize";
+}
+
+function setZoom(z) {
+  state.ba.zoom = z;
+  if (z === 1) state.ba.center = [0.5, 0.5];
+  renderBaControls();
+  renderBa();
+}
+
+function canvasPoint(ev) {
+  const r = $("ba-canvas").getBoundingClientRect();
+  return [Math.min(Math.max((ev.clientX - r.left) / r.width, 0), 1), Math.min(Math.max((ev.clientY - r.top) / r.height, 0), 1)];
+}
+
+function zoomAt(ev, z) {
+  const [fx, fy] = canvasPoint(ev);
+  const [x0, y0, cw, ch] = baCrop();
+  state.ba.center = [(x0 + fx * cw) / W, (y0 + fy * ch) / H];
+  setZoom(z);
+}
+
+(() => {
+  const cv = $("ba-canvas");
+  let drag = null, lastTap = 0;
+  cv.addEventListener("pointerdown", ev => {
+    if (!state.ba.imgs[state.ba.port]) return;
+    const now = performance.now();
+    if (now - lastTap < 300) { zoomAt(ev, Math.max(2, state.ba.zoom)); lastTap = 0; return; }
+    lastTap = now;
+    cv.setPointerCapture(ev.pointerId);
+    drag = { x: ev.clientX, y: ev.clientY, center: [...state.ba.center] };
+    if (state.ba.zoom === 1) { $("ba-split").value = canvasPoint(ev)[0] * 100; renderBa(); }
+    else cv.style.cursor = "grabbing";
+  });
+  cv.addEventListener("pointermove", ev => {
+    if (!drag) return;
+    if (state.ba.zoom === 1) { $("ba-split").value = canvasPoint(ev)[0] * 100; renderBa(); return; }
+    const r = cv.getBoundingClientRect(), z = state.ba.zoom;
+    // the picture follows the finger: the view centre moves the other way
+    state.ba.center = [drag.center[0] - (ev.clientX - drag.x) / r.width / z, drag.center[1] - (ev.clientY - drag.y) / r.height / z];
+    const [x0, y0, cw, ch] = baCrop();
+    state.ba.center = [(x0 + cw / 2) / W, (y0 + ch / 2) / H];
+    renderBa();
+  });
+  const end = () => { drag = null; renderBa(); };
+  cv.addEventListener("pointerup", end);
+  cv.addEventListener("pointercancel", end);
+  cv.addEventListener("wheel", ev => {
+    if (!state.ba.imgs[state.ba.port]) return;
+    ev.preventDefault();
+    const i = BA_ZOOMS.indexOf(state.ba.zoom) + (ev.deltaY < 0 ? 1 : -1);
+    zoomAt(ev, BA_ZOOMS[Math.min(Math.max(i, 0), BA_ZOOMS.length - 1)]);
+  }, { passive: false });
+  $("ba-split").addEventListener("input", renderBa);
+})();
+
+// ---------------------------------------------------------------------------------------------
+// Camera Controls page
+// ---------------------------------------------------------------------------------------------
+const GROUPS = { exposure: "Exposure", tone: "Tone", detail: "Detail", color: "Color", stream: "Stream" };
+const COLUMNS = [["exposure", "color", "stream"], ["tone", "detail"]];
+const manualOnly = s => s.auto_exposure !== 1;
+const SPEC = {
+  auto_exposure: ["exposure", "Mode", "select", { 1: "Manual", 3: "Automatic" }],
+  exposure_time_absolute: ["exposure", "Exposure time", "range", [3, 2047, 1], manualOnly, v => `${(v * EXPOSURE_UNIT_S * 1000).toFixed(1)} ms`],
+  gain: ["exposure", "Digital gain", "range", [0, 100, 1]],
+  sensor_gain: ["exposure", "Sensor gain", "sensor", null, manualOnly],
+  brightness: ["tone", "Brightness", "range", [-64, 64, 1]],
+  contrast: ["tone", "Contrast", "range", [0, 64, 1]],
+  gamma: ["tone", "Gamma", "range", [72, 500, 1]],
+  saturation: ["tone", "Saturation", "range", [0, 128, 1]],
+  hue: ["tone", "Hue", "range", [-40, 40, 1]],
+  sharpness: ["detail", "Sharpening", "range", [0, 100, 1]],
+  backlight_compensation: ["detail", "Backlight", "range", [0, 2, 1]],
+  white_balance_automatic: ["color", "Auto white balance", "switch"],
+  white_balance_temperature: ["color", "Temperature", "range", [2800, 6500, 10], s => s.white_balance_automatic === 1, v => `${v} K`],
+  q: ["stream", "JPEG compression", "q", [1, 30, 1]],
+  power_line_frequency: ["stream", "Anti-flicker", "select", { 0: "Off", 1: "50 Hz", 2: "60 Hz" }],
+};
+const HIDDEN = new Set(["sensor_gain", "q"]);
+
+const ctlCam = () => CAMS.find(c => c.port === state.ctlPort);
+
+function renderControls() {
+  const cam = ctlCam(), s = cam.settings, cal = cam.calibrated;
+  segButtons($("ctl-ports"), CAMS.map(c => [c.port, `Port ${c.port}`]), state.ctlPort, p => {
+    state.ctlPort = p; resetCheck(); renderControls();
+  });
+  $("keep").checked = cam.keep;
+  $("btn-reset").textContent = cal ? "Reset to calibrated" : "Reset to defaults";
+  const root = $("ctl-groups");
+  root.innerHTML = "";
+  for (const col of COLUMNS) {
+    const colEl = document.createElement("div");
+    colEl.className = "ctl-col";
+    for (const g of col) {
+      const grp = document.createElement("div");
+      grp.className = "group";
+      grp.innerHTML = `<div class="heading">${GROUPS[g]}</div>`;
+      let hiddenNote = false;
+      for (const [name, spec] of Object.entries(SPEC)) {
+        if (spec[0] !== g) continue;
+        if (HIDDEN.has(name) && !state.consent) {
+          if (!hiddenNote) {
+            hiddenNote = true;
+            const note = document.createElement("div");
+            note.className = "check-row";
+            note.innerHTML = '<span class="caption" style="flex:1">JPEG quality and sensor gain: confirm HBV cameras first</span>';
+            const b = document.createElement("button");
+            b.className = "btn compact"; b.textContent = "Optimizer"; b.onclick = () => showPage("optimizer");
+            note.appendChild(b);
+            grp.appendChild(note);
+          }
+          continue;
+        }
+        grp.appendChild(controlRow(name, spec, s, cal));
+      }
+      colEl.appendChild(grp);
+    }
+    root.appendChild(colEl);
+  }
+}
+
+function controlRow(name, [, label, kind, opts, disabledWhen, fmt], s, cal) {
+  const row = document.createElement("div");
+  row.className = "ctl-row" + (disabledWhen && disabledWhen(s) ? " disabled" : "");
+  const disabled = disabledWhen && disabledWhen(s);
+  const lab = document.createElement("label");
+  const marker = () => (cal && cal[name] !== s[name] ? '<span class="changed" title="Changed from the calibrated value">●</span>' : "");
+  const setLabel = () => {
+    lab.innerHTML = label + (HIDDEN.has(name) ? '<span class="hidden-tag" title="Hidden control, not in the UVC standard">HIDDEN</span>' : "") + marker();
+  };
+  setLabel();
+  row.appendChild(lab);
+  const cam = ctlCam();
+  const set = v => { s[name] = v; resetCheck(); setLabel(); };
+
+  if (kind === "select") {
+    const sel = document.createElement("select");
+    for (const [v, t] of Object.entries(opts)) sel.add(new Option(t, v, false, +v === s[name]));
+    sel.disabled = disabled;
+    sel.onchange = () => { set(+sel.value); renderControls(); };
+    row.appendChild(sel);
+  } else if (kind === "switch") {
+    const sw = document.createElement("label");
+    sw.className = "switch";
+    sw.innerHTML = '<input type="checkbox"><span></span>';
+    sw.firstChild.checked = s[name] === 1;
+    sw.firstChild.onchange = () => { set(sw.firstChild.checked ? 1 : 0); renderControls(); };
+    row.appendChild(sw);
+  } else {
+    const input = document.createElement("input");
+    input.type = "range";
+    const val = document.createElement("span");
+    val.className = "val";
+    let show;
+    if (kind === "sensor") {
+      input.min = 0; input.max = SENSOR_STEPS.length - 1; input.step = 1;
+      input.value = Math.max(0, SENSOR_STEPS.indexOf(s[name]));
+      show = () => gainLabel(s[name]);
+      input.oninput = () => { set(SENSOR_STEPS[+input.value]); val.textContent = show(); };
+    } else {
+      [input.min, input.max, input.step] = opts;
+      input.value = s[name];
+      show = kind === "q" ? () => `level ${s[name]}` + (s[name] === Q_STOCK ? " (stock)" : "") : () => (fmt ? fmt(s[name]) : String(s[name]));
+      input.oninput = () => { set(+input.value); val.textContent = show(); };
+      if (kind === "q") input.title = "Lower = less compression, sharper picture, more USB bandwidth";
+    }
+    input.disabled = disabled;
+    val.textContent = show();
+    row.appendChild(input);
+    row.appendChild(val);
+    if (kind === "q") val.style.whiteSpace = "nowrap";
+  }
+  return row;
+}
+
+let lastLive = null;
+function resetCheck() {
+  $("check-result").className = "dot neutral";
+  $("check-result").textContent = "Brightness not checked";
+  $("btn-fix").style.display = "none";
+}
+
+$("btn-check").onclick = () => {
+  const cam = ctlCam();
+  if (!lastLive || lastLive.port !== cam.port) return;
+  const m = measure(lastLive.img, cam.scene);
+  const diff = Math.round(m.white - WHITE_TARGET);
+  const ok = Math.abs(diff) <= 6;
+  $("check-result").className = "dot " + (ok ? "ok" : "warn");
+  $("check-result").textContent = `White segments ${Math.round(m.white)} (target ${WHITE_TARGET})` +
+    (ok ? " · good" : diff < 0 ? ` · ${-diff} too dark` : ` · ${diff} too bright`);
+  $("btn-fix").style.display = ok ? "none" : "";
+};
+$("btn-fix").onclick = () => {
+  const cam = ctlCam(), s = cam.settings;
+  let best = s.gain, bestErr = Infinity;
+  for (let g = 0; g <= 100; g++) {
+    const err = Math.abs(whiteOut(cam.scene, { ...s, gain: g }) - WHITE_TARGET);
+    if (err < bestErr) { bestErr = err; best = g; }
+  }
+  s.gain = best;
+  renderControls();
+  $("check-result").className = "dot ok";
+  $("check-result").textContent = `Digital gain set to ${best}`;
+  $("btn-fix").style.display = "none";
+};
+$("btn-reset").onclick = () => {
+  const cam = ctlCam();
+  cam.settings = { ...(cam.calibrated || AUTODARTS_SETTINGS) };
+  resetCheck();
+  renderControls();
+};
+$("keep").onchange = async () => {
+  const cam = ctlCam();
+  if ($("keep").checked) { cam.keep = true; return; }
+  if (!cam.calibrated) { cam.keep = false; return; }
+  const r = await dialog("Stop Keeping the Optimized Settings?",
+    "This camera goes back to its stock JPEG quality and the settings from before the optimization.",
+    [{ id: "cancel", label: "Cancel" }, { id: "stop", label: "Stop Keeping", kind: "destructive" }]);
+  if (r === "stop") {
+    cam.keep = false;
+    cam.calibrated = null;
+    cam.settings = { ...AUTODARTS_SETTINGS };
+    delete state.ba.imgs[cam.port];
+    renderOptimizer();
+    loadBeforeAfter();
+  }
+  renderControls();
+};
+
+function renderPresets() {
+  const pop = $("presets-pop");
+  pop.innerHTML = "";
+  for (const p of state.presets) {
+    const row = document.createElement("div");
+    row.className = "preset";
+    row.innerHTML = `<span style="flex:1"></span>`;
+    row.firstChild.textContent = p.name;
+    const b = document.createElement("button");
+    b.className = "btn compact"; b.textContent = "Load";
+    b.onclick = () => {
+      for (const c of CAMS) { c.settings = { ...p.settings[c.port] }; c.keep = true; }
+      pop.classList.remove("open");
+      resetCheck();
+      renderControls();
+      toast(`Loaded “${p.name}”`);
+    };
+    row.appendChild(b);
+    pop.appendChild(row);
+  }
+  const save = document.createElement("button");
+  save.className = "btn compact flat";
+  save.style.marginTop = "6px";
+  save.textContent = "Save Current Settings as Preset…";
+  save.onclick = () => { pop.classList.remove("open"); savePreset(`Preset ${state.presets.length}`); };
+  pop.appendChild(save);
+}
+$("btn-presets").onclick = ev => { ev.stopPropagation(); renderPresets(); $("presets-pop").classList.toggle("open"); };
+document.addEventListener("click", ev => {
+  if (!$("presets-pop").contains(ev.target)) $("presets-pop").classList.remove("open");
+  if (!$("btn-log").contains(ev.target) && !$("log").contains(ev.target)) $("log").classList.remove("open");
+});
+
+// live view loop: only while the Camera Controls page is open
+let liveOn = false;
+async function liveLoop() {
+  const cv = $("live-canvas"), ctx = cv.getContext("2d");
+  while (liveOn) {
+    const t0 = performance.now();
+    const cam = ctlCam();
+    const f = await frame(cam, { ...cam.settings });
+    ctx.drawImage(f.bitmap, 0, 0);
+    lastLive = { port: cam.port, img: f.img };
+    await sleep(Math.max(15, 110 - (performance.now() - t0)));
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Navigation, toast, start
+// ---------------------------------------------------------------------------------------------
+function showPage(name) {
+  $("page-optimizer").classList.toggle("active", name === "optimizer");
+  $("page-controls").classList.toggle("active", name === "controls");
+  $("page-title").textContent = name === "optimizer" ? "Camera Optimizer" : "Camera Controls";
+  $("back").classList.toggle("shown", name === "controls");
+  const wasLive = liveOn;
+  liveOn = name === "controls";
+  if (liveOn) { renderControls(); if (!wasLive) liveLoop(); }
+  history.replaceState(null, "", name === "controls" ? "#controls" : location.pathname + location.search);
+}
+$("open-controls").onclick = () => showPage("controls");
+$("back").onclick = () => showPage("optimizer");
+
+let toastTimer = 0;
+function toast(text) {
+  let el = document.getElementById("toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast";
+    el.style.cssText = "position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#3a3a40;color:var(--fg);" +
+      "padding:9px 16px;border-radius:999px;font-size:13px;z-index:60;box-shadow:0 6px 20px rgba(0,0,0,.4);max-width:calc(100% - 32px)";
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.style.display = "";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.display = "none"; }, 2600);
+}
+
+(async () => {
+  renderOptimizer();
+  // #optimized / #controls: open the preview with the cameras already optimized (handy for links)
+  const hash = location.hash.slice(1);
+  if (hash === "optimized" || hash === "controls") {
+    state.consent = true;
+    await optimize(true);
+    if (hash === "controls") showPage("controls");
+    return;
+  }
+  await askConsent();
+})();
+</script>
+</body>
+</html>
