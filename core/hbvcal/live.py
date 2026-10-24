@@ -6,11 +6,12 @@ once it has a profile: from the optimizer, from "Keep these settings", or from a
 
 Live view: the page streams the camera itself when it is free. While Autodarts holds the camera it shows
 Autodarts' own current frame (http://127.0.0.1:3180/api/img/cams/<i>), and controls still work (V4L2/XU
-access does not need the stream).
+access does not need the stream). Autodarts in camera standby only sends black frames, so it is woken up.
 """
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 import tomllib
@@ -36,6 +37,7 @@ UVC_CONTROLS = ["exposure_time_absolute", "gain", "gamma", "sharpness", "contras
                 "hue", "white_balance_temperature", "white_balance_automatic", "auto_exposure",
                 "power_line_frequency", "backlight_compensation"]
 IDLE_S = 15  # a live view nobody asked for frames in this long hands its camera back
+WAKE_EVERY_S = 10  # retry interval for waking Autodarts from camera standby
 
 
 def autodarts_index(dev: str) -> Optional[int]:
@@ -49,6 +51,34 @@ def autodarts_index(dev: str) -> Optional[int]:
         if f"location={port}" in uri:
             return i
     return None
+
+
+_wake_lock = threading.Lock()
+_last_wake = 0.0
+
+
+def wake_autodarts() -> bool:
+    """Bring Autodarts back from camera standby (it then sends all-black frames). True while in standby.
+
+    PUT /api/start is what Autodarts' own Start button sends; it is only sent when Autodarts reports itself
+    stopped, at most every WAKE_EVERY_S, and the cameras stream again about 2 s later.
+    """
+    global _last_wake
+    try:
+        with urllib.request.urlopen(f"{AUTODARTS_API}/api/state", timeout=2) as r:
+            if json.loads(r.read()).get("running", True):
+                return False
+    except (OSError, ValueError):
+        return False
+    with _wake_lock:
+        if time.time() - _last_wake >= WAKE_EVERY_S:
+            _last_wake = time.time()
+            try:
+                urllib.request.urlopen(urllib.request.Request(f"{AUTODARTS_API}/api/start", data=b"", method="PUT"),
+                                       timeout=3).close()
+            except OSError:
+                pass
+    return True
 
 
 hbv = profiles.hbv
@@ -170,8 +200,13 @@ class Live:
             return
         try:
             with urllib.request.urlopen(f"{AUTODARTS_API}/api/img/cams/{idx}", timeout=3) as r:
-                self._push(r.read())
-            self.source = "Autodarts"
+                data = r.read()
+            grey = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE)
+            if grey is not None and grey.max() == 0 and wake_autodarts():
+                self.source = "waking Autodarts from standby"
+            else:
+                self._push(data)
+                self.source = "Autodarts"
         except OSError:
             self.source = "busy (no Autodarts image)"
         time.sleep(0.5)

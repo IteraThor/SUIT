@@ -664,7 +664,8 @@ class CameraControlsPage(Adw.NavigationPage):
 
     def _show_scores(self, sc: dict):
         self._scores_busy = False
-        src = {"own stream": "Live from the camera", "Autodarts": "Picture from Autodarts"}.get(sc.get("source"),
+        src = {"own stream": "Live from the camera", "Autodarts": "Picture from Autodarts",
+               "waking Autodarts from standby": "Waking Autodarts' cameras from standby…"}.get(sc.get("source"),
                                                                                               sc.get("source", ""))
         if "white" not in sc:
             self.lbl_metrics.set_label(src)
