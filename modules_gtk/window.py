@@ -16,8 +16,11 @@ from modules_gtk.menu import MainMenuView
 
 logger = get_logger("window")
 
-# Longest the window stays open after a close request while the Camera Optimizer restores a camera
-RESTORE_WAIT_S = 20.0
+# Large pages with a live view: they open the window maximized
+CAMERA_PAGES = ("camera_controls", "camera_optimizer")
+
+# Longest the window stays open after a close request while a Camera Optimizer job (optimize/restore) runs
+JOB_WAIT_S = 360.0
 
 class SuitWindow(Adw.ApplicationWindow):
     def __init__(self, app):
@@ -97,8 +100,8 @@ class SuitWindow(Adw.ApplicationWindow):
         self.autodarts_page = None
         self.focus_page = None
         self.camera_tools_page = None
-        self.camera_manual_page = None
-        self.cam_calibration_page = None
+        self.camera_controls_page = None
+        self.camera_optimizer_page = None
         self.rotation_page = None
         self.kiosk_page = None
         self.system_page = None
@@ -119,7 +122,7 @@ class SuitWindow(Adw.ApplicationWindow):
         self.connect("close-request", self._on_close_request)
 
     def _on_back_clicked(self):
-        """Header back: a page may ask first (e.g. Camera Optimizer while tuning)."""
+        """Header back: a page may ask first."""
         page = self.nav_view.get_visible_page()
         confirm = getattr(page, "confirm_leave", None)
         if callable(confirm) and confirm(self.nav_view.pop):
@@ -138,26 +141,23 @@ class SuitWindow(Adw.ApplicationWindow):
             except Exception:
                 logger.exception("Error executing on_page_closed on window close")
 
-        # The Camera Optimizer first has to stop mid-measurement and put the camera back. That
-        # can take several seconds, so keep the window (insensitive) until its restore thread is
-        # done instead of exiting with a camera on test settings. Its page may already be popped.
-        threads = []
-        for p in (page, getattr(self, "cam_calibration_page", None)):
-            t = getattr(p, "_restore_thread", None) if p is not None else None
-            if t is not None and t.is_alive() and t not in threads:
-                threads.append(t)
-        if not threads:
+        # A Camera Optimizer job runs in this process with Autodarts stopped. Quitting mid-job would
+        # leave Autodarts down, so keep the window (insensitive) until the job is done. Its page may
+        # already be popped.
+        opt = getattr(self, "camera_optimizer_page", None)
+        t = opt.job_thread if opt is not None else None
+        if t is None or not t.is_alive():
             return False
 
         self.set_sensitive(False)
-        self.title_widget.set_subtitle("Putting the cameras back…")
-        deadline = time.monotonic() + RESTORE_WAIT_S
+        self.title_widget.set_subtitle("Finishing the camera optimization…")
+        deadline = time.monotonic() + JOB_WAIT_S
 
         def _poll():
-            if any(t.is_alive() for t in threads) and time.monotonic() < deadline:
+            if t.is_alive() and time.monotonic() < deadline:
                 return True
-            if any(t.is_alive() for t in threads):
-                logger.error("Camera restore still running after %.0f s; closing anyway", RESTORE_WAIT_S)
+            if t.is_alive():
+                logger.error("Camera Optimizer job still running after %.0f s; closing anyway", JOB_WAIT_S)
             self._close_ready = True
             self.close()
             return False
@@ -172,7 +172,7 @@ class SuitWindow(Adw.ApplicationWindow):
             time.sleep(0.4)  # Let main menu render smoothly first
             # Auto-heal boot services (e.g. after CLI git pull); independent of OpenCV availability
             try:
-                UpdateService.ensure_camera_boot_service()
+                UpdateService.ensure_camera_keeper()
                 UpdateService.ensure_display_autostart()
             except Exception as e:
                 logger.debug("Background service heal notice: %s", e)
@@ -263,7 +263,7 @@ class SuitWindow(Adw.ApplicationWindow):
         if not tag and hasattr(page, "get_tag"):
             tag = page.get_tag()
 
-        if tag == "camera_manual":
+        if tag in CAMERA_PAGES:
             self.maximize()
             return
 
@@ -277,8 +277,6 @@ class SuitWindow(Adw.ApplicationWindow):
             "main_menu": (760, 640),
             "camera_tools": (740, 480),
             "camera_focus": (940, 640),
-            "camera_manual": (920, 600),
-            "cam_calibration": (980, 640),
             "autodarts": (840, 680),
             "rotation": (780, 680),
             "kiosk": (780, 680),
@@ -312,27 +310,29 @@ class SuitWindow(Adw.ApplicationWindow):
             self.camera_tools_page = CameraToolsView(self)
         self.nav_view.push(self.camera_tools_page)
 
-    def open_camera_manual_page(self):
+    def _show_page(self, page):
+        """Push a page, or pop back to it when it is already in the stack (the camera pages link to each other)."""
+        stack = self.nav_view.get_navigation_stack()
+        if any(stack.get_item(i) is page for i in range(stack.get_n_items())):
+            self.nav_view.pop_to_page(page)
+        else:
+            self.nav_view.push(page)
+
+    def open_camera_controls_page(self):
         try:
-            if not self.camera_manual_page:
-                from modules_gtk.camera_manual_view import CameraManualView
-                self.camera_manual_page = CameraManualView(self)
-            self.nav_view.push(self.camera_manual_page)
-            if hasattr(self.camera_manual_page, "on_page_opened"):
-                self.camera_manual_page.on_page_opened()
+            if not self.camera_controls_page:
+                from modules_gtk.camera_controls_view import CameraControlsPage
+                self.camera_controls_page = CameraControlsPage(self)
+            self._show_page(self.camera_controls_page)
+            self.camera_controls_page.on_page_opened()
         except ImportError as e:
-            logger.exception("Camera Manual Tool unavailable due to missing dependency: %s", e)
-            dialog = Adw.AlertDialog(
-                heading="OpenCV Required",
-                body="Camera Manual Mode requires OpenCV.\n\nInstall with: sudo dnf install python3-opencv"
-            )
-            dialog.add_response("ok", "OK")
-            dialog.present(self)
+            logger.exception("Camera Controls unavailable due to missing dependency: %s", e)
+            self._prompt_install_opencv("Camera Controls", self.open_camera_controls_page)
         except Exception as e:
-            logger.exception("Failed to open Camera Manual Tool: %s", e)
+            logger.exception("Failed to open Camera Controls: %s", e)
             dialog = Adw.AlertDialog(
-                heading="Camera Error",
-                body="Unable to open Camera Manual Mode. Check system log for details."
+                heading="Camera Controls Error",
+                body="Unable to open Camera Controls. Check system log for details."
             )
             dialog.add_response("ok", "OK")
             dialog.present(self)
@@ -376,17 +376,16 @@ class SuitWindow(Adw.ApplicationWindow):
         dialog.connect("response", on_resp)
         dialog.present(self)
 
-    def open_cam_calibration_page(self):
+    def open_camera_optimizer_page(self):
         try:
-            if not self.cam_calibration_page:
-                from modules_gtk.cam_calibration_view import CamCalibrationPage
-                self.cam_calibration_page = CamCalibrationPage(self)
-            self.nav_view.push(self.cam_calibration_page)
-            if hasattr(self.cam_calibration_page, "on_page_opened"):
-                self.cam_calibration_page.on_page_opened()
+            if not self.camera_optimizer_page:
+                from modules_gtk.camera_optimizer_view import CameraOptimizerPage
+                self.camera_optimizer_page = CameraOptimizerPage(self)
+            self._show_page(self.camera_optimizer_page)
+            self.camera_optimizer_page.on_page_opened()
         except ImportError as e:
             logger.exception("Camera Optimizer unavailable due to missing dependency: %s", e)
-            self._prompt_install_opencv("Camera Optimizer", self.open_cam_calibration_page)
+            self._prompt_install_opencv("Camera Optimizer", self.open_camera_optimizer_page)
         except Exception as e:
             logger.exception("Failed to open Camera Optimizer: %s", e)
             dialog = Adw.AlertDialog(

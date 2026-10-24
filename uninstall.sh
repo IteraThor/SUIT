@@ -16,6 +16,15 @@ if systemctl --user is-enabled --quiet suit-camera-settings.service 2>/dev/null;
 fi
 rm -f "$HOME/.config/systemd/user/suit-camera-settings.service"
 rm -f "$HOME/.config/systemd/user/default.target.wants/suit-camera-settings.service"
+# Camera Optimizer keeper (and the exposure lock watcher of older versions). Optimized settings live in camera
+# RAM only, so the cameras return to stock at the next power cycle; profiles in ~/.config/hbvcal are kept.
+for unit in suit-camera-keeper.service suit-exposure-lock.service; do
+    if systemctl --user is-enabled --quiet "$unit" 2>/dev/null || systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+        echo "  - Disabling $unit"
+        systemctl --user disable --now "$unit" || true
+    fi
+    rm -f "$HOME/.config/systemd/user/$unit"
+done
 systemctl --user daemon-reload || true
 
 echo "[2/5] Removing SUIT autostart entries..."
@@ -54,7 +63,8 @@ echo "[5/5] Checking configuration files..."
 if [ "$1" == "--purge" ] || [ "$1" == "--all" ]; then
     echo "  - Purging SUIT configurations..."
     rm -f "$HOME/.suit_rotation_config.json"
-    rm -f "$HOME/.suit_camera_profiles.json"
+    rm -f "$HOME/.suit_camera_profiles.json" "$HOME/.suit_camera_profiles.json.migrated"
+    rm -rf "$HOME/.config/hbvcal"
     rm -f "$HOME/suit.log"
     rm -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/suit.log"
 else

@@ -168,7 +168,7 @@ class UpdateService:
             logger.info("Successfully updated SUIT from origin main")
             cls.ensure_dependencies()
             cls.ensure_autodarts_service()
-            cls.ensure_camera_boot_service()
+            cls.ensure_camera_keeper()
             cls.ensure_display_autostart()
             return True, "SUIT updated successfully."
         except subprocess.TimeoutExpired:
@@ -178,13 +178,13 @@ class UpdateService:
             return False, f"Update failed: {str(e)}"
 
     @classmethod
-    def ensure_camera_boot_service(cls) -> None:
-        """Heal camera boot service unit to resolve any systemd ordering cycles."""
+    def ensure_camera_keeper(cls) -> None:
+        """Migrate old camera watchers and Manual Controls data; keep the camera keeper unit on this checkout."""
         try:
-            from core.camera_manual_service import CameraManualService
-            CameraManualService.heal_boot_service_if_needed()
+            from core.hbvcal import service
+            service.heal()
         except Exception as e:
-            logger.warning("Post-update camera boot service check notice: %s", e)
+            logger.warning("Post-update camera keeper check notice: %s", e)
 
     @classmethod
     def ensure_display_autostart(cls) -> None:

@@ -82,10 +82,10 @@ class CameraToolsView(Adw.NavigationPage):
         self.row_focus.add_suffix(chevron_focus)
         self.pref_group.add(self.row_focus)
 
-        # 2. Manual Controls Row
+        # 2. Camera Controls Row
         self.row_manual = Adw.ActionRow()
-        self.row_manual.set_title(GLib.markup_escape_text("Manual Controls"))
-        self.row_manual.set_subtitle(GLib.markup_escape_text("Adjust exposure, gain, brightness, and sensor parameters."))
+        self.row_manual.set_title(GLib.markup_escape_text("Camera Controls"))
+        self.row_manual.set_subtitle(GLib.markup_escape_text("Live view and every camera setting, kept across restarts, with presets."))
         icon_manual = Gtk.Image.new_from_icon_name("preferences-system-symbolic")
         icon_manual.set_pixel_size(24)
         icon_manual.set_margin_end(10)
@@ -102,7 +102,7 @@ class CameraToolsView(Adw.NavigationPage):
         # 3. Camera Optimizer
         self.row_optimizer = Adw.ActionRow()
         self.row_optimizer.set_title(GLib.markup_escape_text("Camera Optimizer"))
-        self.row_optimizer.set_subtitle(GLib.markup_escape_text("Automated multi-camera exposure, gain, and ISP calibration wizard."))
+        self.row_optimizer.set_subtitle(GLib.markup_escape_text("One-click exposure, gain, and JPEG quality calibration for HBV OV2710 cameras."))
         icon_optimizer = Gtk.Image.new_from_icon_name("applications-science-symbolic")
         icon_optimizer.set_pixel_size(24)
         icon_optimizer.set_margin_end(10)
@@ -110,11 +110,6 @@ class CameraToolsView(Adw.NavigationPage):
         self.row_optimizer.add_prefix(icon_optimizer)
         self.row_optimizer.set_activatable(True)
         self.row_optimizer.connect("activated", lambda *args: self._open_optimizer())
-
-        lbl_badge = Gtk.Label(label="Experimental")
-        lbl_badge.add_css_class("status-pill-experimental")
-        lbl_badge.set_valign(Gtk.Align.CENTER)
-        self.row_optimizer.add_suffix(lbl_badge)
 
         chevron_optimizer = Gtk.Image.new_from_icon_name("go-next-symbolic")
         chevron_optimizer.set_opacity(0.5)
@@ -130,11 +125,11 @@ class CameraToolsView(Adw.NavigationPage):
             self.window.open_focus_page()
 
     def _open_manual(self):
-        logger.debug("Opening Manual Controls tool from Camera Tools hub")
-        if hasattr(self.window, "open_camera_manual_page"):
-            self.window.open_camera_manual_page()
+        logger.debug("Opening Camera Controls from Camera Tools hub")
+        if hasattr(self.window, "open_camera_controls_page"):
+            self.window.open_camera_controls_page()
 
     def _open_optimizer(self):
         logger.debug("Opening Camera Optimizer from Camera Tools hub")
-        if hasattr(self.window, "open_cam_calibration_page"):
-            self.window.open_cam_calibration_page()
+        if hasattr(self.window, "open_camera_optimizer_page"):
+            self.window.open_camera_optimizer_page()

@@ -90,7 +90,30 @@ Optical calibration wizard to achieve razor-sharp focus across all 3 Autodarts c
 
 ---
 
-### 5. Screen & Touch Manager
+### 5. Camera Optimizer (HBV OV2710)
+One-click image calibration for HBV OV2710 cameras (USB ID `0bdc:2710`), found under **Camera Tools**.
+
+* **One click**: stops Autodarts, calibrates every camera against the empty board, matches them, and starts Autodarts again (about 2 minutes).
+* **Hidden camera controls**: longest flicker-free exposure at 1× sensor gain, matched digital gain, low sharpening, and a high MJPEG quality picked by a bandwidth check across all cameras. About twice as visible darts in Autodarts' difference image on the reference rig.
+* **Stays applied**: the `suit-camera-keeper` user service writes the settings before Autodarts opens the cameras and re-applies them after restarts and standby. Nothing is flashed; settings live in camera RAM.
+* **Fine-tuning** afterwards on the **Camera Controls** page, with "Reset to calibrated" and a brightness check.
+* **Before and after** comparison per camera, and **Restore original settings** to undo everything.
+
+Only cameras with the HBV USB ID and a verified firmware build are touched; you confirm once that you use HBV OV2710 cameras. Profiles live in `~/.config/hbvcal`.
+
+---
+
+### 6. Camera Controls
+Live view and every setting of each camera, for any UVC camera, found under **Camera Tools**.
+
+* **Every control** grouped by Exposure / Tone / Detail / Color / Stream; on confirmed HBV OV2710 cameras also JPEG quality and sensor gain.
+* **Keep these settings**: per camera, re-applied by the `suit-camera-keeper` service before Autodarts opens the cameras and after every restart or standby.
+* **Presets**: save the settings of all cameras under a name (e.g. day / evening light) and load them in one tap.
+* **Live view** that never takes a camera away from Autodarts: while Autodarts runs, it shows Autodarts' own picture.
+
+---
+
+### 7. Screen & Touch Manager
 Wayland display orientation and touch coordinate matrix calibration.
 
 <div align="center">
@@ -103,7 +126,7 @@ Wayland display orientation and touch coordinate matrix calibration.
 
 ---
 
-### 6. Fullscreen Kiosk Mode
+### 8. Fullscreen Kiosk Mode
 Run Autodarts as a dedicated full-screen appliance with customized browser controls.
 
 <div align="center">

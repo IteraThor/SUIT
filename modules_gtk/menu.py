@@ -98,7 +98,7 @@ class MainMenuView(Adw.NavigationPage):
         items = [
             ("btn_system", "preferences-system-symbolic", "System Utilities & Tweaks", "Performance, power, and touch tweaks.", self._open_system, True),
             ("btn_autodarts", "darts-symbolic", "Autodarts Setup", "Board pairing, service, and camera telemetry.", self._open_autodarts, True),
-            ("btn_camera_tools", "camera-photo-symbolic", "Camera Tools", "Focus calibration, manual controls, and diagnostics.", self._open_camera_tools, True),
+            ("btn_camera_tools", "camera-photo-symbolic", "Camera Tools", "Focus calibration, camera controls, and the camera optimizer.", self._open_camera_tools, True),
             ("btn_touch", "screen-touch-symbolic", "Screen & Touch Manager", "Display rotation and touch calibration.", self._open_rotation, True),
             ("btn_kiosk", "view-fullscreen-symbolic", "Kiosk Mode", "Fullscreen browser autostart and controls.", self._open_kiosk, True),
             ("btn_autoglow", "display-brightness-symbolic", "AutoGlow 2 Manager", "WLED dartboard automation and lighting effects.", None, False),
