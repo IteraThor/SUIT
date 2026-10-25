@@ -22,8 +22,14 @@ from .xu import XU
 Q_ADDR = {
     "07/11/26": {"large": 0xC06F, "mid": 0xC094, "small": 0xC079},
     "07/28/26": {"large": 0xC070, "mid": 0xC095, "small": 0xC07A},
+    "02/15/25": {"large": 0xC072, "mid": 0xC097, "small": 0xC07C},  # Autodarts DIY Cam image, same code at 0x420B
 }
 Q_DEFAULT = {"large": 24, "mid": 22, "small": 18}
+# Largest MJPEG frame a build streams reliably (KB). 02/15/25 has a smaller frame buffer: frames up to ~365 KB always
+# arrive, from ~378 KB on most are dropped and the stream stalls (measured at 1280x960 with Q2..Q6 x sharpness).
+# The Q calibration keeps the largest frame under FRAME_HEADROOM of this, so busier scenes in play still fit.
+FRAME_LIMIT_KB = {"02/15/25": 360}
+FRAME_HEADROOM = 0.9
 
 # Order matters: mode switches before the values they enable.
 UVC_ORDER = [
@@ -75,19 +81,14 @@ class Settings:
         return " ".join(parts) or "current"
 
 
-_build_cache: Dict[str, str] = {}
-
-
 def q_class(width: int) -> str:
     return "large" if width >= 1920 else ("mid" if width > 640 else "small")
 
 
 def q_addr(xu: XU, width: int) -> int:
-    """XDATA address of the Q byte for this camera's firmware build and stream width."""
-    build = _build_cache.get(xu.device)
-    if build is None:
-        xu.unlock()
-        build = _build_cache[xu.device] = xu.firmware_build()
+    """XDATA address of the Q byte for this camera's firmware build and stream width.
+    Not cached: a camera can be re-flashed under the same device path."""
+    build = xu.firmware_build()
     if build not in Q_ADDR:
         raise RuntimeError(f"{xu.device}: unknown firmware build {build!r}; Q address not mapped")
     return Q_ADDR[build][q_class(width)]
@@ -98,6 +99,12 @@ def apply_prestream(xu: XU, s: Settings, width: int) -> None:
     if s.mjpeg_q is not None:
         xu.unlock()
         xu.mem_write(q_addr(xu, width), bytes([int(s.mjpeg_q)]))
+
+
+def frame_budget_kb(xu: XU) -> float:
+    """Largest frame (KB) a Q level may produce on this camera's firmware build; inf where no limit is known."""
+    limit = FRAME_LIMIT_KB.get(xu.firmware_build())
+    return limit * FRAME_HEADROOM if limit else float("inf")
 
 
 def inactive(uvc: Dict[str, int], name: str) -> bool:

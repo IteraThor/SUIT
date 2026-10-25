@@ -23,7 +23,7 @@ import numpy as np
 
 from . import board, profiles
 from .capture import START_DISCARD, burst, luma
-from .settings import Settings, apply_prestream, apply_streaming, snapshot
+from .settings import Settings, apply_prestream, apply_streaming, frame_budget_kb, snapshot
 from .v4l2 import Camera
 from .xu import XU
 
@@ -196,7 +196,7 @@ def calibrate(device: str, fps: int = 30, width: int = 1280, height: int = 960, 
     return Result(device, s, meta)
 
 
-Q_CANDIDATES = (1, 2, 3, 5, 8, 11, 16, 22)  # least compression first; 22 = stock
+Q_CANDIDATES = (1, 2, 3, 4, 5, 6, 7, 8, 11, 16, 22)  # least compression first; 22 = stock
 
 
 def calibrate_all(devices: List[str], fps: int = 30, q_candidates=Q_CANDIDATES, check_s: float = 20,
@@ -249,6 +249,10 @@ def _check_together(results: Dict[str, Result], q: int, fps: int, seconds: float
     import threading
     from .multistream import Worker, kernel_error_lines
     evt = threading.Event()
+    budgets = {}
+    for d in results:  # frame-size budget of each camera's firmware build (inf where unlimited)
+        with XU(d) as xu:
+            budgets[d] = frame_budget_kb(xu)
     k0 = kernel_error_lines()
     ws = [Worker(d, r.settings.merged(Settings(mjpeg_q=q)), 1280, 960, fps, seconds, evt) for d, r in results.items()]
     for w in ws:
@@ -266,6 +270,8 @@ def _check_together(results: Dict[str, Result], q: int, fps: int, seconds: float
                    f"{st['dropped']} dropped" if st["dropped"] else "", f"{st['broken']} broken" if st["broken"] else "",
                    f"{st['gaps_over_1.5x']} gaps" if st["gaps_over_1.5x"] else ""]
             problems.append(f"{port}: " + ", ".join(b for b in bad if b))
+        elif st["kb_max"] > budgets[w.dev]:
+            problems.append(f"{port}: frames up to {st['kb_max']:.0f} KB, firmware budget {budgets[w.dev]:.0f} KB")
     kerr = kernel_error_lines() - k0
     if kerr:
         problems.append(f"{kerr} USB/UVC kernel error(s)")

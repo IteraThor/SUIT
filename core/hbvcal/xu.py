@@ -12,9 +12,12 @@ Protocol verified on 0bdc:2710 (firmware bcd 31.00) and against the sample firmw
       state 0 = idle, 1 = read data pending, 2 = waiting for write data, >2 = error code of the
       last command (the firmware then STALLs every request with UVC error "wrong state" -> EACCES)
   * command group 0xFF resets the mailbox state to idle (also clears an error state).
-  * tuning lock (XDATA 0xC888): while 0, memory reads come back +0x39, code reads +0x21 and sensor
-    commands return scrambled buffers. Unlock = I2CWrite (00 8A) with address 0xF7F7 and data 15 08.
+  * tuning lock: while the flag is 0, memory and code reads come back masked and sensor commands return
+    scrambled buffers. Unlock = I2CWrite (00 8A) with address 0xF7F7 and data 15 08 (all known builds).
     The flag lives in RAM: it survives stream restarts and is lost on power-off / re-enumeration.
+    Per build (BUILDS): 07/11/26 and 07/28/26 flag 0xC888, masks XDATA +0x39 / code +0x21, build string at
+    code 0x1D10; 02/15/25 ("Autodarts DIY Cam" image) flag 0xC879, masks +0x11 / +0x0D, build string at 0x0FE4.
+    unlock() only ever runs on a recognised build.
   * the mailbox is ONE state machine per camera: concurrent users corrupt each other's transactions
     (firmware states 3/4). Every transaction therefore holds a per-camera flock (all hbvcal processes).
   * sensor registers (OV2710, 16-bit address, needs a running stream):
@@ -58,11 +61,16 @@ OP_CODE_READ = (0x00, 0xC3)
 OP_SENSOR_READ = (0x00, 0xCA)   # vendor name I2CRead
 OP_SENSOR_WRITE = (0x00, 0x8A)  # vendor name I2CWrite
 
-LOCK_FLAG = 0xC888
 UNLOCK_ADDR = 0xF7F7
 UNLOCK_DATA = bytes([0x15, 0x08])
-LOCKED_MEM_MASK = 0x39
-BUILD_STRING_ADDR = 0x1D10
+# build -> tuning-lock flag (XDATA); build strings "REALSIL\0<build>" sit at one of BUILD_STRING_ADDRS (code)
+BUILDS = {
+    "07/11/26": {"lock_flag": 0xC888},
+    "07/28/26": {"lock_flag": 0xC888},
+    "02/15/25": {"lock_flag": 0xC879},
+}
+BUILD_STRING_ADDRS = (0x1D10, 0x0FE4)
+LOCKED_CODE_MASKS = (0x00, 0x21, 0x0D)  # unlocked, 07/xx builds, 02/15/25
 
 
 class XUError(OSError):
@@ -200,22 +208,33 @@ class XU:
         self.write(*OP_MEM_WRITE, data, addr=addr)
 
     def is_unlocked(self) -> bool:
-        # locked: the flag (0) reads back as 0x39; unlocked: reads back as 1
-        return self.mem_read(LOCK_FLAG, 1)[0] == 0x01
+        # locked: the flag (0) reads back masked (0x39 / 0x11); unlocked: reads back as 1
+        return self.mem_read(self.lock_flag(), 1)[0] == 0x01
+
+    def lock_flag(self) -> int:
+        build = self.firmware_build()
+        if build not in BUILDS:
+            raise XUError(0, f"unknown firmware build {build!r}: tuning lock not mapped, not touching it")
+        return BUILDS[build]["lock_flag"]
 
     def unlock(self) -> None:
-        """Enable the firmware's tuning access (RAM flag, harmless, idempotent)."""
+        """Enable the firmware's tuning access (RAM flag, harmless, idempotent). Known builds only."""
         if not self.is_unlocked():
             self.write(*OP_SENSOR_WRITE, UNLOCK_DATA, addr=UNLOCK_ADDR)
         if not self.is_unlocked():
             raise XUError(0, "tuning unlock did not take effect")
 
     def firmware_build(self) -> str:
-        """Build date of the running firmware, e.g. '07/28/26' (string 'REALSIL' at code 0x1D10)."""
-        raw = self.read(*OP_CODE_READ, addr=BUILD_STRING_ADDR, length=16)
-        if not raw.startswith(b"REALSIL"):
-            raw = bytes((b - 0x21) & 0xFF for b in raw)  # still locked: code reads are masked
-        return raw[8:16].split(b"\0")[0].decode(errors="replace")
+        """Build date of the running firmware, e.g. '07/28/26' or '02/15/25' ('REALSIL\\0<date>' in code).
+        Read-only; works locked (code reads are then masked) and is asked again on every call, because a
+        camera can be re-flashed under the same device path."""
+        for addr in BUILD_STRING_ADDRS:
+            raw = self.read(*OP_CODE_READ, addr=addr, length=16)
+            for mask in LOCKED_CODE_MASKS:
+                plain = bytes((b - mask) & 0xFF for b in raw)
+                if plain.startswith(b"REALSIL\0"):
+                    return plain[8:16].split(b"\0")[0].decode(errors="replace")
+        return "unknown"
 
     def sensor_read(self, reg: int) -> int:
         """Read one OV2710 register (camera must be streaming)."""
