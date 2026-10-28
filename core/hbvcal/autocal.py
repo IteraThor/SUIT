@@ -200,12 +200,14 @@ Q_CANDIDATES = (1, 2, 3, 4, 5, 6, 7, 8, 11, 16, 22)  # least compression first; 
 
 
 def calibrate_all(devices: List[str], fps: int = 30, q_candidates=Q_CANDIDATES, check_s: float = 20,
-                  confirm_s: float = 60, save: bool = True, log: Callable = print,
+                  confirm_s: float = 60, q_margin: int = 1, save: bool = True, log: Callable = print,
                   step: Callable[[str], None] = lambda title: None,
                   failed: Callable[[str], None] = lambda note: None) -> Dict[str, Result]:
     """Calibrate every camera, then pick the lowest MJPEG Q at which all cameras stream together cleanly:
     a short check per level, lowest first, and a longer confirmation run of the first level that passes
     (the lowest level has the least bandwidth margin). A failed confirmation moves on to the next level.
+    The test scene is static, so the level finally saved is q_margin levels above the first clean one
+    (busier scenes in play make bigger frames).
     step(title) / failed(note) report progress as checklist lines (a new line, or the current one failed)."""
     results = {}
     for d in devices:
@@ -217,11 +219,11 @@ def calibrate_all(devices: List[str], fps: int = 30, q_candidates=Q_CANDIDATES, 
         which = "lowest" if i == 0 else ("stock" if q == q_candidates[-1] else "next")
         step(f"Testing compression stability: level {q} ({which}, {check_s:.0f} s)")
         log(f"bandwidth check: {len(devices)} cameras at Q{q}, {fps} fps, {check_s:.0f} s")
-        ok, why = _check_together(results, q, fps, check_s)
+        ok, why = _check_together(results, q, fps, check_s, log)
         if ok:
             step(f"Confirming level {q} ({confirm_s:.0f} s)")
             log(f"  Q{q} clean; confirming for {confirm_s:.0f} s")
-            ok, why = _check_together(results, q, fps, confirm_s)
+            ok, why = _check_together(results, q, fps, confirm_s, log)
         if ok:
             chosen = q
             break
@@ -229,6 +231,11 @@ def calibrate_all(devices: List[str], fps: int = 30, q_candidates=Q_CANDIDATES, 
         log(f"  Q{q} not stable: {why}")
     if chosen is None:
         raise RuntimeError("no MJPEG quality level streamed cleanly on all cameras")
+    clean = chosen
+    chosen = q_candidates[min(q_candidates.index(clean) + q_margin, len(q_candidates) - 1)]
+    if chosen != clean:
+        step(f"Safety margin: level {chosen}")
+        log(f"  Q{clean} was the lowest clean level; using Q{chosen} as margin for busier scenes")
     for d, r in results.items():
         r.settings = r.settings.merged(Settings(mjpeg_q=chosen))
         r.meta["mjpeg_q"] = chosen
@@ -244,7 +251,7 @@ def _port_no(device: str) -> str:
     return port.split("usb-0:")[-1].split(":")[0] if "usb-0:" in port else port
 
 
-def _check_together(results: Dict[str, Result], q: int, fps: int, seconds: float) -> Tuple[bool, str]:
+def _check_together(results: Dict[str, Result], q: int, fps: int, seconds: float, log: Callable = print) -> Tuple[bool, str]:
     """Stream all cameras at once, each with its own calibrated settings at MJPEG Q `q`. (clean?, why not)"""
     import threading
     from .multistream import Worker, kernel_error_lines
@@ -263,6 +270,8 @@ def _check_together(results: Dict[str, Result], q: int, fps: int, seconds: float
     for w in ws:
         w.join(seconds + 60)
         st, port = w.stats, f"port {_port_no(w.dev)}"
+        if st:
+            log(f"    {port}: Q{q} frames mean {st['kb_mean']:.0f} KB, max {st['kb_max']:.0f} KB")
         if w.error or not st:
             problems.append(f"{port}: {w.error or 'no frames'}")
         elif st["dropped"] or st["broken"] or st["gaps_over_1.5x"] or abs(st["fps"] - fps) > 0.2:
