@@ -25,15 +25,20 @@ def run_async(
     """Run `func` in a background thread and safely dispatch results on the GTK main loop."""
     callback = on_done or on_success
 
+    def once(cb, value):
+        # an idle callback repeats while it returns something truthy: always run it exactly once
+        cb(value)
+        return False
+
     def worker():
         try:
             res = func(*args, **kwargs)
             if callback:
-                GLib.idle_add(callback, res)
+                GLib.idle_add(once, callback, res)
         except Exception as e:
             logger.exception("Async background worker failed: %s", e)
             if on_error:
-                GLib.idle_add(on_error, e)
+                GLib.idle_add(once, on_error, e)
 
     t = threading.Thread(target=worker, daemon=True)
     t.start()

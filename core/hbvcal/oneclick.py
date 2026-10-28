@@ -15,7 +15,7 @@ import time
 from typing import Callable, List, Optional
 
 from . import profiles, service
-from .autocal import calibrate_all
+from .autocal import PREVIEW, calibrate_all
 from .capture import START_DISCARD, burst
 from .daemon import cameras, is_streaming, tick
 from .settings import Q_ADDR, Q_DEFAULT, Settings, apply_prestream, apply_streaming
@@ -195,6 +195,7 @@ def optimize(job: Job, pause_live: Callable[[bool], None], fps: int = 30) -> Non
     keeper_was_on = service.is_enabled()
     service.stop()  # it would re-apply the old profile onto the calibration stream
     pause_live(True)
+    PREVIEW.clear()
     ok = False
     try:
         job.step("Stopping Autodarts")
@@ -204,14 +205,19 @@ def optimize(job: Job, pause_live: Callable[[bool], None], fps: int = 30) -> Non
             raise RuntimeError("cameras are still in use by another program")
 
         job.step("Taking 'before' pictures")
-        before = {d: snapshot_frame(d) for d in devs}  # cameras still hold the settings Autodarts gave them
+        before = {}
+        for d in devs:  # cameras still hold the settings Autodarts gave them
+            before[d] = snapshot_frame(d)
+            PREVIEW.set(d, "Before: the settings Autodarts used", before[d])
 
         results = calibrate_all(devs, fps=fps, log=job.log.append, step=job.step, failed=job.fail)
 
         job.step("Taking 'after' pictures")
         for d, r in results.items():
             save_before_after(d, "before", before[d], "settings before optimizing")
-            save_before_after(d, "after", snapshot_frame(d, r.settings), "optimized")
+            after = snapshot_frame(d, r.settings)
+            save_before_after(d, "after", after, "optimized")
+            PREVIEW.set(d, "After: optimized", after)
 
         job.step("Saving profiles")  # calibrate_all saved them
         job.result = {d: {"port": profiles.port_key(d), "settings": r.settings.label(),

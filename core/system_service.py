@@ -8,6 +8,7 @@ from core.tailscale_service import TailscaleService
 from core.waydroid_service import WaydroidService
 from core.desktop_service import DesktopService
 from core.remote_desktop_service import RemoteDesktopService
+from core.boot_service import BootService
 
 
 class SystemService:
@@ -21,6 +22,7 @@ class SystemService:
     - WaydroidService (Waydroid container, libndk, apkeep, Darts Scorer)
     - DesktopService (GNOME dark mode, wallpaper, app grid folders)
     - RemoteDesktopService (GNOME RDP desktop sharing, remote control)
+    - BootService (Fast Boot tweak with exact revert)
     """
 
     # Sub-service class references for direct composition access
@@ -31,6 +33,7 @@ class SystemService:
     waydroid = WaydroidService
     desktop = DesktopService
     remote_desktop = RemoteDesktopService
+    boot = BootService
 
     # DebloatService constants
     BLOATWARE_PACKAGES = DebloatService.BLOATWARE_PACKAGES
@@ -58,6 +61,7 @@ class SystemService:
         self.waydroid = WaydroidService()
         self.desktop = DesktopService()
         self.remote_desktop = RemoteDesktopService()
+        self.boot = BootService()
 
     # --- PowerService delegation ---
     @staticmethod
@@ -375,6 +379,27 @@ class SystemService:
     @classmethod
     def open_gnome_sharing_settings(cls) -> bool:
         return RemoteDesktopService.open_gnome_sharing_settings.__func__(cls)
+
+    @staticmethod
+    def is_hw_overlay_enabled() -> bool:
+        return DesktopService.is_hw_overlay_enabled()
+
+    @staticmethod
+    def set_hw_overlay(enabled: bool) -> tuple[bool, str]:
+        return DesktopService.set_hw_overlay(enabled)
+
+    # --- BootService delegation ---
+    @staticmethod
+    def is_fast_boot_enabled() -> bool:
+        return BootService.is_fast_boot_enabled()
+
+    @staticmethod
+    def set_fast_boot(enabled: bool) -> tuple[bool, str]:
+        return BootService.set_fast_boot(enabled)
+
+    @staticmethod
+    def get_last_boot_time() -> float | None:
+        return BootService.get_last_boot_time()
 
     # --- Facade composite operations ---
     @classmethod

@@ -121,6 +121,8 @@ class Live:
         self.thread: Optional[threading.Thread] = None
         self.pause = threading.Event()
         self.frame_count = 0
+        self._pushed = 0
+        self._black = False  # the last Autodarts picture was all black (standby)
 
     def touch(self):
         self.last_request = time.time()
@@ -139,11 +141,14 @@ class Live:
         bgr = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
         if bgr is None:
             return
-        y = luma(bgr)
+        self._pushed += 1
+        # Autodarts' picture is only judged on a few frames a second: skip the luma on the others
+        y = luma(bgr) if self.source == "own stream" or self._pushed % 3 == 0 else None
         with self.lock:
             self.frame = data
             self.bgr = bgr
-            self.frames = (self.frames + [y])[-10:]
+            if y is not None:
+                self.frames = (self.frames + [y])[-10:]
             self.sizes = (self.sizes + [len(data)])[-30:]
 
     def _run(self):
@@ -201,12 +206,19 @@ class Live:
         try:
             with urllib.request.urlopen(f"{AUTODARTS_API}/api/img/cams/{idx}", timeout=3) as r:
                 data = r.read()
-            grey = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE)
-            if grey is not None and grey.max() == 0 and wake_autodarts():
+            same = data == self.frame
+            if same and not self._black:  # same picture as before: the endpoint refreshes ~30x/s
+                time.sleep(0.03)
+                return
+            grey = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_REDUCED_GRAYSCALE_8)
+            self._black = grey is not None and grey.max() == 0
+            if self._black and wake_autodarts():
                 self.source = "waking Autodarts from standby"
-            else:
+            elif not same:
                 self._push(data)
                 self.source = "Autodarts"
+                return
+            # an unchanged black picture: check for standby again after the pause below
         except OSError:
             self.source = "busy (no Autodarts image)"
         time.sleep(0.5)

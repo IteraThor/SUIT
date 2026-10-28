@@ -216,7 +216,7 @@
 
   <div class="preview-ribbon">
     <strong>Preview.</strong> Three simulated HBV OV2710 cameras look at a simulated board; the run is sped up about 8×.
-    Nothing is sent to a camera and nothing is saved. The real tool is part of
+    The optimizer is a simulation and saves nothing. On <strong>Camera Controls → My camera</strong> you can connect a real camera and change its standard settings from this page (Chrome or Edge). The real tool, with the hidden controls, is part of
     <a href="https://github.com/IteraThor/SUIT" target="_blank" rel="noopener">SUIT for Linux</a>.
   </div>
 
@@ -289,13 +289,15 @@
     <!-- Camera Controls -->
     <section class="page" id="page-controls">
       <div class="ctl-top">
+        <div class="seg" id="ctl-source" title="Simulated cameras, or a camera connected to this computer"></div>
+        <select id="cam-device" style="display:none;grid-column:auto" title="Which camera"></select>
         <div class="seg" id="ctl-ports"></div>
-        <div class="keep card" style="padding:5px 10px">
+        <div class="keep card" id="keep-box" style="padding:5px 10px">
           <span style="font-size:13px">Keep these settings</span>
           <label class="switch" style="grid-column:auto"><input type="checkbox" id="keep"><span></span></label>
         </div>
         <span class="spacer"></span>
-        <div style="position:relative">
+        <div style="position:relative" id="presets-wrap">
           <button class="btn compact" id="btn-presets">
             <svg viewBox="0 0 16 16" fill="currentColor"><path d="M2 3h12v1.6H2zm0 4.2h12v1.6H2zm0 4.2h12V13H2z"/></svg>
             Presets
@@ -310,6 +312,7 @@
             <canvas id="live-canvas" width="960" height="720"></canvas>
             <span class="live-badge">LIVE</span>
           </div>
+          <div class="caption" id="real-note" style="display:none"></div>
           <div class="check-row">
             <span class="dot neutral" id="check-result">Brightness not checked</span>
             <button class="btn compact" id="btn-fix" style="display:none">Fix</button>
@@ -342,7 +345,7 @@ const EXPOSURE_UNIT_S = 50e-6;
 const EXPOSURE_MAX = Math.floor(0.98 / FPS / EXPOSURE_UNIT_S);  // 653
 const WHITE_FRACTION = 0.92;
 const WHITE_TARGET = 232;
-const TONE = { sharpness: 10, gamma: 250, contrast: 34, brightness: 0, saturation: 68, hue: 0,
+const TONE = { sharpness: 40, gamma: 250, contrast: 34, brightness: 0, saturation: 68, hue: 0,
                white_balance_automatic: 1, backlight_compensation: 0 };
 const Q_STOCK = 22;
 const SENSOR_STEPS = [0x00, 0x04, 0x08, 0x0C, 0x10, 0x14, 0x18, 0x30, 0x38, 0x70];
@@ -1028,6 +1031,8 @@ const HIDDEN = new Set(["sensor_gain", "q"]);
 const ctlCam = () => CAMS.find(c => c.port === state.ctlPort);
 
 function renderControls() {
+  syncSource();
+  if (rc.on) return renderRealControls();
   const cam = ctlCam(), s = cam.settings, cal = cam.calibrated;
   segButtons($("ctl-ports"), CAMS.map(c => [c.port, `Port ${c.port}`]), state.ctlPort, p => {
     state.ctlPort = p; resetCheck(); renderControls();
@@ -1121,6 +1126,208 @@ function controlRow(name, [, label, kind, opts, disabledWhen, fmt], s, cal) {
   return row;
 }
 
+// ---------------------------------------------------------------------------------------------
+// "My camera": the standard UVC controls of a camera on this computer, through the browser
+// (MediaStreamTrack constraints). The hidden controls (sensor gain, JPEG compression) need USB access
+// that a browser does not have, so they are shown locked.
+// ---------------------------------------------------------------------------------------------
+const rc = { on: false, stream: null, track: null, caps: {}, vals: {}, initial: {}, devices: [], deviceId: "",
+             queue: Promise.resolve(), video: Object.assign(document.createElement("video"), { muted: true, playsInline: true }) };
+
+// [name, group, label, kind, disabled-when, formatter]
+const RC_SPEC = [
+  ["exposureMode", "exposure", "Mode", "select"],
+  ["exposureTime", "exposure", "Exposure time", "range", v => v.exposureMode !== "manual", v => `${(v / 10).toFixed(1)} ms`],
+  ["exposureCompensation", "exposure", "Exposure comp.", "range"],
+  ["iso", "exposure", "ISO", "range"],
+  ["brightness", "tone", "Brightness", "range"],
+  ["contrast", "tone", "Contrast", "range"],
+  ["saturation", "tone", "Saturation", "range"],
+  ["sharpness", "detail", "Sharpening", "range"],
+  ["focusMode", "detail", "Focus mode", "select"],
+  ["focusDistance", "detail", "Focus distance", "range", v => v.focusMode !== "manual"],
+  ["whiteBalanceMode", "color", "White balance", "select"],
+  ["colorTemperature", "color", "Temperature", "range", v => v.whiteBalanceMode !== "manual", v => `${v} K`],
+];
+const RC_NAMES = { continuous: "Automatic", manual: "Manual", "single-shot": "Single shot", none: "Off" };
+
+async function startReal(deviceId = "") {
+  stopReal();
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error("This browser cannot open cameras (use Chrome or Edge, over https).");
+  }
+  const video = { width: { ideal: 1280 }, height: { ideal: 960 } };
+  if (deviceId) video.deviceId = { exact: deviceId };
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+  } catch (e) {
+    if (e.name === "NotReadableError") throw new Error("The camera is in use by another program. Autodarts keeps it open: stop Autodarts first.");
+    if (e.name === "NotAllowedError") throw new Error("Camera access was blocked.");
+    if (e.name === "NotFoundError") throw new Error("No camera found.");
+    throw e;
+  }
+  rc.stream = stream;
+  rc.queue = Promise.resolve();  // nothing queued for the previous camera carries over
+  rc.track = stream.getVideoTracks()[0];
+  rc.caps = rc.track.getCapabilities ? rc.track.getCapabilities() : {};
+  rc.vals = { ...rc.track.getSettings() };
+  rc.initial = { ...rc.vals };
+  rc.deviceId = rc.vals.deviceId || deviceId;
+  rc.video.srcObject = stream;
+  await rc.video.play();
+  rc.devices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+  rc.on = true;
+}
+
+function stopReal() {
+  if (rc.stream) rc.stream.getTracks().forEach(t => t.stop());
+  rc.stream = rc.track = null;
+  rc.on = false;
+  rc.video.srcObject = null;
+}
+
+function applyReal(name, value) {
+  rc.vals[name] = value;
+  const track = rc.track;
+  rc.queue = rc.queue.then(async () => {
+    if (!track || rc.track !== track) return;  // stopped or switched camera meanwhile
+    try {
+      await track.applyConstraints({ advanced: [{ [name]: value }] });
+      Object.assign(rc.vals, track.getSettings());
+    } catch (e) {
+      toast(`The camera refused ${name}: ${e.message || e.name}`);
+    }
+  });
+  return rc.queue;
+}
+
+async function pickSource(id) {
+  if (id === "real") {
+    try { await startReal(); } catch (e) { stopReal(); toast(e.message || String(e)); }
+  } else {
+    stopReal();
+  }
+  resetCheck();
+  renderControls();
+}
+
+function syncSource() {
+  segButtons($("ctl-source"), [["sim", "Simulation"], ["real", "My camera"]], rc.on ? "real" : "sim", pickSource);
+  for (const id of ["ctl-ports", "keep-box", "presets-wrap"]) $(id).style.display = rc.on ? "none" : "";
+  const sel = $("cam-device");
+  sel.style.display = rc.on && rc.devices.length > 1 ? "" : "none";
+  sel.innerHTML = "";
+  rc.devices.forEach((d, i) => sel.add(new Option(d.label || `Camera ${i + 1}`, d.deviceId, false, d.deviceId === rc.deviceId)));
+  sel.onchange = async () => {
+    try { await startReal(sel.value); } catch (e) { stopReal(); toast(e.message || String(e)); }
+    resetCheck();
+    renderControls();
+  };
+  const note = $("real-note");
+  note.style.display = rc.on ? "" : "none";
+  note.textContent = "Changes go straight to the camera. Autodarts writes its own values again when it starts.";
+}
+
+function renderRealControls() {
+  $("btn-reset").textContent = "Reset to start values";
+  const root = $("ctl-groups");
+  root.innerHTML = "";
+  for (const col of COLUMNS) {
+    const colEl = document.createElement("div");
+    colEl.className = "ctl-col";
+    for (const g of col) {
+      const grp = document.createElement("div");
+      grp.className = "group";
+      grp.innerHTML = `<div class="heading">${GROUPS[g]}</div>`;
+      for (const spec of RC_SPEC) {
+        if (spec[1] === g && rc.caps[spec[0]] !== undefined) {
+          const row = realRow(spec);
+          if (row) grp.appendChild(row);
+        }
+      }
+      if (g !== "stream" && grp.children.length === 1) continue;  // nothing in this group on this camera
+      if (g === "stream") {
+        const st = rc.track.getSettings();
+        const info = document.createElement("div");
+        info.className = "ctl-row";
+        info.innerHTML = '<label>Picture</label><span class="caption" style="grid-column:2/4"></span>';
+        info.lastChild.textContent = `${st.width}×${st.height}` + (st.frameRate ? ` @ ${Math.round(st.frameRate)} fps` : "");
+        grp.appendChild(info);
+        for (const label of ["Sensor gain", "JPEG compression"]) {
+          const lock = document.createElement("div");
+          lock.className = "ctl-row disabled";
+          lock.innerHTML = `<label>${label}<span class="hidden-tag" title="Hidden control, not in the UVC standard">HIDDEN</span></label>` +
+            '<span class="caption" style="grid-column:2/4">Needs SUIT on Linux</span>';
+          grp.appendChild(lock);
+        }
+      }
+      colEl.appendChild(grp);
+    }
+    root.appendChild(colEl);
+  }
+}
+
+function realRow([name, , label, kind, disabledWhen, fmt]) {
+  const cap = rc.caps[name];
+  const row = document.createElement("div");
+  const disabled = !!(disabledWhen && disabledWhen(rc.vals));
+  row.className = "ctl-row" + (disabled ? " disabled" : "");
+  const lab = document.createElement("label");
+  lab.textContent = label;
+  row.appendChild(lab);
+  if (kind === "select") {
+    if (!Array.isArray(cap) || !cap.length) return null;
+    const sel = document.createElement("select");
+    for (const v of cap) sel.add(new Option(RC_NAMES[v] || v, v, false, v === rc.vals[name]));
+    sel.onchange = async () => { await applyReal(name, sel.value); resetCheck(); renderControls(); };
+    row.appendChild(sel);
+    return row;
+  }
+  if (cap.min === undefined || cap.min === cap.max) return null;
+  const input = document.createElement("input");
+  input.type = "range";
+  input.min = cap.min; input.max = cap.max; input.step = cap.step || 1;
+  input.value = rc.vals[name] ?? cap.min;
+  input.disabled = disabled;
+  const val = document.createElement("span");
+  val.className = "val";
+  const show = () => (fmt ? fmt(+input.value) : String(+(+input.value).toFixed(2)));
+  val.textContent = show();
+  input.oninput = () => { val.textContent = show(); applyReal(name, +input.value); resetCheck(); };
+  row.appendChild(input);
+  row.appendChild(val);
+  return row;
+}
+
+function checkReal() {
+  const d = $("live-canvas").getContext("2d").getImageData(W / 4, H / 4, W / 2, H / 2).data;
+  const vals = [];
+  for (let i = 0; i < d.length; i += 16) vals.push(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+  vals.sort((a, b) => a - b);
+  const white = Math.round(vals[Math.floor(vals.length * 0.97)]);
+  const ok = white >= 200 && white <= 250;
+  $("check-result").className = "dot " + (ok ? "ok" : "warn");
+  $("check-result").textContent = `Brightest 3% of the centre: ${white}` +
+    (ok ? " · good" : white > 250 ? " · clipping, too bright" : " · too dark") + " (white segments should read about 232)";
+}
+
+function resetReal() {
+  const track = rc.track;
+  rc.queue = rc.queue.then(async () => {
+    for (const spec of RC_SPEC) {
+      const n = spec[0];
+      if (rc.track !== track) return;  // stopped or switched camera while resetting
+      if (rc.caps[n] === undefined || rc.initial[n] === undefined) continue;
+      try { await track.applyConstraints({ advanced: [{ [n]: rc.initial[n] }] }); } catch (e) { /* e.g. exposure time while automatic */ }
+    }
+    if (rc.track !== track) return;
+    Object.assign(rc.vals, track.getSettings());
+    resetCheck();
+    renderControls();
+  }).catch(() => {});  // a broken link must not block every later change
+}
+
 let lastLive = null;
 function resetCheck() {
   $("check-result").className = "dot neutral";
@@ -1129,6 +1336,7 @@ function resetCheck() {
 }
 
 $("btn-check").onclick = () => {
+  if (rc.on) return checkReal();
   const cam = ctlCam();
   if (!lastLive || lastLive.port !== cam.port) return;
   const m = measure(lastLive.img, cam.scene);
@@ -1153,6 +1361,7 @@ $("btn-fix").onclick = () => {
   $("btn-fix").style.display = "none";
 };
 $("btn-reset").onclick = () => {
+  if (rc.on) return resetReal();
   const cam = ctlCam();
   cam.settings = { ...(cam.calibrated || AUTODARTS_SETTINGS) };
   resetCheck();
@@ -1215,6 +1424,17 @@ async function liveLoop() {
   const cv = $("live-canvas"), ctx = cv.getContext("2d");
   while (liveOn) {
     const t0 = performance.now();
+    if (rc.on) {
+      const vw = rc.video.videoWidth, vh = rc.video.videoHeight;
+      if (vw && vh) {
+        const k = Math.min(W / vw, H / vh);
+        ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+        ctx.drawImage(rc.video, (W - vw * k) / 2, (H - vh * k) / 2, vw * k, vh * k);
+      }
+      lastLive = { port: "real" };
+      await sleep(33);
+      continue;
+    }
     const cam = ctlCam();
     const f = await frame(cam, { ...cam.settings });
     ctx.drawImage(f.bitmap, 0, 0);
@@ -1233,6 +1453,7 @@ function showPage(name) {
   $("back").classList.toggle("shown", name === "controls");
   const wasLive = liveOn;
   liveOn = name === "controls";
+  if (!liveOn && rc.on) stopReal();  // give the camera back
   if (liveOn) { renderControls(); if (!wasLive) liveLoop(); }
   history.replaceState(null, "", name === "controls" ? "#controls" : location.pathname + location.search);
 }

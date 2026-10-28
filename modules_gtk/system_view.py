@@ -193,6 +193,22 @@ class SystemView(Adw.NavigationPage):
         self.row_touch.connect("notify::active", self._on_touch_scaling_toggled)
         self.grp_system.add(self.row_touch)
 
+        # 7. Fast Boot Switch (experimental, not part of Apply All)
+        self.row_fast_boot = Adw.SwitchRow(
+            title='Fast Boot  <span foreground="#ff9800" weight="bold" size="small">Experimental</span>',
+            subtitle="Skip network wait and unused services at boot."
+        )
+        self.row_fast_boot.connect("notify::active", self._on_fast_boot_toggled)
+        self.grp_system.add(self.row_fast_boot)
+
+        # 8. Hardware Overlay Switch (not part of Apply All)
+        self.row_hw_overlay = Adw.SwitchRow(
+            title="Hardware Overlay",
+            subtitle="Show CPU, temperature, RAM and camera FPS on the wallpaper."
+        )
+        self.row_hw_overlay.connect("notify::active", self._on_hw_overlay_toggled)
+        self.grp_system.add(self.row_hw_overlay)
+
         # =========================================================================
         # Group 2: Apps and Maintenance
         # =========================================================================
@@ -273,6 +289,9 @@ class SystemView(Adw.NavigationPage):
             has_chrom = SystemService.get_software_status().get("chromium", False)
             vis_status = SystemService.get_visuals_status()
             is_touch = SystemService.is_touch_scaling_enabled()
+            fast_boot = SystemService.is_fast_boot_enabled()
+            boot_time = SystemService.get_last_boot_time()
+            hw_overlay = SystemService.is_hw_overlay_enabled()
             return {
                 "status": status,
                 "keyring": (is_blank, reason, seahorse_installed),
@@ -280,6 +299,8 @@ class SystemView(Adw.NavigationPage):
                 "chromium": has_chrom,
                 "visuals": vis_status,
                 "touch": is_touch,
+                "fast_boot": (fast_boot, boot_time),
+                "hw_overlay": hw_overlay,
             }
 
         def on_done(data):
@@ -373,6 +394,17 @@ class SystemView(Adw.NavigationPage):
 
                 # 4. Touchscreen Tweaks Switch
                 self.row_touch.set_active(is_touch)
+
+                # 4b. Fast Boot Switch
+                fast_boot, boot_time = data["fast_boot"]
+                self.row_fast_boot.set_active(fast_boot)
+                hint = "Skip network wait and unused services at boot."
+                if boot_time:
+                    hint += f" Last boot: {boot_time:.1f} s."
+                self.row_fast_boot.set_subtitle(hint)
+
+                # 4c. Hardware Overlay Switch
+                self.row_hw_overlay.set_active(data["hw_overlay"])
 
                 # 5. Apps: Bloatware Row
                 while child := self.box_debloat.get_first_child():
@@ -666,3 +698,42 @@ class SystemView(Adw.NavigationPage):
         self.window.show_toast(msg)
         self.refresh()
 
+    def _on_hw_overlay_toggled(self, row, param):
+        if self._updating:
+            return
+        active = row.get_active()
+        row.set_sensitive(False)
+
+        def worker():
+            return SystemService.set_hw_overlay(active)
+
+        def on_done(res):
+            row.set_sensitive(True)
+            success, msg = res
+            self.window.show_toast(msg)
+            self.refresh()
+
+        run_async(worker, on_done=on_done)
+
+    def _on_fast_boot_toggled(self, row, param):
+        if self._updating:
+            return
+        active = row.get_active()
+        row.set_sensitive(False)
+        self.window.show_toast("Enabling Fast Boot..." if active else "Reverting Fast Boot...")
+
+        def worker():
+            return SystemService.set_fast_boot(active)
+
+        def on_done(res):
+            row.set_sensitive(True)
+            success, msg = res
+            self.window.show_toast(msg)
+            self.refresh()
+
+        def on_error(err):
+            row.set_sensitive(True)
+            self.window.show_toast(f"Fast Boot error: {err}")
+            self.refresh()
+
+        run_async(worker, on_done=on_done, on_error=on_error)

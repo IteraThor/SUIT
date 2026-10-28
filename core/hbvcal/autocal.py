@@ -54,6 +54,26 @@ def analog_gain(code: int) -> float:
     return (2 ** coarse) * (1 + (code & 0xF) / 16.0)
 
 
+class Preview:
+    """What the calibration sees right now, for a live view next to the progress. No second stream: the frames
+    the calibration reads anyway are handed over as raw JPEG (the page decodes them), so measuring is not slowed.
+    `state` is replaced as a whole (dev, phase, jpeg, seq) and can be read from any thread."""
+
+    def __init__(self):
+        self.state = ("", "", None, 0)
+
+    def set(self, dev: Optional[str] = None, phase: Optional[str] = None, jpeg: Optional[bytes] = None) -> None:
+        d, p, j, n = self.state
+        self.state = (d if dev is None else dev, p if phase is None else phase, j if jpeg is None else jpeg,
+                      n + (jpeg is not None))
+
+    def clear(self) -> None:
+        self.state = ("", "", None, self.state[3])
+
+
+PREVIEW = Preview()
+
+
 @dataclasses.dataclass
 class Result:
     device: str
@@ -97,7 +117,9 @@ class Session:
         burst(self.cam, 0, discard=settle)
 
     def frames(self, n: int = 6) -> np.ndarray:
-        return np.stack([luma(f) for f in burst(self.cam, n).decode()])
+        b = burst(self.cam, n)
+        PREVIEW.set(self.device, jpeg=b.frames[-1].data)
+        return np.stack([luma(f) for f in b.decode()])
 
     def white_level(self, n: int = 6) -> float:
         """Level of the white segments: 97th percentile of board-area luma (white sisal ≈ 25 % of the board)."""
@@ -138,6 +160,7 @@ def calibrate(device: str, fps: int = 30, width: int = 1280, height: int = 960, 
     base = Settings(uvc={"auto_exposure": 1, "power_line_frequency": 1, "gain": 0, **TONE}, sensor={0x350B: 0x00})
     with Session(device, width, height, fps, log) as ses:
         before = snapshot(ses.cam, ses.xu, width)
+        PREVIEW.set(device, "Checking the light for flicker (short exposure, grainy on purpose)")
         ses.apply(base.merged(Settings(uvc={"exposure_time_absolute": 300})))
         fl = detect_flicker(ses, base)
         log(f"  flicker: {fl}")
@@ -151,9 +174,11 @@ def calibrate(device: str, fps: int = 30, width: int = 1280, height: int = 960, 
         # Exposure search in the (near-)linear domain: gamma at its minimum, no digital gain.
         lin = base.merged(Settings(uvc={"gamma": LINEAR_GAMMA}))
         # sensor ceiling: deliberately saturate (analog 2×, longest exposure)
+        PREVIEW.set(phase="Measuring the sensor limit (overexposed on purpose)")
         ses.apply(lin.merged(Settings(uvc={"exposure_time_absolute": emax}, sensor={0x350B: 0x10})))
         ceiling = ses.white_level()
         target = WHITE_FRACTION * ceiling
+        PREVIEW.set(phase="Searching the exposure (flat and dark on purpose)")
         ses.apply(lin.merged(Settings(uvc={"exposure_time_absolute": quant(emax)})))
         w_max = ses.white_level()
         if w_max <= target:  # dark scene: longest exposure + analog gain
@@ -176,6 +201,7 @@ def calibrate(device: str, fps: int = 30, width: int = 1280, height: int = 960, 
             f"({exp * EXPOSURE_UNIT_S * 1000:.1f} ms), analog {analog_gain(acode):.2f}x -> white {w_sensor:.1f} DN "
             f"({100 * w_sensor / ceiling:.0f} % of ceiling)")
         # digital gain: bisection to the common white target
+        PREVIEW.set(phase="Matching the brightness")
         lo, hi = 0, 128
         for _ in range(7):
             mid = (lo + hi) // 2
@@ -187,6 +213,7 @@ def calibrate(device: str, fps: int = 30, width: int = 1280, height: int = 960, 
         gain = lo
         s = s.merged(Settings(uvc={"gain": gain}, mjpeg_q=q))
         ses.apply(s)
+        PREVIEW.set(phase="Calibrated")
         st = ses.stats()
         log(f"  digital gain {gain} -> white {st['white']:.1f} black {st['black']:.1f} mean {st['mean']:.1f} tnoise {st['tnoise']:.2f}")
     meta = {"fps": fps, "resolution": f"{width}x{height}", "ceiling": round(ceiling, 1),
@@ -215,6 +242,7 @@ def calibrate_all(devices: List[str], fps: int = 30, q_candidates=Q_CANDIDATES, 
         log(f"calibrating {d}")
         results[d] = calibrate(d, fps=fps, log=log)
     chosen = None
+    PREVIEW.set(phase="Testing all cameras together · preview paused so the test is not disturbed")
     for i, q in enumerate(q_candidates):
         which = "lowest" if i == 0 else ("stock" if q == q_candidates[-1] else "next")
         step(f"Testing compression stability: level {q} ({which}, {check_s:.0f} s)")
