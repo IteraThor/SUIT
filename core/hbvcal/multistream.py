@@ -28,6 +28,7 @@ class Worker(threading.Thread):
         self.start_evt = start_evt
         self.stats: dict = {}
         self.error = None
+        self.errno = None  # ENOSPC: the USB controller could not reserve bandwidth for this stream
 
     def run(self):
         try:
@@ -71,6 +72,7 @@ class Worker(threading.Thread):
             }
         except Exception as e:  # report, don't hang the others
             self.error = f"{type(e).__name__}: {e}"
+            self.errno = getattr(e, "errno", None)
 
 
 ERROR_KEYS = ("uvcvideo", "xhci", "-71", "disconnect", "reset", "URB")

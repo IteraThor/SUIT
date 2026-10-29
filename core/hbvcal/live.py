@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import threading
 import time
-import tomllib
 import urllib.request
 from pathlib import Path
 from typing import Dict, Optional
@@ -24,33 +23,19 @@ import numpy as np
 
 from . import board, oneclick, profiles, service
 from .autocal import WHITE_TARGET
+from .autodarts import AUTODARTS_API, autodarts_index
 from .capture import START_DISCARD, luma, valid_jpeg
 from .daemon import cameras, is_streaming
 from .settings import Q_ADDR, Q_DEFAULT, Settings, apply_prestream, apply_streaming, apply_uvc, q_addr, set_uvc
 from .v4l2 import Camera
 from .xu import XU
 
-AUTODARTS_API = "http://127.0.0.1:3180"
-AUTODARTS_CONFIG = Path.home() / ".config" / "autodarts" / "config.toml"
 Q_COMMITTED = 0xC102  # Q factor committed at the last stream start (same address on both firmware builds)
 UVC_CONTROLS = ["exposure_time_absolute", "gain", "gamma", "sharpness", "contrast", "brightness", "saturation",
                 "hue", "white_balance_temperature", "white_balance_automatic", "auto_exposure",
                 "power_line_frequency", "backlight_compensation"]
 IDLE_S = 15  # a live view nobody asked for frames in this long hands its camera back
 WAKE_EVERY_S = 10  # retry interval for waking Autodarts from camera standby
-
-
-def autodarts_index(dev: str) -> Optional[int]:
-    """Position of this camera in Autodarts' camera list (its image endpoint index)."""
-    try:
-        devs = tomllib.loads(AUTODARTS_CONFIG.read_text()).get("cam", {}).get("devices", [])
-    except (OSError, ValueError):
-        return None
-    port = profiles.port_key(dev)
-    for i, uri in enumerate(devs):
-        if f"location={port}" in uri:
-            return i
-    return None
 
 
 _wake_lock = threading.Lock()
@@ -509,12 +494,29 @@ def rename_preset(old: str, new: str) -> None:
         raise ValueError(f"a preset named {new!r} already exists")
     presets[new] = presets.pop(old)
     profiles.save_presets(presets)
+    if profiles.default_preset() is None and _default_file_name() == old:
+        profiles.set_default_preset(new)
 
 
 def delete_preset(name: str) -> None:
     presets = profiles.load_presets()
     presets.pop(name, None)
     profiles.save_presets(presets)
+    if _default_file_name() == name:
+        profiles.set_default_preset(None)
+
+
+def _default_file_name():
+    """The default preset's stored name, even when no preset has it (any more)."""
+    try:
+        return json.loads(profiles.DEFAULT_PRESET_FILE.read_text()).get("name")
+    except (OSError, ValueError):
+        return None
+
+
+def set_default_preset(name: str, on: bool) -> None:
+    """Load this preset at every boot (on), or no preset at all (off)."""
+    profiles.set_default_preset(name if on else None)
 
 
 def recheck(dev: str, trim: bool) -> dict:

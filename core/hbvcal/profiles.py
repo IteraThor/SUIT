@@ -72,6 +72,21 @@ def put(device: str, settings: Settings, meta: Optional[dict] = None) -> None:
     save_all(cams)
 
 
+def set_q(device: str, q: int, note: str) -> None:
+    """Change only the saved MJPEG Q of a camera's profile (the keeper's frame-overflow fix), noting why."""
+    cams = load_all()
+    p = cams.get(port_key(device))
+    if not p:
+        return
+    p["settings"]["mjpeg_q"] = q
+    meta = p.setdefault("meta", {})
+    if "mjpeg_q" in meta:
+        meta["mjpeg_q"] = q
+    meta["q_raised"] = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "to": q, "why": note}
+    p["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    save_all(cams)
+
+
 def usb_id(device: str) -> Optional[str]:
     """'vvvv:pppp' USB vendor:product of the camera behind a V4L2 node (sysfs), or None."""
     try:
@@ -150,3 +165,56 @@ def save_presets(presets: Dict[str, Dict[str, dict]]) -> None:
     tmp = PRESETS.with_suffix(".tmp")
     tmp.write_text(json.dumps({"version": 1, "presets": presets}, indent=1))
     os.replace(tmp, PRESETS)
+
+
+# --- the default preset: loaded into the profiles once per boot (by the keeper) ---------------------------
+
+DEFAULT_PRESET_FILE = STORE.parent / "default_preset.json"
+_BOOT_MARK = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "hbvcal-default-preset-loaded"
+
+
+def default_preset() -> Optional[str]:
+    try:
+        name = json.loads(DEFAULT_PRESET_FILE.read_text()).get("name")
+    except (OSError, ValueError):
+        return None
+    return name if name in load_presets() else None
+
+
+def set_default_preset(name: Optional[str]) -> None:
+    DEFAULT_PRESET_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if name is None:
+        DEFAULT_PRESET_FILE.unlink(missing_ok=True)
+    else:
+        DEFAULT_PRESET_FILE.write_text(json.dumps({"name": name, "time": time.strftime("%Y-%m-%d %H:%M:%S")}))
+
+
+def preset_to_profiles(name: str) -> int:
+    """Make a preset's settings the kept profiles (the keeper applies them). Like loading it on Camera Controls,
+    but without touching the cameras, so it works before they stream. Returns the number of cameras."""
+    entry = load_presets().get(name, {})
+    cams = load_all()
+    for port, js in entry.items():
+        p = cams.get(port)
+        meta = dict(p.get("meta", {})) if p else {"source": "preset"}
+        if p and "calibrated" in meta:  # as live._save_edit: remember what the optimizer picked
+            meta.setdefault("calibrated_settings", p["settings"])
+        meta.pop("manual_edit", None)
+        meta["preset"] = name
+        cams[port] = {"settings": js, "serial": (p or {}).get("serial"),
+                      "updated": time.strftime("%Y-%m-%d %H:%M:%S"), "meta": meta}
+    save_all(cams)
+    return len(entry)
+
+
+def load_default_preset_once() -> Optional[str]:
+    """At the first keeper start of a boot: the default preset becomes the kept profiles. Its name, if loaded."""
+    name = default_preset()
+    if name is None or _BOOT_MARK.exists():
+        return None
+    preset_to_profiles(name)
+    try:
+        _BOOT_MARK.write_text(name)
+    except OSError:
+        pass
+    return name

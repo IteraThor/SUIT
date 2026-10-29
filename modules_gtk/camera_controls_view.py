@@ -905,10 +905,20 @@ class CameraControlsPage(Adw.NavigationPage):
             grp.add(r)
             rows.append(r)
             presets = profiles.load_presets()
+            default = profiles.default_preset()
             for name in sorted(presets, key=str.lower):
                 ports = presets[name]
                 r = Adw.ActionRow(title=GLib.markup_escape_text(name))
-                r.set_subtitle(", ".join(f"Port {port_no(p)}" for p in sorted(ports)))
+                r.set_subtitle(", ".join(f"Port {port_no(p)}" for p in sorted(ports)) +
+                               (" · loads at every start" if name == default else ""))
+                star = Gtk.Button(icon_name="starred-symbolic" if name == default else "non-starred-symbolic",
+                                  valign=Gtk.Align.CENTER,
+                                  tooltip_text="Default: loads at every start" if name == default
+                                  else "Make default: load at every start")
+                star.add_css_class("flat")
+                star.connect("clicked", lambda _b, n=name, on=name != default: (live.set_default_preset(n, on),
+                                                                                refresh()))
+                r.add_suffix(star)
                 for icon, tip, fn in (("document-edit-symbolic", "Rename", rename),
                                       ("user-trash-symbolic", "Delete", delete)):
                     b = Gtk.Button(icon_name=icon, tooltip_text=tip, valign=Gtk.Align.CENTER)

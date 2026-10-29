@@ -25,11 +25,15 @@ Q_ADDR = {
     "02/15/25": {"large": 0xC072, "mid": 0xC097, "small": 0xC07C},  # Autodarts DIY Cam image, same code at 0x420B
 }
 Q_DEFAULT = {"large": 24, "mid": 22, "small": 18}
-# Largest MJPEG frame a build streams reliably (KB). 02/15/25 has a smaller frame buffer: frames up to ~365 KB always
-# arrive, from ~378 KB on most are dropped and the stream stalls (measured at 1280x960 with Q2..Q6 x sharpness).
-# The Q calibration keeps the largest frame under FRAME_HEADROOM of this, so busier scenes in play still fit.
-FRAME_LIMIT_KB = {"02/15/25": 360}
-FRAME_HEADROOM = 0.9
+Q_LEVELS = (1, 2, 3, 4, 5, 6, 7, 8, 11, 16, 22)  # the Q steps the optimizer uses, least compression first; 22 = stock
+# Largest MJPEG frame a build streams reliably (KB). 02/15/25 has a smaller frame buffer: a bigger frame arrives cut
+# off (~165-195 KB fragments), and if every frame is that big the camera sends nothing usable (Autodarts: 0 fps,
+# "stalled"/"reconnected" loop). Measured 2026-10-29 on 3 cameras at 1280x960: 319-324 KB clean, ~340 KB all broken
+# (an earlier session saw up to 365 KB pass, so the cliff varies per camera/scene; the lower value is used).
+# Frame size also grows with the scene (light, darts in the board), so the Q calibration keeps the largest frame of
+# its static test scene under FRAME_HEADROOM of the limit, and the keeper raises Q if a camera stalls anyway.
+FRAME_LIMIT_KB = {"02/15/25": 320}
+FRAME_HEADROOM = 0.8
 
 # Order matters: mode switches before the values they enable.
 UVC_ORDER = [
@@ -92,6 +96,12 @@ def q_addr(xu: XU, width: int) -> int:
     if build not in Q_ADDR:
         raise RuntimeError(f"{xu.device}: unknown firmware build {build!r}; Q address not mapped")
     return Q_ADDR[build][q_class(width)]
+
+
+def q_above(q: int, steps: int = 1) -> int:
+    """The Q level `steps` coarser than q (more compression, smaller frames), at most stock."""
+    higher = [lv for lv in Q_LEVELS if lv > q]
+    return higher[min(steps, len(higher)) - 1] if higher else max(q, Q_LEVELS[-1])
 
 
 def apply_prestream(xu: XU, s: Settings, width: int) -> None:

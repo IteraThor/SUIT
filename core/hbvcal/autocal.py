@@ -8,14 +8,19 @@ Strategy (all measured on a 3-camera HBV rig):
   * Only if the scene is too dark at the longest exposure is sensor analog gain added.
   * Flicker: if a short exposure shows frame-to-frame brightness changes, exposure is quantised to the mains
     half-period (10 ms for 50 Hz, 8.33 ms for 60 Hz; the better one is detected).
-  * Tone/denoise: sharpness 10, gamma 250, contrast 34, auto white balance (measured winners).
+  * Tone/denoise: sharpness 10, gamma 250, contrast 34, auto white balance (measured winners); the finished
+    calibration sharpens SHARPEN more (user choice), from brightness matching on, so gain and the JPEG size check
+    see the final picture.
   * MJPEG Q is chosen by a bandwidth check over all cameras (calibrate_all): the lowest Q (= least compression)
     at which all cameras stream together cleanly, confirmed by a longer run.
+  * Measuring runs at MEASURE_Q, never at the Q the camera happens to hold: a leftover Q from an older profile can
+    make frames too big for the firmware, and then the camera sends only broken frames (start_clean).
 """
 
 from __future__ import annotations
 
 import dataclasses
+import errno
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -23,7 +28,7 @@ import numpy as np
 
 from . import board, profiles
 from .capture import START_DISCARD, burst, luma
-from .settings import Settings, apply_prestream, apply_streaming, frame_budget_kb, snapshot
+from .settings import Q_LEVELS, Settings, apply_prestream, apply_streaming, frame_budget_kb, q_above, q_addr, snapshot
 from .v4l2 import Camera
 from .xu import XU
 
@@ -32,7 +37,9 @@ WHITE_FRACTION = 0.92  # white sisal level / sensor ceiling
 WHITE_TARGET = 232.0  # output DN of the white segments after digital gain
 TONE = {"sharpness": 10, "gamma": 250, "contrast": 34, "brightness": 0, "saturation": 68, "hue": 0,
         "white_balance_automatic": 1, "backlight_compensation": 0, "exposure_dynamic_framerate": 0}
+SHARPEN = 30  # added to TONE's sharpness in the finished calibration
 DEFAULT_Q = 5
+MEASURE_Q = 8  # MJPEG Q while measuring: frames well inside every firmware's budget (~230 KB at 1280x960)
 FLICKER_CV = 0.03  # frame-mean coefficient of variation (1 ms exposure) above which lighting counts as flickering
 LINEAR_GAMMA = 100  # UVC gamma minimum ≈ linear response: used while searching the exposure
 
@@ -52,6 +59,25 @@ def analog_code(gain: float) -> int:
 def analog_gain(code: int) -> float:
     coarse = bin((code >> 4) & 0x7).count("1")
     return (2 ** coarse) * (1 + (code & 0xF) / 16.0)
+
+
+def start_clean(cam: Camera, xu: XU, q: int, width: int = 1280, height: int = 960, fps: int = 30,
+                log: Callable = print) -> int:
+    """Start the stream at MJPEG Q `q`, stepping to coarser levels while the camera only sends broken frames
+    (a frame over the firmware's buffer arrives cut off). Leaves the stream running; returns the Q in use."""
+    while True:
+        apply_prestream(xu, Settings(mjpeg_q=q), width)
+        cam.configure(width, height, "MJPG", fps)
+        cam.start()
+        try:
+            burst(cam, 3, discard=START_DISCARD, max_reads=30)
+            return q
+        except RuntimeError:
+            cam.stop()
+            if q >= Q_LEVELS[-1]:
+                raise
+            log(f"  {cam.device}: only broken frames at Q{q} (frames too big for the camera), trying Q{q_above(q)}")
+            q = q_above(q)
 
 
 class Preview:
@@ -95,9 +121,8 @@ class Session:
         self.xu.open()
         self.cam.open()
         self.xu.unlock()
-        self.cam.configure(self.w, self.h, "MJPG", self.fps)
-        self.cam.start()
-        burst(self.cam, 0, discard=START_DISCARD)
+        self.q_before = self.xu.mem_read(q_addr(self.xu, self.w), 1)[0]  # what the camera held (start_clean changes it)
+        self.q = start_clean(self.cam, self.xu, MEASURE_Q, self.w, self.h, self.fps, self.log)
         if self.H is not None:
             self.mask = board.board_mask_image(self.H, (self.h, self.w))
         else:  # no Autodarts calibration yet: central ellipse
@@ -160,6 +185,7 @@ def calibrate(device: str, fps: int = 30, width: int = 1280, height: int = 960, 
     base = Settings(uvc={"auto_exposure": 1, "power_line_frequency": 1, "gain": 0, **TONE}, sensor={0x350B: 0x00})
     with Session(device, width, height, fps, log) as ses:
         before = snapshot(ses.cam, ses.xu, width)
+        before.mjpeg_q = ses.q_before
         PREVIEW.set(device, "Checking the light for flicker (short exposure, grainy on purpose)")
         ses.apply(base.merged(Settings(uvc={"exposure_time_absolute": 300})))
         fl = detect_flicker(ses, base)
@@ -194,7 +220,8 @@ def calibrate(device: str, fps: int = 30, width: int = 1280, height: int = 960, 
                 else:
                     hi = mid
             exp, acode = lo * unit, 0x00
-        s = base.merged(Settings(uvc={"exposure_time_absolute": exp}, sensor={0x350B: acode}))
+        s = base.merged(Settings(uvc={"exposure_time_absolute": exp, "sharpness": TONE["sharpness"] + SHARPEN},
+                                 sensor={0x350B: acode}))
         ses.apply(lin.merged(Settings(uvc={"exposure_time_absolute": exp}, sensor={0x350B: acode})))
         w_sensor = ses.white_level()
         log(f"  ceiling={ceiling:.1f} DN (linear)  white@max exposure={w_max:.1f}  -> exposure {exp} "
@@ -223,39 +250,46 @@ def calibrate(device: str, fps: int = 30, width: int = 1280, height: int = 960, 
     return Result(device, s, meta)
 
 
-Q_CANDIDATES = (1, 2, 3, 4, 5, 6, 7, 8, 11, 16, 22)  # least compression first; 22 = stock
+Q_CANDIDATES = Q_LEVELS
 
 
 def calibrate_all(devices: List[str], fps: int = 30, q_candidates=Q_CANDIDATES, check_s: float = 20,
                   confirm_s: float = 60, q_margin: int = 1, save: bool = True, log: Callable = print,
                   step: Callable[[str], None] = lambda title: None,
-                  failed: Callable[[str], None] = lambda note: None) -> Dict[str, Result]:
+                  skipped: Callable[[str], None] = lambda note: None) -> Dict[str, Result]:
     """Calibrate every camera, then pick the lowest MJPEG Q at which all cameras stream together cleanly:
     a short check per level, lowest first, and a longer confirmation run of the first level that passes
     (the lowest level has the least bandwidth margin). A failed confirmation moves on to the next level.
+    If the USB controller cannot reserve bandwidth for all cameras at once (ENOSPC), no Q level helps: the sweep
+    stops with UsbBandwidthError after one retry.
     The test scene is static, so the level finally saved is q_margin levels above the first clean one
     (busier scenes in play make bigger frames).
-    step(title) / failed(note) report progress as checklist lines (a new line, or the current one failed)."""
+    step(title) / skipped(note) report progress as checklist lines (a new line, or the current one did not fit)."""
     results = {}
     for d in devices:
         step(f"Calibrating exposure and gain: port {_port_no(d)}")
         log(f"calibrating {d}")
-        results[d] = calibrate(d, fps=fps, log=log)
+        try:
+            results[d] = calibrate(d, fps=fps, log=log)
+        except OSError as e:
+            if e.errno == errno.ENOSPC:  # even one camera alone: something else on that USB bus takes the bandwidth
+                raise UsbBandwidthError(devices, [d]) from e
+            raise
     chosen = None
     PREVIEW.set(phase="Testing all cameras together · preview paused so the test is not disturbed")
     for i, q in enumerate(q_candidates):
         which = "lowest" if i == 0 else ("stock" if q == q_candidates[-1] else "next")
         step(f"Testing compression stability: level {q} ({which}, {check_s:.0f} s)")
         log(f"bandwidth check: {len(devices)} cameras at Q{q}, {fps} fps, {check_s:.0f} s")
-        ok, why = _check_together(results, q, fps, check_s, log)
+        ok, why = _check_bandwidth(results, q, fps, check_s, log)
         if ok:
             step(f"Confirming level {q} ({confirm_s:.0f} s)")
             log(f"  Q{q} clean; confirming for {confirm_s:.0f} s")
-            ok, why = _check_together(results, q, fps, confirm_s, log)
+            ok, why = _check_bandwidth(results, q, fps, confirm_s, log)
         if ok:
             chosen = q
             break
-        failed(f"not stable ({why})")
+        skipped(f"skipped, trying more compression ({why})")
         log(f"  Q{q} not stable: {why}")
     if chosen is None:
         raise RuntimeError("no MJPEG quality level streamed cleanly on all cameras")
@@ -273,14 +307,44 @@ def calibrate_all(devices: List[str], fps: int = 30, q_candidates=Q_CANDIDATES, 
     return results
 
 
+class UsbBandwidthError(RuntimeError):
+    """The USB controller refused to reserve bandwidth for a camera stream (ENOSPC)."""
+
+    def __init__(self, devices: List[str], refused: List[str]):
+        ports = [_port_no(d) for d in devices]
+        hubs = {p.rsplit(".", 1)[0] for p in ports if "." in p}
+        shared = f" They share one USB hub (ports {', '.join(ports)})." if len(hubs) == 1 and \
+            all("." in p for p in ports) and len(ports) > 1 else ""
+        n = len(devices)
+        super().__init__(
+            f"Not enough USB bandwidth to stream {n} camera{'s' if n > 1 else ''} at once: port "
+            f"{', '.join(_port_no(d) for d in refused)} could not start.{shared} Plug the cameras into separate USB "
+            f"ports, ideally on different USB controllers, then optimize again.")
+
+
+def _check_bandwidth(results: Dict[str, Result], q: int, fps: int, seconds: float, log: Callable = print
+                     ) -> Tuple[bool, str]:
+    """_check_together, retried once if a camera got no USB bandwidth; raises UsbBandwidthError if it stays so."""
+    for attempt in (1, 2):
+        ok, why, refused = _check_together(results, q, fps, seconds, log)
+        if not refused:
+            return ok, why
+        log(f"  no USB bandwidth for {', '.join(_port_no(d) for d in refused)}" +
+            (": retrying once" if attempt == 1 else ""))
+        time.sleep(2)
+    raise UsbBandwidthError(list(results), refused)
+
+
 def _port_no(device: str) -> str:
     """'...-usb-0:2:1.0-video-index0' -> '2'."""
     port = profiles.port_key(device)
     return port.split("usb-0:")[-1].split(":")[0] if "usb-0:" in port else port
 
 
-def _check_together(results: Dict[str, Result], q: int, fps: int, seconds: float, log: Callable = print) -> Tuple[bool, str]:
-    """Stream all cameras at once, each with its own calibrated settings at MJPEG Q `q`. (clean?, why not)"""
+def _check_together(results: Dict[str, Result], q: int, fps: int, seconds: float, log: Callable = print
+                    ) -> Tuple[bool, str, List[str]]:
+    """Stream all cameras at once, each with its own calibrated settings at MJPEG Q `q`.
+    (clean?, why not, cameras that got no USB bandwidth)"""
     import threading
     from .multistream import Worker, kernel_error_lines
     evt = threading.Event()
@@ -312,4 +376,5 @@ def _check_together(results: Dict[str, Result], q: int, fps: int, seconds: float
     kerr = kernel_error_lines() - k0
     if kerr:
         problems.append(f"{kerr} USB/UVC kernel error(s)")
-    return not problems, "; ".join(problems)
+    refused = [w.dev for w in ws if w.errno == errno.ENOSPC]
+    return not problems, "; ".join(problems), refused

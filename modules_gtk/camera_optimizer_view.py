@@ -33,7 +33,7 @@ BA_VIEW = 960  # longest side of the rendered before/after view (the crop is cut
 BA_ZOOMS = (1, 2, 3, 4)
 PREVIEW_MS = 250  # live view while optimizing: frames come from the calibration itself, decoded here
 PREVIEW_VIEW = 720  # longest side of the live view
-ETA_S = {"optimize": 180.0, "restore": 40.0}  # typical run times, for the progress bar
+ETA_S = {"optimize": 180.0, "apply": 25.0, "restore": 40.0}  # typical run times, for the progress bar
 COLS = (130, 96, 52, 118)  # table: camera, white / target, JPEG, last run (the rest is "Now")
 
 
@@ -157,7 +157,8 @@ class CameraOptimizerPage(Adw.NavigationPage):
                     s["info"] = {"white": m.get("reference", {}).get("white"), "q": m.get("mjpeg_q"),
                                  "when": m.get("calibrated")}
                 cams.append(s)
-            return {"cameras": cams, "consent": profiles.consent(), "autodarts": oneclick.systemctl("is-active")}
+            return {"cameras": cams, "consent": profiles.consent(), "autodarts": oneclick.systemctl("is-active"),
+                    "pending": bool(oneclick.load_pending())}
 
         def done(st):
             self._status_busy = False
@@ -213,6 +214,9 @@ class CameraOptimizerPage(Adw.NavigationPage):
         bad = [p for p, r in self.lighting.items() if r.get("verdict") not in (None, "ok")]
         if JOB.running:
             pass  # _render_job owns the headline
+        elif self.status.get("pending"):
+            self.hero_title.set_label("Calibration ready to review")
+            self.hero_text.set_label("Nothing has changed yet. Compare before and after, then apply it or discard it.")
         elif not sup:
             self.hero_title.set_label("No supported camera found")
             self.hero_text.set_label("Connect your HBV OV2710 cameras, then open this page again.")
@@ -501,6 +505,17 @@ class CameraOptimizerPage(Adw.NavigationPage):
         self.ba_chip.set_visible(False)
         right.append(self.ba_chip)
         right.append(Gtk.Box(vexpand=True))
+        self.ba_pending = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, visible=False)
+        self.ba_pending.append(caption("Not applied yet: the cameras still run their previous settings.", wrap=True))
+        self.btn_apply = Gtk.Button(label="Apply now & set as default", css_classes=["pill", "suggested-action"])
+        self.btn_apply.set_tooltip_text("Keep this calibration, save it as a preset and load that preset at every start")
+        self.btn_apply.connect("clicked", lambda *_: self._start_job("apply", oneclick.apply))
+        self.ba_pending.append(self.btn_apply)
+        btn_discard = Gtk.Button(label="Discard", css_classes=["flat"])
+        btn_discard.set_tooltip_text("Forget this calibration and keep the previous settings")
+        btn_discard.connect("clicked", lambda *_: self._ask_discard())
+        self.ba_pending.append(btn_discard)
+        right.append(self.ba_pending)
         self.btn_ba_preset = Gtk.Button(label="Save as Preset…")
         self.btn_ba_preset.connect("clicked", lambda *_: ask_save_preset(
             self.window, f"Optimized {time.strftime('%Y-%m-%d %H:%M')}"))
@@ -546,6 +561,22 @@ class CameraOptimizerPage(Adw.NavigationPage):
         d.set_response_appearance("start", Adw.ResponseAppearance.SUGGESTED)
         d.set_default_response("start")
         d.connect("response", lambda _d, r: r == "start" and self._start_job("optimize", oneclick.optimize, 30))
+        d.present(self.window)
+
+    def _ask_discard(self):
+        d = Adw.AlertDialog(heading="Discard This Calibration?",
+                            body="The cameras keep the settings they run now. You can optimize again at any time.")
+        d.add_response("cancel", "Cancel")
+        d.add_response("discard", "Discard")
+        d.set_response_appearance("discard", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        def on_resp(_d, r):
+            if r == "discard":
+                oneclick.discard()
+                self.window.show_toast("Calibration discarded")
+                self.refresh_status()
+
+        d.connect("response", on_resp)
         d.present(self.window)
 
     def _ask_restore(self):
@@ -641,6 +672,9 @@ class CameraOptimizerPage(Adw.NavigationPage):
             return True
         self._job_timer = 0
         self._job_t0 = 0.0
+        j = JOB.to_json()
+        if j["name"] == "optimize" and j["result"] and not j["error"]:
+            self.tab_toggle.set_active_name("compare")  # fills once refresh_status reloads the pictures
         self.refresh_status()
         return False
 
@@ -651,15 +685,17 @@ class CameraOptimizerPage(Adw.NavigationPage):
         self.job_empty.set_visible(False)
         self.job_box.set_visible(True)
         restoring = j["name"] == "restore"
-        watching = j["running"] and not restoring
+        applying = j["name"] == "apply"
+        watching = j["running"] and j["name"] == "optimize"
         self.cam_list.set_visible(not watching)
         self.preview_box.set_visible(watching)
         if j["running"]:
-            self.hero_title.set_label("Restoring original settings…" if restoring else "Optimizing…")
+            self.hero_title.set_label("Restoring original settings…" if restoring else
+                                      "Applying the calibration…" if applying else "Optimizing…")
             self.hero_text.set_label("Please don't touch the board or the cameras.")
             self.guide.set_visible(False)
             el = time.time() - (self._job_t0 or time.time())
-            eta = ETA_S["restore" if restoring else "optimize"]
+            eta = ETA_S.get(j["name"], ETA_S["optimize"])
             self.progress.set_fraction(min(el / eta, 0.97))
             left = max(0, int(eta - el))
             self.lbl_time.set_label(f"{int(el) // 60}:{int(el) % 60:02d} · " +
@@ -674,9 +710,11 @@ class CameraOptimizerPage(Adw.NavigationPage):
             if st["state"] == "running":
                 icon = Adw.Spinner()
             else:
-                icon = Gtk.Image.new_from_icon_name("object-select-symbolic" if st["state"] == "done"
-                                                    else "window-close-symbolic")
-                icon.add_css_class("success" if st["state"] == "done" else "error")
+                icon_name, css = {"done": ("object-select-symbolic", "success"),
+                                  "skipped": ("dialog-warning-symbolic", "warning")}.get(
+                    st["state"], ("window-close-symbolic", "error"))
+                icon = Gtk.Image.new_from_icon_name(icon_name)
+                icon.add_css_class(css)
             icon.set_size_request(16, 16)
             icon.set_valign(Gtk.Align.START)
             line.append(icon)
@@ -690,19 +728,23 @@ class CameraOptimizerPage(Adw.NavigationPage):
         note, kind = "", ""
         if j["error"]:
             note, kind = (f"Something went wrong: {j['error']}. Your previous settings are still in place."), "bad"
+        elif not j["running"] and applying and j["result"]:
+            note, kind = f"Applied. Saved as “{j['result']['preset']}”, loaded at every start.", "ok"
         elif not j["running"] and not restoring and j["result"]:
             qs = {r.get("mjpeg_q") for r in j["result"].values()}
-            note, kind = "All cameras calibrated and matched" + (f" · JPEG level {qs.pop()}" if len(qs) == 1 else "") + ".", "ok"
+            note, kind = ("All cameras calibrated and matched" + (f" · JPEG level {qs.pop()}" if len(qs) == 1 else "")
+                          + ". Review before & after, then apply."), "review"
         elif not j["running"] and restoring:
             note, kind = "Original settings restored.", ""
         self.job_note.set_label(note)
         self.job_note.set_visible(bool(note))
-        self.btn_save_preset.set_visible(kind == "ok")
-        self.btn_after.set_visible(kind == "ok")
+        self.btn_save_preset.set_visible(False)  # saving happens on apply
+        self.btn_after.set_visible(kind in ("ok", "review"))
+        self.btn_after.set_label("Review & apply" if kind == "review" else "See before & after")
         for c in ("camopt-note-ok", "camopt-note-bad"):
             self.job_note.remove_css_class(c)
         if kind:
-            self.job_note.add_css_class(f"camopt-note-{kind}")
+            self.job_note.add_css_class(f"camopt-note-{'ok' if kind == 'review' else kind}")
 
     # --- before / after ---
 
@@ -714,6 +756,9 @@ class CameraOptimizerPage(Adw.NavigationPage):
         run_async(oneclick.before_after_info, on_done=done)
 
     def _on_ba_pick(self):
+        pending = any(b.get("pending") for b in self.ba)
+        self.ba_pending.set_visible(pending and not JOB.running)
+        self.btn_ba_preset.set_visible(not pending)
         name = self.strip.active
         info = next((b for b in self.ba if b["port"] == name), None)
         cam = self._cam(name)
@@ -727,10 +772,11 @@ class CameraOptimizerPage(Adw.NavigationPage):
             return
         meta = info.get("meta") or {}
         after = meta.get("after", {})
-        self.ba_note.set_label((f"Optimized {after['time']} · " if after.get("time") else "") +
+        self.ba_note.set_label((f"{'Calibrated' if info.get('pending') else 'Optimized'} {after['time']} · "
+                                if after.get("time") else "") +
                                "drag the handle · double-tap or scroll to zoom")
         # the meta time is per minute: the file times tell a rerun within the same minute apart
-        d = oneclick.BEFORE_AFTER / info["port"]
+        d = info["dir"]
         stamps = [(d / f"{w}.jpg").stat().st_mtime_ns if (d / f"{w}.jpg").exists() else 0 for w in ("before", "after")]
         key = name + repr(meta) + repr(stamps)
         if key == self.ba_key:
@@ -738,15 +784,13 @@ class CameraOptimizerPage(Adw.NavigationPage):
         self.ba_key = key
 
         def load():
-            d = oneclick.BEFORE_AFTER / info["port"]
             imgs = [live.board_view(info["device"], d / f"{w}.jpg") for w in ("before", "after")]
             if any(i is None for i in imgs) or imgs[0].shape != imgs[1].shape:
                 return None
             sizes = [(d / f"{w}.jpg").stat().st_size / 1024 for w in ("before", "after")]
             imgs = self._crop_black(imgs)
-            prof = (profiles.get(info["device"]) or {}).get("meta", {})
             return {"imgs": tuple(imgs), "kb": sizes, "stats": [self._stats(i) for i in imgs],
-                    "q": (prof.get("previous", {}).get("mjpeg_q"), prof.get("mjpeg_q")), "port": info["port"]}
+                    "q": info["q"], "port": info["port"]}
 
         def done(data):
             if key != self.ba_key:
