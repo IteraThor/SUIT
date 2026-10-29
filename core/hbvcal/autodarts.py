@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tomllib
 import urllib.request
 from pathlib import Path
@@ -28,6 +29,21 @@ def stream_size() -> Tuple[int, int]:
     return size if min(size) > 0 else DEFAULT_SIZE
 
 
+def set_stream_size(width: int, height: int) -> None:
+    """Write the [cam] width/height Autodarts streams at, leaving every other line of its config as it is.
+    Only while Autodarts is stopped: it rewrites config.toml from its own values when it exits."""
+    text = AUTODARTS_CONFIG.read_text()
+    m = re.search(r"(?ms)^\[cam\]\n.*?(?=^\s*\[|\Z)", text)  # up to the first sub-table or next table
+    if m is None:
+        raise RuntimeError(f"no [cam] section in {AUTODARTS_CONFIG}")
+    sec = m.group(0)
+    for key, v in (("width", width), ("height", height)):
+        sec, n = re.subn(rf"(?m)^{key}\s*=.*$", f"{key} = {v}", sec)
+        if not n:
+            sec = sec.replace("[cam]\n", f"[cam]\n{key} = {v}\n", 1)
+    AUTODARTS_CONFIG.write_text(text[:m.start()] + sec + text[m.end():])
+
+
 def autodarts_index(dev: str) -> Optional[int]:
     """Position of this camera in Autodarts' camera list (its image endpoint index)."""
     try:
@@ -47,6 +63,16 @@ def get_json(path: str, timeout: float = 2) -> Optional[dict]:
             return json.loads(r.read())
     except (OSError, ValueError):
         return None
+
+
+def calibrate_board() -> bool:
+    """Start Autodarts' automatic board calibration (it needs one per resolution). True if Autodarts took it."""
+    req = urllib.request.Request(f"{AUTODARTS_API}/api/config/calibration/auto", data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=4):
+            return True
+    except OSError:
+        return False
 
 
 def camera_fps() -> Optional[List[float]]:

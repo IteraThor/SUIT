@@ -180,12 +180,17 @@ def detect_flicker(ses: Session, base: Settings) -> dict:
 
 
 def calibrate(device: str, fps: int = 30, width: int = 1280, height: int = 960, q: int = DEFAULT_Q,
-              log: Callable = print) -> Result:
+              log: Callable = print, previous: Optional[Settings] = None) -> Result:
+    """`previous`: the camera's state before the optimization, if it already holds an earlier attempt's settings
+    (stored in the meta, Restore goes back to it); read from the camera otherwise."""
     t0 = time.time()
     base = Settings(uvc={"auto_exposure": 1, "power_line_frequency": 1, "gain": 0, **TONE}, sensor={0x350B: 0x00})
     with Session(device, width, height, fps, log) as ses:
-        before = snapshot(ses.cam, ses.xu, width)
-        before.mjpeg_q = ses.q_before
+        if previous is None:
+            before = snapshot(ses.cam, ses.xu, width)
+            before.mjpeg_q = ses.q_before
+        else:
+            before = previous
         PREVIEW.set(device, "Checking the light for flicker (short exposure, grainy on purpose)")
         ses.apply(base.merged(Settings(uvc={"exposure_time_absolute": 300})))
         fl = detect_flicker(ses, base)
@@ -255,7 +260,8 @@ Q_CANDIDATES = Q_LEVELS
 
 def calibrate_all(devices: List[str], fps: int = 30, width: int = 1280, height: int = 960,
                   q_candidates=Q_CANDIDATES, check_s: float = 20,
-                  confirm_s: float = 60, q_margin: int = 1, save: bool = True, log: Callable = print,
+                  confirm_s: float = 60, q_margin: int = 1, q_max: Optional[int] = None, save: bool = True,
+                  log: Callable = print, previous: Optional[Dict[str, Settings]] = None,
                   step: Callable[[str], None] = lambda title: None,
                   skipped: Callable[[str], None] = lambda note: None) -> Dict[str, Result]:
     """Calibrate every camera, then pick the lowest MJPEG Q at which all cameras stream together cleanly:
@@ -265,21 +271,30 @@ def calibrate_all(devices: List[str], fps: int = 30, width: int = 1280, height: 
     stops with UsbBandwidthError after one retry.
     The test scene is static, so the level finally saved is q_margin levels above the first clean one
     (busier scenes in play make bigger frames).
+    With q_max, only levels whose saved level (margin included) stays at or below it are tried: CompressionLimit
+    if none of them streams cleanly.
+    previous: the cameras' state before the optimization, per device. Filled in on the first run and handed to
+    the next one, so a retry (at another resolution) keeps the state from before the first attempt.
     step(title) / skipped(note) report progress as checklist lines (a new line, or the current one did not fit)."""
     results = {}
+    previous = {} if previous is None else previous
     for d in devices:
         step(f"Calibrating exposure and gain: port {_port_no(d)}")
         log(f"calibrating {d}")
         try:
-            results[d] = calibrate(d, fps=fps, width=width, height=height, log=log)
+            results[d] = calibrate(d, fps=fps, width=width, height=height, log=log, previous=previous.get(d))
+            previous.setdefault(d, Settings.from_json(results[d].meta["previous"]))
         except OSError as e:
             if e.errno == errno.ENOSPC:  # even one camera alone: something else on that USB bus takes the bandwidth
                 raise UsbBandwidthError(devices, [d], width, height) from e
             raise
+    levels = list(q_candidates)  # the margin counts on all levels, not only the ones q_max leaves to try
+    if q_max is not None:
+        q_candidates = [q for i, q in enumerate(levels) if levels[min(i + q_margin, len(levels) - 1)] <= q_max]
     chosen = None
     PREVIEW.set(phase="Testing all cameras together · preview paused so the test is not disturbed")
     for i, q in enumerate(q_candidates):
-        which = "lowest" if i == 0 else ("stock" if q == q_candidates[-1] else "next")
+        which = "lowest" if i == 0 else ("stock" if q == Q_LEVELS[-1] else "next")
         step(f"Testing compression stability: level {q} ({which}, {check_s:.0f} s)")
         log(f"bandwidth check: {len(devices)} cameras at Q{q}, {width}x{height}, {fps} fps, {check_s:.0f} s")
         ok, why = _check_bandwidth(results, q, width, height, fps, check_s, log)
@@ -292,10 +307,13 @@ def calibrate_all(devices: List[str], fps: int = 30, width: int = 1280, height: 
             break
         skipped(f"skipped, trying more compression ({why})")
         log(f"  Q{q} not stable: {why}")
+    if chosen is None and q_max is not None:
+        raise CompressionLimit(f"no MJPEG quality level up to {q_max} streamed cleanly on all cameras at "
+                               f"{width}x{height}")
     if chosen is None:
         raise RuntimeError("no MJPEG quality level streamed cleanly on all cameras")
     clean = chosen
-    chosen = q_candidates[min(q_candidates.index(clean) + q_margin, len(q_candidates) - 1)]
+    chosen = levels[min(levels.index(clean) + q_margin, len(levels) - 1)]
     if chosen != clean:
         step(f"Safety margin: level {chosen}")
         log(f"  Q{clean} was the lowest clean level; using Q{chosen} as margin for busier scenes")
@@ -308,6 +326,10 @@ def calibrate_all(devices: List[str], fps: int = 30, width: int = 1280, height: 
     return results
 
 
+class CompressionLimit(RuntimeError):
+    """The cameras only stream cleanly with more compression than calibrate_all's q_max allows."""
+
+
 class UsbBandwidthError(RuntimeError):
     """The USB controller refused to reserve bandwidth for a camera stream (ENOSPC)."""
 
@@ -318,10 +340,10 @@ class UsbBandwidthError(RuntimeError):
             all("." in p for p in ports) and len(ports) > 1 else ""
         n = len(devices)
         super().__init__(
-            f"Not enough USB bandwidth to stream {n} camera{'s' if n > 1 else ''} at once at {width}x{height} "
-            f"(the resolution set in Autodarts): port {', '.join(_port_no(d) for d in refused)} could not start."
+            f"Not enough USB bandwidth to stream {n} camera{'s' if n > 1 else ''} at once at {width}x{height}"
+            f": port {', '.join(_port_no(d) for d in refused)} could not start."
             f"{shared} Plug the cameras into separate USB ports, ideally on different USB controllers, or use a "
-            f"lower resolution in Autodarts (1280x720 needs less), then optimize again.")
+            f"lower resolution in Autodarts, then optimize again.")
 
 
 def _check_bandwidth(results: Dict[str, Result], q: int, width: int, height: int, fps: int, seconds: float,
@@ -351,9 +373,9 @@ def _check_together(results: Dict[str, Result], q: int, width: int, height: int,
     from .multistream import Worker, kernel_error_lines
     evt = threading.Event()
     budgets = {}
-    for d in results:  # frame-size budget of each camera's firmware build (inf where unlimited)
+    for d in results:  # frame-size budget of each camera's firmware build at this resolution (inf where unlimited)
         with XU(d) as xu:
-            budgets[d] = frame_budget_kb(xu)
+            budgets[d] = frame_budget_kb(xu, height)
     k0 = kernel_error_lines()
     ws = [Worker(d, r.settings.merged(Settings(mjpeg_q=q)), width, height, fps, seconds, evt) for d, r in results.items()]
     for w in ws:

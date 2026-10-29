@@ -15,9 +15,9 @@ import threading
 import time
 from typing import Callable, List, Optional
 
-from . import profiles, service
+from . import board, profiles, service
 from .autocal import PREVIEW, calibrate_all, start_clean
-from .autodarts import stream_size
+from .autodarts import calibrate_board, set_stream_size, stream_size
 from .capture import burst
 from .daemon import cameras, is_streaming, tick
 from .settings import Q_ADDR, Q_DEFAULT, Settings, apply_streaming, q_addr
@@ -27,6 +27,11 @@ from .xu import XU
 HBV_USB_ID = profiles.HBV_USB_ID
 BEFORE_AFTER = profiles.STORE.parent / "beforeafter"
 AUTODARTS_START_TIMEOUT = 60
+# Resolutions the optimizer tries, best picture first. It steps down to the next one when the cameras do not stream
+# cleanly at one (USB bandwidth, frames too big) or only with more compression than STEP_DOWN_Q: past that, the
+# lower resolution at less compression gives Autodarts the better picture.
+RESOLUTIONS = ((1280, 960), (1280, 720))
+STEP_DOWN_Q = 11
 
 log = logging.getLogger("suit.hbvcal.oneclick")  # lands in suit.log inside SUIT
 
@@ -159,11 +164,13 @@ def _wait_streaming(devs: List[str], timeout: float) -> bool:
     return _wait(all_streaming, timeout)
 
 
-def snapshot_frame(dev: str, s: Settings = None, say: Callable[[str], None] = log.info) -> bytes:
+def snapshot_frame(dev: str, s: Settings = None, say: Callable[[str], None] = log.info,
+                   size: Optional[tuple] = None) -> bytes:
     """One complete camera frame (raw JPEG). With `s`, the settings are applied first (as the keeper would);
     without, the camera keeps its current ones. If the camera only sends broken frames at that MJPEG Q, the picture
-    is taken at the next coarser Q that works (and the camera keeps that Q). Taken at Autodarts' resolution."""
-    width, height = stream_size()
+    is taken at the next coarser Q that works (and the camera keeps that Q). Taken at `size`, else at Autodarts'
+    resolution."""
+    width, height = size or stream_size()
     with XU(dev) as xu, Camera(dev) as cam:
         xu.unlock()
         q = s.mjpeg_q if s is not None and s.mjpeg_q is not None else xu.mem_read(q_addr(xu, width), 1)[0]
@@ -229,6 +236,15 @@ def load_pending() -> dict:
         return {}
 
 
+def pending_size() -> Optional[tuple]:
+    """(width, height) the pending calibration was made at, for Autodarts' config on apply."""
+    try:
+        w, h = json.loads(PENDING.read_text())["resolution"]
+        return int(w), int(h)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def discard() -> None:
     """Forget a calibration that was not applied (the cameras already run their previous settings)."""
     PENDING.unlink(missing_ok=True)
@@ -250,11 +266,33 @@ def _put_back(dev: str) -> None:
                 xu.mem_write(addr, bytes([Q_DEFAULT[cls]]))
 
 
+def _calibrate_best(job: Job, devs: List[str], fps: int) -> tuple:
+    """calibrate_all at the first of RESOLUTIONS that streams cleanly within STEP_DOWN_Q (the last one at any Q).
+    (results, (width, height))"""
+    previous = {}  # the cameras' state from before the first attempt, for every later one
+    for i, (w, h) in enumerate(RESOLUTIONS):
+        last = i == len(RESOLUTIONS) - 1
+        job.say(f"calibrating at {w}x{h}" + ("" if last else f", compression up to level {STEP_DOWN_Q}"))
+        try:
+            return calibrate_all(devs, fps=fps, width=w, height=h, q_max=None if last else STEP_DOWN_Q,
+                                 save=False, previous=previous, log=job.say, step=job.step,
+                                 skipped=job.skip), (w, h)
+        except RuntimeError as e:  # no USB bandwidth, frames too big, or only with too much compression
+            if last:
+                raise
+            nw, nh = RESOLUTIONS[i + 1]
+            job.say(f"{w}x{h} not usable: {e}")
+            job.skip(f"not possible at {w}x{h}, see the log")
+            job.step(f"Stepping down to {nw}x{nh}")
+            for d in devs:  # the failed attempt may have left its Q in camera memory
+                _put_back(d)
+
+
 def optimize(job: Job, pause_live: Callable[[bool], None], fps: int = 30) -> None:
     """Calibrate and take before/after pictures. Nothing is kept: the result waits in PENDING for apply() or
-    discard(), and the cameras go back to their previous settings meanwhile. Everything runs at the resolution
-    Autodarts streams at: the USB bandwidth check means nothing at any other one."""
-    width, height = stream_size()
+    discard(), and the cameras go back to their previous settings meanwhile. Runs at 1280x960 and steps down to
+    1280x720 if needed (_calibrate_best); apply() then sets that resolution in Autodarts."""
+    ad_size = stream_size()
     devs = [s["device"] for s in map(support, cameras()) if s["supported"]]
     if not devs:
         raise RuntimeError("no supported HBV OV2710 camera found")
@@ -283,23 +321,32 @@ def optimize(job: Job, pause_live: Callable[[bool], None], fps: int = 30) -> Non
         if len(before) < len(devs):
             job.skip("not every camera, see the log")
 
-        job.say(f"resolution from Autodarts: {width}x{height}")
-        results = calibrate_all(devs, fps=fps, width=width, height=height, save=False, log=job.say, step=job.step,
-                                skipped=job.skip)
+        job.say(f"resolution in Autodarts: {ad_size[0]}x{ad_size[1]}")
+        results, size = _calibrate_best(job, devs, fps)
+        job.say(f"calibrated at {size[0]}x{size[1]}")
+        if size != ad_size:  # before & after compare at one resolution: the old settings again, at the new one
+            job.step(f"Taking 'before' pictures again at {size[0]}x{size[1]}")
+            for d, r in results.items():
+                try:
+                    before[d] = snapshot_frame(d, Settings.from_json(r.meta["previous"]), say=job.say, size=size)
+                except (OSError, RuntimeError) as e:
+                    before.pop(d, None)
+                    job.say(f"no 'before' picture of {profiles.port_key(d)} at {size[0]}x{size[1]}: {e}")
 
         job.step("Taking 'after' pictures")
         for d, r in results.items():
             try:
-                after = snapshot_frame(d, r.settings, say=job.say)
+                after = snapshot_frame(d, r.settings, say=job.say, size=size)
             except (OSError, RuntimeError) as e:
                 job.say(f"no 'after' picture of {profiles.port_key(d)}: {e}")
                 continue
             if d in before:
                 save_before_after(d, "before", before[d], "settings before optimizing", PENDING_PICTURES)
-            save_before_after(d, "after", after, "optimized", PENDING_PICTURES)
+            save_before_after(d, "after", after, f"optimized, {size[0]}x{size[1]}", PENDING_PICTURES)
             PREVIEW.set(d, "After: optimized", after)
         PENDING.parent.mkdir(parents=True, exist_ok=True)
-        PENDING.write_text(json.dumps({"cameras": {profiles.port_key(d): {"settings": r.settings.to_json(),
+        PENDING.write_text(json.dumps({"resolution": list(size),
+                                       "cameras": {profiles.port_key(d): {"settings": r.settings.to_json(),
                                                                           "meta": r.meta}
                                                    for d, r in results.items()}}, indent=1))
 
@@ -308,7 +355,8 @@ def optimize(job: Job, pause_live: Callable[[bool], None], fps: int = 30) -> Non
             _put_back(d)
         job.result = {d: {"port": profiles.port_key(d), "settings": r.settings.label(),
                           "white": r.meta["reference"]["white"], "noise": r.meta["reference"]["tnoise"],
-                          "mjpeg_q": r.meta.get("mjpeg_q"), "pending": True} for d, r in results.items()}
+                          "mjpeg_q": r.meta.get("mjpeg_q"), "resolution": f"{size[0]}x{size[1]}",
+                          "resolution_change": size != ad_size, "pending": True} for d, r in results.items()}
         job.finish()
     finally:
         if keeper_was_on:
@@ -319,9 +367,12 @@ def optimize(job: Job, pause_live: Callable[[bool], None], fps: int = 30) -> Non
 
 
 def apply(job: Job, pause_live: Callable[[bool], None]) -> None:
-    """Keep the pending calibration: save the profiles, save them as a preset that loads at every boot, and
-    restart Autodarts so the cameras open with them (the MJPEG Q only takes effect at a stream start)."""
+    """Keep the pending calibration: save the profiles, save them as a preset that loads at every boot, set the
+    resolution it was made at in Autodarts, and restart Autodarts so the cameras open with them (the MJPEG Q only
+    takes effect at a stream start). Autodarts calibrates the board again if it has no calibration at that
+    resolution."""
     pend = load_pending()
+    size = pending_size()
     devs = [d for d in cameras() if profiles.port_key(d) in pend]
     if not devs:
         raise RuntimeError("no calibration waiting to be applied (or its cameras are not connected)")
@@ -349,6 +400,11 @@ def apply(job: Job, pause_live: Callable[[bool], None]) -> None:
         if was_running:
             systemctl("stop")
         service.stop()
+        new_size = size if size and size != stream_size() else None
+        if new_size:  # after the stop: Autodarts writes its config back when it exits
+            job.step(f"Setting Autodarts to {new_size[0]}x{new_size[1]}")
+            set_stream_size(*new_size)
+            job.result["resolution"] = f"{new_size[0]}x{new_size[1]}"
         _wait_cameras_free(devs)
         job.step("Applying the settings")
         tick({})  # cameras not streaming: writes the MJPEG Q for the next stream start
@@ -358,6 +414,13 @@ def apply(job: Job, pause_live: Callable[[bool], None]) -> None:
             systemctl("start")
             if not _wait_streaming(devs, AUTODARTS_START_TIMEOUT):
                 job.say("Autodarts did not open all cameras in time; the keeper will apply later")
+        if new_size and any(board.load_homography(d, *new_size) is None for d in devs):
+            job.step(f"Calibrating the board in Autodarts at {new_size[0]}x{new_size[1]}")
+            if was_running and calibrate_board():
+                job.result["board"] = "started"
+            else:
+                job.result["board"] = "needed"
+                job.skip("start it in Autodarts (no darts in the board)")
         job.finish()
     finally:
         if was_running and not autodarts_active():

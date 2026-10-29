@@ -729,11 +729,20 @@ class CameraOptimizerPage(Adw.NavigationPage):
         if j["error"]:
             note, kind = (f"Something went wrong: {j['error']}. Your previous settings are still in place."), "bad"
         elif not j["running"] and applying and j["result"]:
-            note, kind = f"Applied. Saved as “{j['result']['preset']}”, loaded at every start.", "ok"
+            r = j["result"]
+            note, kind = (f"Applied. Saved as “{r['preset']}”, loaded at every start."
+                          + (f" Autodarts now runs at {r['resolution']}." if r.get("resolution") else "")
+                          + {"started": " Autodarts is calibrating the board at it.",
+                             "needed": " Calibrate the board in Autodarts at it."}.get(r.get("board"), "")), "ok"
         elif not j["running"] and not restoring and j["result"]:
             qs = {r.get("mjpeg_q") for r in j["result"].values()}
-            note, kind = ("All cameras calibrated and matched" + (f" · JPEG level {qs.pop()}" if len(qs) == 1 else "")
-                          + ". Review before & after, then apply."), "review"
+            first = next(iter(j["result"].values()))
+            change = (f" Applying sets Autodarts to {first['resolution']} (needs a new board calibration if it"
+                      f" has none at it).") if first.get("resolution_change") else ""
+            note, kind = ("All cameras calibrated and matched"
+                          + (f" at {first['resolution']}" if first.get("resolution") else "")
+                          + (f" · JPEG level {qs.pop()}" if len(qs) == 1 else "")
+                          + "." + change + " Review before & after, then apply."), "review"
         elif not j["running"] and restoring:
             note, kind = "Original settings restored.", ""
         self.job_note.set_label(note)

@@ -30,9 +30,11 @@ Q_LEVELS = (1, 2, 3, 4, 5, 6, 7, 8, 11, 16, 22)  # the Q steps the optimizer use
 # off (~165-195 KB fragments), and if every frame is that big the camera sends nothing usable (Autodarts: 0 fps,
 # "stalled"/"reconnected" loop). Measured 2026-10-29 on 3 cameras at 1280x960: 319-324 KB clean, ~340 KB all broken
 # (an earlier session saw up to 365 KB pass, so the cliff varies per camera/scene; the lower value is used).
+# The limit depends on the resolution: gain swept up at a fixed Q on the same 3 cameras, last clean frame before all
+# broken was 303-323 KB at 1280x960 and 215-229 KB at 1280x720 (one gain step, ~7-11 KB, from clean to all broken).
 # Frame size also grows with the scene (light, darts in the board), so the Q calibration keeps the largest frame of
 # its static test scene under FRAME_HEADROOM of the limit, and the keeper raises Q if a camera stalls anyway.
-FRAME_LIMIT_KB = {"02/15/25": 320}
+FRAME_LIMIT_KB = {"02/15/25": {960: 300, 720: 215}}  # by frame height; other heights use the lowest
 FRAME_HEADROOM = 0.8
 
 # Order matters: mode switches before the values they enable.
@@ -111,10 +113,13 @@ def apply_prestream(xu: XU, s: Settings, width: int) -> None:
         xu.mem_write(q_addr(xu, width), bytes([int(s.mjpeg_q)]))
 
 
-def frame_budget_kb(xu: XU) -> float:
-    """Largest frame (KB) a Q level may produce on this camera's firmware build; inf where no limit is known."""
-    limit = FRAME_LIMIT_KB.get(xu.firmware_build())
-    return limit * FRAME_HEADROOM if limit else float("inf")
+def frame_budget_kb(xu: XU, height: int) -> float:
+    """Largest frame (KB) a Q level may produce on this camera's firmware build at this frame height; inf where no
+    limit is known."""
+    limits = FRAME_LIMIT_KB.get(xu.firmware_build())
+    if not limits:
+        return float("inf")
+    return limits.get(height, min(limits.values())) * FRAME_HEADROOM
 
 
 def inactive(uvc: Dict[str, int], name: str) -> bool:
