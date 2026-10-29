@@ -6,12 +6,26 @@ import json
 import tomllib
 import urllib.request
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from . import profiles
 
 AUTODARTS_API = "http://127.0.0.1:3180"
 AUTODARTS_CONFIG = Path.home() / ".config" / "autodarts" / "config.toml"
+DEFAULT_SIZE = (1280, 960)
+
+
+def stream_size() -> Tuple[int, int]:
+    """(width, height) Autodarts streams its cameras at; DEFAULT_SIZE where the config does not say.
+    The camera reserves USB bandwidth by resolution, not by fps or frame size (1280x960: 2x768 B per microframe,
+    1280x720 and below: 1x1024 B), so the optimizer must test the resolution Autodarts really uses: three cameras
+    behind one USB 2 root port fit at 720, not at 960."""
+    try:
+        cam = tomllib.loads(AUTODARTS_CONFIG.read_text()).get("cam", {})
+        size = (int(cam.get("width", DEFAULT_SIZE[0])), int(cam.get("height", DEFAULT_SIZE[1])))
+    except (OSError, ValueError, TypeError):
+        return DEFAULT_SIZE
+    return size if min(size) > 0 else DEFAULT_SIZE
 
 
 def autodarts_index(dev: str) -> Optional[int]:

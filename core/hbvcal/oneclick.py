@@ -17,6 +17,7 @@ from typing import Callable, List, Optional
 
 from . import profiles, service
 from .autocal import PREVIEW, calibrate_all, start_clean
+from .autodarts import stream_size
 from .capture import burst
 from .daemon import cameras, is_streaming, tick
 from .settings import Q_ADDR, Q_DEFAULT, Settings, apply_streaming, q_addr
@@ -139,7 +140,7 @@ def _wait_cameras_free(devs: List[str], timeout: float = 20) -> bool:
         for d in devs:
             try:
                 with Camera(d) as cam:
-                    cam.configure(1280, 960, "MJPG", 30)
+                    cam.configure(*stream_size(), "MJPG", 30)
                     cam.start()
                     cam.stop()
             except OSError:
@@ -161,11 +162,12 @@ def _wait_streaming(devs: List[str], timeout: float) -> bool:
 def snapshot_frame(dev: str, s: Settings = None, say: Callable[[str], None] = log.info) -> bytes:
     """One complete camera frame (raw JPEG). With `s`, the settings are applied first (as the keeper would);
     without, the camera keeps its current ones. If the camera only sends broken frames at that MJPEG Q, the picture
-    is taken at the next coarser Q that works (and the camera keeps that Q)."""
+    is taken at the next coarser Q that works (and the camera keeps that Q). Taken at Autodarts' resolution."""
+    width, height = stream_size()
     with XU(dev) as xu, Camera(dev) as cam:
         xu.unlock()
-        q = s.mjpeg_q if s is not None and s.mjpeg_q is not None else xu.mem_read(q_addr(xu, 1280), 1)[0]
-        start_clean(cam, xu, q, log=say)
+        q = s.mjpeg_q if s is not None and s.mjpeg_q is not None else xu.mem_read(q_addr(xu, width), 1)[0]
+        start_clean(cam, xu, q, width, height, log=say)
         try:
             if s is not None:
                 apply_streaming(cam, xu, s)
@@ -242,7 +244,7 @@ def _put_back(dev: str) -> None:
         xu.unlock()
         build = xu.firmware_build()
         if prev is not None and prev.mjpeg_q is not None and profiles.hidden_ok(dev):
-            xu.mem_write(q_addr(xu, 1280), bytes([prev.mjpeg_q]))
+            xu.mem_write(q_addr(xu, stream_size()[0]), bytes([prev.mjpeg_q]))
         else:
             for cls, addr in Q_ADDR[build].items():
                 xu.mem_write(addr, bytes([Q_DEFAULT[cls]]))
@@ -250,7 +252,9 @@ def _put_back(dev: str) -> None:
 
 def optimize(job: Job, pause_live: Callable[[bool], None], fps: int = 30) -> None:
     """Calibrate and take before/after pictures. Nothing is kept: the result waits in PENDING for apply() or
-    discard(), and the cameras go back to their previous settings meanwhile."""
+    discard(), and the cameras go back to their previous settings meanwhile. Everything runs at the resolution
+    Autodarts streams at: the USB bandwidth check means nothing at any other one."""
+    width, height = stream_size()
     devs = [s["device"] for s in map(support, cameras()) if s["supported"]]
     if not devs:
         raise RuntimeError("no supported HBV OV2710 camera found")
@@ -279,7 +283,9 @@ def optimize(job: Job, pause_live: Callable[[bool], None], fps: int = 30) -> Non
         if len(before) < len(devs):
             job.skip("not every camera, see the log")
 
-        results = calibrate_all(devs, fps=fps, save=False, log=job.say, step=job.step, skipped=job.skip)
+        job.say(f"resolution from Autodarts: {width}x{height}")
+        results = calibrate_all(devs, fps=fps, width=width, height=height, save=False, log=job.say, step=job.step,
+                                skipped=job.skip)
 
         job.step("Taking 'after' pictures")
         for d, r in results.items():

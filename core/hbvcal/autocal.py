@@ -253,7 +253,8 @@ def calibrate(device: str, fps: int = 30, width: int = 1280, height: int = 960, 
 Q_CANDIDATES = Q_LEVELS
 
 
-def calibrate_all(devices: List[str], fps: int = 30, q_candidates=Q_CANDIDATES, check_s: float = 20,
+def calibrate_all(devices: List[str], fps: int = 30, width: int = 1280, height: int = 960,
+                  q_candidates=Q_CANDIDATES, check_s: float = 20,
                   confirm_s: float = 60, q_margin: int = 1, save: bool = True, log: Callable = print,
                   step: Callable[[str], None] = lambda title: None,
                   skipped: Callable[[str], None] = lambda note: None) -> Dict[str, Result]:
@@ -270,22 +271,22 @@ def calibrate_all(devices: List[str], fps: int = 30, q_candidates=Q_CANDIDATES, 
         step(f"Calibrating exposure and gain: port {_port_no(d)}")
         log(f"calibrating {d}")
         try:
-            results[d] = calibrate(d, fps=fps, log=log)
+            results[d] = calibrate(d, fps=fps, width=width, height=height, log=log)
         except OSError as e:
             if e.errno == errno.ENOSPC:  # even one camera alone: something else on that USB bus takes the bandwidth
-                raise UsbBandwidthError(devices, [d]) from e
+                raise UsbBandwidthError(devices, [d], width, height) from e
             raise
     chosen = None
     PREVIEW.set(phase="Testing all cameras together · preview paused so the test is not disturbed")
     for i, q in enumerate(q_candidates):
         which = "lowest" if i == 0 else ("stock" if q == q_candidates[-1] else "next")
         step(f"Testing compression stability: level {q} ({which}, {check_s:.0f} s)")
-        log(f"bandwidth check: {len(devices)} cameras at Q{q}, {fps} fps, {check_s:.0f} s")
-        ok, why = _check_bandwidth(results, q, fps, check_s, log)
+        log(f"bandwidth check: {len(devices)} cameras at Q{q}, {width}x{height}, {fps} fps, {check_s:.0f} s")
+        ok, why = _check_bandwidth(results, q, width, height, fps, check_s, log)
         if ok:
             step(f"Confirming level {q} ({confirm_s:.0f} s)")
             log(f"  Q{q} clean; confirming for {confirm_s:.0f} s")
-            ok, why = _check_bandwidth(results, q, fps, confirm_s, log)
+            ok, why = _check_bandwidth(results, q, width, height, fps, confirm_s, log)
         if ok:
             chosen = q
             break
@@ -310,29 +311,30 @@ def calibrate_all(devices: List[str], fps: int = 30, q_candidates=Q_CANDIDATES, 
 class UsbBandwidthError(RuntimeError):
     """The USB controller refused to reserve bandwidth for a camera stream (ENOSPC)."""
 
-    def __init__(self, devices: List[str], refused: List[str]):
+    def __init__(self, devices: List[str], refused: List[str], width: int, height: int):
         ports = [_port_no(d) for d in devices]
         hubs = {p.rsplit(".", 1)[0] for p in ports if "." in p}
         shared = f" They share one USB hub (ports {', '.join(ports)})." if len(hubs) == 1 and \
             all("." in p for p in ports) and len(ports) > 1 else ""
         n = len(devices)
         super().__init__(
-            f"Not enough USB bandwidth to stream {n} camera{'s' if n > 1 else ''} at once: port "
-            f"{', '.join(_port_no(d) for d in refused)} could not start.{shared} Plug the cameras into separate USB "
-            f"ports, ideally on different USB controllers, then optimize again.")
+            f"Not enough USB bandwidth to stream {n} camera{'s' if n > 1 else ''} at once at {width}x{height} "
+            f"(the resolution set in Autodarts): port {', '.join(_port_no(d) for d in refused)} could not start."
+            f"{shared} Plug the cameras into separate USB ports, ideally on different USB controllers, or use a "
+            f"lower resolution in Autodarts (1280x720 needs less), then optimize again.")
 
 
-def _check_bandwidth(results: Dict[str, Result], q: int, fps: int, seconds: float, log: Callable = print
-                     ) -> Tuple[bool, str]:
+def _check_bandwidth(results: Dict[str, Result], q: int, width: int, height: int, fps: int, seconds: float,
+                     log: Callable = print) -> Tuple[bool, str]:
     """_check_together, retried once if a camera got no USB bandwidth; raises UsbBandwidthError if it stays so."""
     for attempt in (1, 2):
-        ok, why, refused = _check_together(results, q, fps, seconds, log)
+        ok, why, refused = _check_together(results, q, width, height, fps, seconds, log)
         if not refused:
             return ok, why
         log(f"  no USB bandwidth for {', '.join(_port_no(d) for d in refused)}" +
             (": retrying once" if attempt == 1 else ""))
         time.sleep(2)
-    raise UsbBandwidthError(list(results), refused)
+    raise UsbBandwidthError(list(results), refused, width, height)
 
 
 def _port_no(device: str) -> str:
@@ -341,8 +343,8 @@ def _port_no(device: str) -> str:
     return port.split("usb-0:")[-1].split(":")[0] if "usb-0:" in port else port
 
 
-def _check_together(results: Dict[str, Result], q: int, fps: int, seconds: float, log: Callable = print
-                    ) -> Tuple[bool, str, List[str]]:
+def _check_together(results: Dict[str, Result], q: int, width: int, height: int, fps: int, seconds: float,
+                    log: Callable = print) -> Tuple[bool, str, List[str]]:
     """Stream all cameras at once, each with its own calibrated settings at MJPEG Q `q`.
     (clean?, why not, cameras that got no USB bandwidth)"""
     import threading
@@ -353,7 +355,7 @@ def _check_together(results: Dict[str, Result], q: int, fps: int, seconds: float
         with XU(d) as xu:
             budgets[d] = frame_budget_kb(xu)
     k0 = kernel_error_lines()
-    ws = [Worker(d, r.settings.merged(Settings(mjpeg_q=q)), 1280, 960, fps, seconds, evt) for d, r in results.items()]
+    ws = [Worker(d, r.settings.merged(Settings(mjpeg_q=q)), width, height, fps, seconds, evt) for d, r in results.items()]
     for w in ws:
         w.start()
     time.sleep(1.0)
