@@ -1,4 +1,6 @@
 import os
+import copy
+import json
 import subprocess
 import ast
 import shutil
@@ -13,6 +15,28 @@ USER_EXTENSION_DIR = Path.home() / ".local" / "share" / "gnome-shell" / "extensi
 HW_OVERLAY_UUID = "hw-overlay@suit"
 HW_OVERLAY_SOURCE_DIR = Path(__file__).resolve().parent.parent / "assets" / "hw_overlay_extension"
 HW_OVERLAY_USER_DIR = Path.home() / ".local" / "share" / "gnome-shell" / "extensions" / HW_OVERLAY_UUID
+# Watched by the extension, which redraws live on every save (see loadConfig in extension.js)
+HW_OVERLAY_CONFIG_PATH = Path.home() / ".config" / "suit" / "hw_overlay.json"
+HW_OVERLAY_METRICS = ("cpu", "temp", "ram", "gpu", "disk", "net", "load", "uptime",
+                      "ad_state", "ad_fps", "ad_cams", "ad_proc")
+HW_OVERLAY_DEFAULTS = {
+    "style": "card",
+    "position": "top-right",
+    "size": "medium",
+    "accent": "blue",
+    "opacity": 70,
+    "meters": True,
+    "headings": True,
+    "interval": 2,
+    "metrics": {m: m not in ("net", "load", "ad_proc") for m in HW_OVERLAY_METRICS},
+}
+HW_OVERLAY_CHOICES = {
+    "style": ("card", "minimal"),
+    "position": ("top-right", "top-left", "bottom-right", "bottom-left"),
+    "size": ("small", "medium", "large"),
+    "accent": ("blue", "teal", "green", "purple", "white"),
+    "interval": (1, 2, 5),
+}
 GTK4_CSS_PATH = Path.home() / ".config" / "gtk-4.0" / "gtk.css"
 GTK3_CSS_PATH = Path.home() / ".config" / "gtk-3.0" / "gtk.css"
 
@@ -47,6 +71,9 @@ class DesktopService:
     HW_OVERLAY_UUID = HW_OVERLAY_UUID
     HW_OVERLAY_SOURCE_DIR = HW_OVERLAY_SOURCE_DIR
     HW_OVERLAY_USER_DIR = HW_OVERLAY_USER_DIR
+    HW_OVERLAY_CONFIG_PATH = HW_OVERLAY_CONFIG_PATH
+    HW_OVERLAY_METRICS = HW_OVERLAY_METRICS
+    HW_OVERLAY_DEFAULTS = HW_OVERLAY_DEFAULTS
     GTK4_CSS_PATH = GTK4_CSS_PATH
     GTK3_CSS_PATH = GTK3_CSS_PATH
     SUIT_TOUCH_MARKER_START = SUIT_TOUCH_MARKER_START
@@ -290,6 +317,28 @@ class DesktopService:
             return False
 
     @classmethod
+    def hw_overlay_needs_relogin(cls, target_dir: Path | None = None, ext_uuid: str | None = None) -> bool:
+        """True when newer overlay files are installed than the running GNOME Shell has loaded.
+
+        The shell keeps an extension's code from login, so updated files only take effect
+        after logging out and back in."""
+        uuid = ext_uuid or cls.HW_OVERLAY_UUID
+        dest = target_dir or cls.HW_OVERLAY_USER_DIR
+        try:
+            on_disk = json.loads((dest / "metadata.json").read_text(encoding="utf-8")).get("version")
+            res = subprocess.run(
+                ["gnome-extensions", "info", uuid],
+                capture_output=True, text=True, env={**os.environ, "LC_ALL": "C"}
+            )
+        except (OSError, ValueError):
+            return False
+        for line in res.stdout.splitlines():
+            key, _, val = line.strip().partition(":")
+            if key == "Version" and val.strip().isdigit() and isinstance(on_disk, int):
+                return int(val) < on_disk
+        return False
+
+    @classmethod
     def is_hw_overlay_enabled(cls, target_dir: Path | None = None, ext_uuid: str | None = None) -> bool:
         uuid = ext_uuid or cls.HW_OVERLAY_UUID
         dest = target_dir or cls.HW_OVERLAY_USER_DIR
@@ -353,6 +402,52 @@ class DesktopService:
         except Exception as e:
             logger.exception("Failed configuring hardware overlay")
             return False, f"Failed updating hardware overlay: {e}"
+
+    @staticmethod
+    def _normalize_hw_overlay_config(raw) -> dict:
+        """Defaults with every valid value from `raw` laid over them; unknown or bad values are dropped."""
+        cfg = copy.deepcopy(HW_OVERLAY_DEFAULTS)
+        if not isinstance(raw, dict):
+            return cfg
+        for key, choices in HW_OVERLAY_CHOICES.items():
+            val = raw.get(key)
+            if not isinstance(val, bool) and val in choices:
+                cfg[key] = val
+        for key in ("meters", "headings"):
+            if isinstance(raw.get(key), bool):
+                cfg[key] = raw[key]
+        opacity = raw.get("opacity")
+        if isinstance(opacity, (int, float)) and not isinstance(opacity, bool):
+            cfg["opacity"] = int(min(100, max(0, opacity)))
+        metrics = raw.get("metrics")
+        if isinstance(metrics, dict):
+            for m in HW_OVERLAY_METRICS:
+                if isinstance(metrics.get(m), bool):
+                    cfg["metrics"][m] = metrics[m]
+        return cfg
+
+    @classmethod
+    def get_hw_overlay_config(cls, path: Path | None = None) -> dict:
+        p = path or cls.HW_OVERLAY_CONFIG_PATH
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = {}
+        return cls._normalize_hw_overlay_config(raw)
+
+    @classmethod
+    def save_hw_overlay_config(cls, cfg: dict, path: Path | None = None) -> dict:
+        """Write the overlay look and metric choices; the running extension picks them up at once.
+
+        Written to a temp file and renamed so the extension never reads a half-written file.
+        Returns the config as stored."""
+        p = path or cls.HW_OVERLAY_CONFIG_PATH
+        clean = cls._normalize_hw_overlay_config(cfg)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(clean, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, p)
+        return clean
 
     @classmethod
     def get_visuals_status(cls) -> dict:

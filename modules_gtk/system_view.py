@@ -13,10 +13,12 @@ from modules_gtk.ui_helpers import (
 from modules_gtk.dialogs.debloat_dialog import DebloatReviewDialog
 from modules_gtk.dialogs.tailscale_dialog import TailscaleAuthDialog
 from modules_gtk.advanced_users_view import AdvancedUsersView
+from modules_gtk.hw_overlay_view import HwOverlayView, summarize_hw_overlay
 
 __all__ = [
     "SystemView",
     "AdvancedUsersView",
+    "HwOverlayView",
     "DebloatReviewDialog",
     "TailscaleAuthDialog",
     "copy_to_clipboard",
@@ -31,6 +33,7 @@ class SystemView(Adw.NavigationPage):
         self.user = getpass.getuser()
         self._updating = False
         self.advanced_view = None
+        self.hw_overlay_view = None
 
         # Root overlay container allowing full-screen modal progress overlay
         self.root_overlay = Gtk.Overlay()
@@ -201,12 +204,14 @@ class SystemView(Adw.NavigationPage):
         self.row_fast_boot.connect("notify::active", self._on_fast_boot_toggled)
         self.grp_system.add(self.row_fast_boot)
 
-        # 8. Hardware Overlay Switch (not part of Apply All)
-        self.row_hw_overlay = Adw.SwitchRow(
+        # 8. Hardware Overlay submenu (not part of Apply All)
+        self.row_hw_overlay = Adw.ActionRow(
             title="Hardware Overlay",
-            subtitle="Show CPU, temperature, RAM and camera FPS on the wallpaper."
+            subtitle="Show CPU, temperature, RAM and camera FPS on the wallpaper.",
+            activatable=True
         )
-        self.row_hw_overlay.connect("notify::active", self._on_hw_overlay_toggled)
+        self.row_hw_overlay.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+        self.row_hw_overlay.connect("activated", self._on_hw_overlay_clicked)
         self.grp_system.add(self.row_hw_overlay)
 
         # =========================================================================
@@ -291,7 +296,7 @@ class SystemView(Adw.NavigationPage):
             is_touch = SystemService.is_touch_scaling_enabled()
             fast_boot = SystemService.is_fast_boot_enabled()
             boot_time = SystemService.get_last_boot_time()
-            hw_overlay = SystemService.is_hw_overlay_enabled()
+            hw_overlay = (SystemService.is_hw_overlay_enabled(), SystemService.get_hw_overlay_config())
             return {
                 "status": status,
                 "keyring": (is_blank, reason, seahorse_installed),
@@ -403,8 +408,8 @@ class SystemView(Adw.NavigationPage):
                     hint += f" Last boot: {boot_time:.1f} s."
                 self.row_fast_boot.set_subtitle(hint)
 
-                # 4c. Hardware Overlay Switch
-                self.row_hw_overlay.set_active(data["hw_overlay"])
+                # 4c. Hardware Overlay submenu row
+                self.row_hw_overlay.set_subtitle(summarize_hw_overlay(*data["hw_overlay"]))
 
                 # 5. Apps: Bloatware Row
                 while child := self.box_debloat.get_first_child():
@@ -698,22 +703,11 @@ class SystemView(Adw.NavigationPage):
         self.window.show_toast(msg)
         self.refresh()
 
-    def _on_hw_overlay_toggled(self, row, param):
-        if self._updating:
-            return
-        active = row.get_active()
-        row.set_sensitive(False)
-
-        def worker():
-            return SystemService.set_hw_overlay(active)
-
-        def on_done(res):
-            row.set_sensitive(True)
-            success, msg = res
-            self.window.show_toast(msg)
-            self.refresh()
-
-        run_async(worker, on_done=on_done)
+    def _on_hw_overlay_clicked(self, row):
+        if not self.hw_overlay_view:
+            self.hw_overlay_view = HwOverlayView(self.window, on_changed=self.refresh)
+        self.window.nav_view.push(self.hw_overlay_view)
+        self.hw_overlay_view.refresh()
 
     def _on_fast_boot_toggled(self, row, param):
         if self._updating:

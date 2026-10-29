@@ -1,62 +1,114 @@
+/* Sizes are in em so the size class on .suit-hwmon scales the whole overlay.
+   No letter-spacing: St leaves it out of a label's natural width, so labels in a row get ellipsized. */
 .suit-hwmon {
-  background-color: rgba(12, 14, 18, 0.62);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  padding: 14px 18px;
-  min-width: 330px;
-  spacing: 4px;
-  font-family: monospace;
-  font-size: 10.5pt;
-  color: #e5e9f0;
+  width: 19em;
+  spacing: 0.45em;
+  color: #eceff4;
+  font-feature-settings: "tnum";
 }
 
-.suit-hwmon-title {
-  font-size: 8.5pt;
+.suit-hwmon-small { font-size: 8.5pt; }
+.suit-hwmon-medium { font-size: 10pt; }
+.suit-hwmon-large { font-size: 12pt; }
+
+/* background-color (with the chosen opacity) is set inline by the extension */
+.suit-hwmon-card {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 1.2em;
+  padding: 1.1em 1.25em;
+  box-shadow: 0 0.3em 1.2em rgba(0, 0, 0, 0.35);
+}
+
+.suit-hwmon-minimal {
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+.suit-hwmon-heading {
+  font-size: 0.72em;
   font-weight: bold;
-  color: rgba(229, 233, 240, 0.45);
-  padding-bottom: 2px;
+  color: rgba(236, 239, 244, 0.45);
 }
 
-.suit-hwmon-row {
-  spacing: 10px;
-}
+.suit-hwmon-line { spacing: 0.5em; }
+.suit-hwmon-item { spacing: 0.3em; }
 
 .suit-hwmon-key {
-  min-width: 52px;
-  color: rgba(229, 233, 240, 0.5);
+  font-size: 0.78em;
+  font-weight: bold;
+  color: rgba(236, 239, 244, 0.55);
 }
 
-.suit-hwmon-dim {
-  color: rgba(229, 233, 240, 0.5);
+.suit-hwmon-value { font-weight: bold; }
+
+.suit-hwmon-detail {
+  font-size: 0.85em;
+  color: rgba(236, 239, 244, 0.5);
 }
 
 .suit-hwmon-bar {
-  width: 72px;
-  height: 6px;
-  border-radius: 3px;
-  background-color: rgba(255, 255, 255, 0.1);
+  height: 3px;
+  border-radius: 2px;
+  background-color: rgba(255, 255, 255, 0.08);
 }
 
 .suit-hwmon-fill {
-  height: 6px;
-  border-radius: 3px;
-  background-color: #88c0d0;
+  height: 3px;
+  border-radius: 2px;
 }
 
 .suit-hwmon-sep {
   height: 1px;
-  margin: 6px 0;
-  background-color: rgba(255, 255, 255, 0.1);
+  margin: 0.4em 0;
+  background-color: rgba(255, 255, 255, 0.08);
 }
 
+.suit-hwmon-pill {
+  font-size: 0.72em;
+  font-weight: bold;
+  padding: 0.2em 0.7em;
+  border-radius: 1em;
+  background-color: rgba(236, 239, 244, 0.08);
+}
+
+.suit-hwmon-hero { spacing: 0.3em; }
+
+.suit-hwmon-hero-value {
+  font-size: 2.1em;
+  font-weight: bold;
+}
+
+.suit-hwmon-hero-unit {
+  padding-bottom: 0.35em;
+  color: rgba(236, 239, 244, 0.5);
+}
+
+.suit-hwmon-cams { spacing: 0.45em; }
+
+.suit-hwmon-cam {
+  padding: 0.35em 0;
+  border-radius: 0.6em;
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.suit-hwmon-cam-fps {
+  font-size: 1.15em;
+  font-weight: bold;
+}
+
+.suit-hwmon-cam-name {
+  font-size: 0.65em;
+  font-weight: bold;
+  color: rgba(236, 239, 244, 0.45);
+}
+
+.suit-hwmon-dim { color: rgba(236, 239, 244, 0.45); }
 .suit-hwmon-ok { color: #a3be8c; }
 .suit-hwmon-warn { color: #ebcb8b; }
 .suit-hwmon-bad { color: #bf616a; }
 
-.suit-hwmon-fill.suit-hwmon-ok { background-color: #a3be8c; }
+.suit-hwmon-pill.suit-hwmon-ok { background-color: rgba(163, 190, 140, 0.16); }
+.suit-hwmon-pill.suit-hwmon-warn { background-color: rgba(235, 203, 139, 0.16); }
+.suit-hwmon-pill.suit-hwmon-bad { background-color: rgba(191, 97, 106, 0.2); }
+
 .suit-hwmon-fill.suit-hwmon-warn { background-color: #ebcb8b; }
 .suit-hwmon-fill.suit-hwmon-bad { background-color: #bf616a; }
-
-.suit-hwmon-cams {
-  spacing: 16px;
-}

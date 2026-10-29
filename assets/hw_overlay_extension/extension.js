@@ -6,11 +6,47 @@ import Clutter from 'gi://Clutter';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-const POLL_SECONDS = 2;
 const FPS_LOW_WINDOW_MS = 60 * 1000;
-const BAR_WIDTH = 72;
 const MARGIN = 24;
 const AUTODARTS_CONFIG = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'autodarts', 'config.toml']);
+const CONFIG_DIR = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'suit']);
+const CONFIG_NAME = 'hw_overlay.json';
+
+// Mirrors core.desktop_service.HW_OVERLAY_DEFAULTS / HW_OVERLAY_CHOICES; SUIT writes the file.
+const DEFAULTS = {
+    style: 'card',
+    position: 'top-right',
+    size: 'medium',
+    accent: 'blue',
+    opacity: 70,
+    meters: true,
+    headings: true,
+    interval: 2,
+    metrics: {
+        cpu: true, temp: true, ram: true, gpu: true, disk: true, net: false, load: false, uptime: true,
+        ad_state: true, ad_fps: true, ad_cams: true, ad_proc: false,
+    },
+};
+const CHOICES = {
+    style: ['card', 'minimal'],
+    position: ['top-right', 'top-left', 'bottom-right', 'bottom-left'],
+    size: ['small', 'medium', 'large'],
+    accent: ['blue', 'teal', 'green', 'purple', 'white'],
+    interval: [1, 2, 5],
+};
+const ACCENTS = { blue: '#81a1c1', teal: '#88c0d0', green: '#a3be8c', purple: '#b48ead', white: '#d8dee9' };
+
+// [key label, has a meter]
+const SYSTEM_ROWS = {
+    cpu: ['CPU', true],
+    temp: ['TEMP', true],
+    ram: ['RAM', true],
+    gpu: ['GPU', true],
+    disk: ['DISK', true],
+    net: ['NET', false],
+    load: ['LOAD', false],
+    uptime: ['UPTIME', false],
+};
 const CPU_HWMON_NAMES = ['coretemp', 'k10temp', 'zenpower', 'cpu_thermal', 'soc_thermal'];
 
 const decoder = new TextDecoder();
@@ -110,6 +146,31 @@ function autodartsPorts() {
     return [...new Set([...ports, 3182, 3180])];
 }
 
+function loadConfig() {
+    let raw = {};
+    try {
+        raw = JSON.parse(readText(GLib.build_filenamev([CONFIG_DIR, CONFIG_NAME])) || '{}') ?? {};
+    } catch {
+        // Half-written or hand-edited file: fall back to the defaults
+    }
+    const cfg = { ...DEFAULTS, metrics: { ...DEFAULTS.metrics } };
+    for (const [key, choices] of Object.entries(CHOICES)) {
+        if (choices.includes(raw[key]))
+            cfg[key] = raw[key];
+    }
+    for (const key of ['meters', 'headings']) {
+        if (typeof raw[key] === 'boolean')
+            cfg[key] = raw[key];
+    }
+    if (typeof raw.opacity === 'number')
+        cfg.opacity = Math.max(0, Math.min(100, raw.opacity));
+    for (const key of Object.keys(cfg.metrics)) {
+        if (typeof raw.metrics?.[key] === 'boolean')
+            cfg.metrics[key] = raw.metrics[key];
+    }
+    return cfg;
+}
+
 function formatBytes(bytes) {
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
     let i = 0;
@@ -127,10 +188,11 @@ function formatUptime(seconds) {
     return d > 0 ? `${d}d ${h}h` : `${h}h ${String(m).padStart(2, '0')}m`;
 }
 
+// Hardware values stay neutral while healthy; only warn and bad are colored.
 function level(value, warn, bad) {
     if (value >= bad)
         return 'suit-hwmon-bad';
-    return value >= warn ? 'suit-hwmon-warn' : 'suit-hwmon-ok';
+    return value >= warn ? 'suit-hwmon-warn' : null;
 }
 
 function fpsLevel(fps, target) {
@@ -146,6 +208,11 @@ function setLevel(actor, cls) {
         actor.remove_style_class_name(c);
     if (cls)
         actor.add_style_class_name(cls);
+}
+
+function capitalize(text) {
+    const t = String(text);
+    return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
 function vbox(styleClass) {
@@ -169,23 +236,30 @@ export default class HwOverlayExtension extends Extension {
         this._adFailures = 0;
         this._session = new Soup.Session({ timeout: 2 });
         this._cancellable = new Gio.Cancellable();
+        this._config = loadConfig();
+        this._lastAd = undefined;
 
         this._buildUi();
+        this._watchConfig();
 
         this._monitorsId = Main.layoutManager.connect('monitors-changed', () => this._reposition());
-        this._widthId = this._box.connect('notify::width', () => this._reposition());
 
         this._tick();
-        this._timerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, POLL_SECONDS, () => {
-            this._tick();
-            return GLib.SOURCE_CONTINUE;
-        });
+        this._startTimer();
     }
 
     disable() {
         if (this._timerId) {
             GLib.source_remove(this._timerId);
             this._timerId = 0;
+        }
+        if (this._reloadId) {
+            GLib.source_remove(this._reloadId);
+            this._reloadId = 0;
+        }
+        if (this._configMonitor) {
+            this._configMonitor.cancel();
+            this._configMonitor = null;
         }
         this._cancellable?.cancel();
         this._session?.abort();
@@ -199,66 +273,186 @@ export default class HwOverlayExtension extends Extension {
         this._cancellable = null;
         this._sensors = null;
         this._rows = null;
+        this._ad = null;
+        this._lastAd = undefined;
+    }
+
+    _startTimer() {
+        if (this._timerId)
+            GLib.source_remove(this._timerId);
+        this._timerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, this._config.interval, () => {
+            this._tick();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    // SUIT saves hw_overlay.json by renaming a temp file over it, so watch the folder, not the file.
+    _watchConfig() {
+        GLib.mkdir_with_parents(CONFIG_DIR, 0o755);
+        try {
+            this._configMonitor = Gio.File.new_for_path(CONFIG_DIR).monitor_directory(
+                Gio.FileMonitorFlags.WATCH_MOVES, null);
+        } catch {
+            return;
+        }
+        this._configMonitor.connect('changed', (monitor, file, other) => {
+            if (file?.get_basename() !== CONFIG_NAME && other?.get_basename() !== CONFIG_NAME)
+                return;
+            if (this._reloadId)
+                return;
+            this._reloadId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+                this._reloadId = 0;
+                this._reload();
+                return GLib.SOURCE_REMOVE;
+            });
+        });
+    }
+
+    _reload() {
+        if (!this._box)
+            return;
+        const prevInterval = this._config.interval;
+        this._config = loadConfig();
+        this._box.destroy();
+        this._buildUi();
+        if (this._config.interval !== prevInterval)
+            this._startTimer();
+        this._tick();
+        if (this._lastAd !== undefined)
+            this._renderAutodarts(this._lastAd);
     }
 
     // ---------------------------------------------------------------- UI
 
     _buildUi() {
-        this._box = vbox('suit-hwmon');
+        const cfg = this._config;
+        const m = cfg.metrics;
+        this._box = vbox(`suit-hwmon suit-hwmon-${cfg.style} suit-hwmon-${cfg.size}`);
         this._box.reactive = false;
+        if (cfg.style === 'card')
+            this._box.set_style(`background-color: rgba(16, 18, 24, ${(cfg.opacity / 100).toFixed(2)});`);
         this._rows = {};
+        this._ad = {};
 
-        this._box.add_child(new St.Label({ text: 'SYSTEM', style_class: 'suit-hwmon-title' }));
-        this._addRow('cpu', 'CPU', true);
-        this._addRow('temp', 'TEMP', false);
-        this._addRow('ram', 'RAM', true);
-        if (this._sensors.gpuBusy || this._sensors.gpuTemp)
-            this._addRow('gpu', 'GPU', Boolean(this._sensors.gpuBusy));
-        this._addRow('disk', 'DISK', true);
-        this._addRow('net', 'NET', false);
-        this._addRow('load', 'LOAD', false);
-        this._addRow('up', 'UP', false);
+        const hasGpu = Boolean(this._sensors.gpuBusy || this._sensors.gpuTemp);
+        const system = Object.keys(SYSTEM_ROWS).filter(k => m[k] && (k !== 'gpu' || hasGpu));
+        const autodarts = ['ad_state', 'ad_fps', 'ad_cams', 'ad_proc'].some(k => m[k]);
 
-        this._box.add_child(new St.Widget({ style_class: 'suit-hwmon-sep' }));
-        this._box.add_child(new St.Label({ text: 'AUTODARTS', style_class: 'suit-hwmon-title' }));
-        this._addRow('engine', 'STATE', false);
-        this._camBox = new St.BoxLayout({ style_class: 'suit-hwmon-row suit-hwmon-cams' });
-        this._box.add_child(this._camBox);
-        this._camLabels = [];
-        this._addRow('avg', 'AVG', false);
-        this._addRow('proc', 'PROC', false);
+        if (system.length) {
+            if (cfg.headings)
+                this._box.add_child(new St.Label({ text: 'SYSTEM', style_class: 'suit-hwmon-heading' }));
+            for (const id of system)
+                this._addRow(id, SYSTEM_ROWS[id][0], SYSTEM_ROWS[id][1] && cfg.meters);
+        }
+        if (autodarts) {
+            if (system.length)
+                this._box.add_child(new St.Widget({ style_class: 'suit-hwmon-sep' }));
+            this._buildAutodarts();
+        }
+        this._box.visible = system.length > 0 || autodarts;
 
         Main.layoutManager._backgroundGroup.add_child(this._box);
+        this._box.connect('notify::width', () => this._reposition());
+        this._box.connect('notify::height', () => this._reposition());
         this._reposition();
     }
 
-    _addRow(id, key, withBar) {
-        const row = new St.BoxLayout({ style_class: 'suit-hwmon-row' });
-        row.add_child(new St.Label({ text: key, style_class: 'suit-hwmon-key', y_align: Clutter.ActorAlign.CENTER }));
-        const value = new St.Label({ text: '—', x_expand: true, y_align: Clutter.ActorAlign.CENTER });
-        row.add_child(value);
-        let fill = null;
-        if (withBar) {
-            const bar = new St.Widget({ style_class: 'suit-hwmon-bar', y_align: Clutter.ActorAlign.CENTER });
-            fill = new St.Widget({ style_class: 'suit-hwmon-fill', width: 0 });
-            bar.add_child(fill);
-            row.add_child(bar);
+    _buildAutodarts() {
+        const cfg = this._config;
+        const m = cfg.metrics;
+        const ad = this._ad;
+
+        if (cfg.headings || m.ad_state) {
+            const head = new St.BoxLayout({ style_class: 'suit-hwmon-line' });
+            if (cfg.headings)
+                head.add_child(new St.Label({ text: 'AUTODARTS', style_class: 'suit-hwmon-heading', y_align: Clutter.ActorAlign.CENTER }));
+            head.add_child(new St.Widget({ x_expand: true }));
+            if (m.ad_state) {
+                ad.version = new St.Label({ style_class: 'suit-hwmon-detail', y_align: Clutter.ActorAlign.CENTER });
+                ad.pill = new St.Label({ text: '…', style_class: 'suit-hwmon-pill suit-hwmon-dim', y_align: Clutter.ActorAlign.CENTER });
+                head.add_child(ad.version);
+                head.add_child(ad.pill);
+            }
+            this._box.add_child(head);
         }
-        this._box.add_child(row);
-        this._rows[id] = { value, fill };
+
+        if (m.ad_fps) {
+            const hero = new St.BoxLayout({ style_class: 'suit-hwmon-hero' });
+            ad.fps = new St.Label({ style_class: 'suit-hwmon-hero-value', y_align: Clutter.ActorAlign.END });
+            ad.fpsUnit = new St.Label({ text: 'fps', style_class: 'suit-hwmon-hero-unit', y_align: Clutter.ActorAlign.END });
+            // Replaces the number while there is nothing to measure (offline, standby)
+            ad.fpsNote = new St.Label({ text: '…', style_class: 'suit-hwmon-detail', y_align: Clutter.ActorAlign.CENTER });
+            hero.add_child(ad.fps);
+            hero.add_child(ad.fpsUnit);
+            hero.add_child(ad.fpsNote);
+            hero.add_child(new St.Widget({ x_expand: true }));
+            const info = vbox('suit-hwmon-hero-info');
+            info.y_align = Clutter.ActorAlign.CENTER;
+            ad.fpsLow = new St.Label({ style_class: 'suit-hwmon-detail', x_align: Clutter.ActorAlign.END });
+            ad.fpsRes = new St.Label({ style_class: 'suit-hwmon-detail', x_align: Clutter.ActorAlign.END });
+            info.add_child(ad.fpsLow);
+            info.add_child(ad.fpsRes);
+            hero.add_child(info);
+            this._box.add_child(hero);
+        }
+
+        if (m.ad_cams) {
+            ad.cams = new St.BoxLayout({ style_class: 'suit-hwmon-cams', x_expand: true });
+            ad.cams.layout_manager.homogeneous = true;
+            ad.cams.visible = false;
+            ad.camLabels = [];
+            this._box.add_child(ad.cams);
+        }
+
+        if (m.ad_proc)
+            this._addRow('proc', 'PROCESS', false);
     }
 
-    _set(id, text, cls = null, fraction = null) {
+    _addRow(id, key, withMeter) {
+        const item = vbox('suit-hwmon-item');
+        const line = new St.BoxLayout({ style_class: 'suit-hwmon-line' });
+        line.add_child(new St.Label({ text: key, style_class: 'suit-hwmon-key', y_align: Clutter.ActorAlign.CENTER }));
+        line.add_child(new St.Widget({ x_expand: true }));
+        const detail = new St.Label({ style_class: 'suit-hwmon-detail', y_align: Clutter.ActorAlign.CENTER });
+        const value = new St.Label({ text: '—', style_class: 'suit-hwmon-value', y_align: Clutter.ActorAlign.CENTER });
+        line.add_child(detail);
+        line.add_child(value);
+        item.add_child(line);
+
+        const row = { value, detail, bar: null, fill: null, fraction: null, cls: null };
+        if (withMeter) {
+            row.bar = new St.Widget({ style_class: 'suit-hwmon-bar', x_expand: true });
+            row.fill = new St.Widget({ style_class: 'suit-hwmon-fill', width: 0 });
+            row.bar.add_child(row.fill);
+            row.bar.connect('notify::width', () => this._applyMeter(row));
+            item.add_child(row.bar);
+        }
+        this._box.add_child(item);
+        this._rows[id] = row;
+    }
+
+    // `value` is the bright right-aligned figure, `detail` the dim context left of it.
+    _set(id, value, detail = '', cls = null, fraction = null) {
         const row = this._rows?.[id];
         if (!row)
             return;
-        row.value.text = text;
+        row.value.text = value;
+        row.detail.text = detail;
+        row.detail.visible = detail !== '';
         setLevel(row.value, cls);
-        if (row.fill && fraction !== null) {
-            const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
-            row.fill.width = Math.round(Math.max(0, Math.min(1, fraction)) * BAR_WIDTH * scale);
-            setLevel(row.fill, cls);
+        row.cls = cls;
+        if (fraction !== null) {
+            row.fraction = Math.max(0, Math.min(1, fraction));
+            this._applyMeter(row);
         }
+    }
+
+    _applyMeter(row) {
+        if (!row.fill || row.fraction === null)
+            return;
+        row.fill.width = Math.round(row.fraction * row.bar.width);
+        setLevel(row.fill, row.cls);
+        row.fill.set_style(row.cls ? null : `background-color: ${ACCENTS[this._config.accent]};`);
     }
 
     _reposition() {
@@ -268,9 +462,10 @@ export default class HwOverlayExtension extends Extension {
         const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
         const margin = MARGIN * scale;
         const panelHeight = Main.panel?.height ?? 0;
-        this._box.set_position(
-            Math.round(mon.x + mon.width - this._box.width - margin),
-            Math.round(mon.y + panelHeight + margin));
+        const [vertical, horizontal] = this._config.position.split('-');
+        const x = horizontal === 'left' ? mon.x + margin : mon.x + mon.width - this._box.width - margin;
+        const y = vertical === 'top' ? mon.y + panelHeight + margin : mon.y + mon.height - this._box.height - margin;
+        this._box.set_position(Math.round(x), Math.round(y));
     }
 
     // ---------------------------------------------------------- Sampling
@@ -278,13 +473,19 @@ export default class HwOverlayExtension extends Extension {
     _tick() {
         if (!this._box)
             return;
+        // CPU and network keep sampling while hidden so their deltas are ready when shown again.
         this._updateCpu();
-        this._updateTemps();
-        this._updateMemory();
-        this._updateDisk();
         this._updateNetwork();
-        this._updateLoad();
-        this._pollAutodarts();
+        if (this._rows.temp || this._rows.gpu)
+            this._updateTemps();
+        if (this._rows.ram)
+            this._updateMemory();
+        if (this._rows.disk)
+            this._updateDisk();
+        if (this._rows.load || this._rows.uptime)
+            this._updateLoad();
+        if (this._ad.pill || this._ad.fps || this._ad.cams || this._rows.proc)
+            this._pollAutodarts();
     }
 
     _updateCpu() {
@@ -294,14 +495,14 @@ export default class HwOverlayExtension extends Extension {
             return;
         const idle = nums[3] + (nums[4] || 0);
         const total = nums.reduce((a, b) => a + b, 0);
-        let freq = '';
-        const freqs = this._sensors.freqPaths.map(readInt).filter(v => v !== null);
-        if (freqs.length)
-            freq = `  ${(freqs.reduce((a, b) => a + b, 0) / freqs.length / 1e6).toFixed(2)} GHz`;
-        if (this._prevCpu) {
+        if (this._prevCpu && this._rows.cpu) {
+            let freq = '';
+            const freqs = this._sensors.freqPaths.map(readInt).filter(v => v !== null);
+            if (freqs.length)
+                freq = `${(freqs.reduce((a, b) => a + b, 0) / freqs.length / 1e6).toFixed(1)} GHz`;
             const dt = total - this._prevCpu.total;
             const usage = dt > 0 ? 100 * (1 - (idle - this._prevCpu.idle) / dt) : 0;
-            this._set('cpu', `${usage.toFixed(0).padStart(3)}%${freq}`, level(usage, 70, 90), usage / 100);
+            this._set('cpu', `${usage.toFixed(0)}%`, freq, level(usage, 70, 90), usage / 100);
         }
         this._prevCpu = { idle, total };
     }
@@ -311,24 +512,20 @@ export default class HwOverlayExtension extends Extension {
             const raw = readInt(this._sensors.cpuTemp);
             if (raw !== null) {
                 const c = raw / 1000;
-                this._set('temp', `${c.toFixed(0)} °C`, level(c, 75, 90));
+                this._set('temp', `${c.toFixed(0)}°C`, '', level(c, 75, 90), c / 100);
             }
         } else {
-            this._set('temp', 'n/a', null);
+            this._set('temp', 'n/a');
         }
 
         if (this._rows.gpu) {
-            const parts = [];
-            let cls = null;
             const busy = this._sensors.gpuBusy ? readInt(this._sensors.gpuBusy) : null;
-            if (busy !== null) {
-                parts.push(`${String(busy).padStart(3)}%`);
-                cls = level(busy, 70, 90);
-            }
             const t = this._sensors.gpuTemp ? readInt(this._sensors.gpuTemp) : null;
-            if (t !== null)
-                parts.push(`${(t / 1000).toFixed(0)} °C`);
-            this._set('gpu', parts.join('  ') || 'n/a', cls, busy !== null ? busy / 100 : null);
+            const temp = t !== null ? `${(t / 1000).toFixed(0)}°C` : '';
+            if (busy !== null)
+                this._set('gpu', `${busy}%`, temp, level(busy, 70, 90), busy / 100);
+            else
+                this._set('gpu', temp || 'n/a', '', t !== null ? level(t / 1000, 80, 95) : null, t !== null ? t / 100000 : null);
         }
     }
 
@@ -343,7 +540,7 @@ export default class HwOverlayExtension extends Extension {
             return;
         const used = info.MemTotal - (info.MemAvailable ?? info.MemFree);
         const pct = 100 * used / info.MemTotal;
-        this._set('ram', `${formatBytes(used)} / ${formatBytes(info.MemTotal)}`, level(pct, 80, 92), pct / 100);
+        this._set('ram', `${pct.toFixed(0)}%`, `${formatBytes(used)} of ${formatBytes(info.MemTotal)}`, level(pct, 80, 92), pct / 100);
     }
 
     _updateDisk() {
@@ -353,10 +550,10 @@ export default class HwOverlayExtension extends Extension {
             const free = info.get_attribute_uint64('filesystem::free');
             if (size > 0) {
                 const pct = 100 * (size - free) / size;
-                this._set('disk', `${formatBytes(size - free)} / ${formatBytes(size)}`, level(pct, 85, 95), pct / 100);
+                this._set('disk', `${pct.toFixed(0)}%`, `${formatBytes(free)} free`, level(pct, 85, 95), pct / 100);
             }
         } catch {
-            this._set('disk', 'n/a', null);
+            this._set('disk', 'n/a');
         }
     }
 
@@ -376,7 +573,7 @@ export default class HwOverlayExtension extends Extension {
             if (dt > 0) {
                 const down = Math.max(0, (rx - this._prevNet.rx) / dt);
                 const up = Math.max(0, (tx - this._prevNet.tx) / dt);
-                this._set('net', `↓ ${formatBytes(down)}/s  ↑ ${formatBytes(up)}/s`);
+                this._set('net', `↓ ${formatBytes(down)}/s`, `↑ ${formatBytes(up)}/s`);
             }
         }
         this._prevNet = { rx, tx, time: now };
@@ -385,10 +582,10 @@ export default class HwOverlayExtension extends Extension {
     _updateLoad() {
         const load = (readText('/proc/loadavg') || '').trim().split(/\s+/).slice(0, 3);
         if (load.length === 3)
-            this._set('load', load.join('  '));
+            this._set('load', load[0], `${load[1]} · ${load[2]}`);
         const up = parseFloat(readText('/proc/uptime') || '');
         if (Number.isFinite(up))
-            this._set('up', formatUptime(up));
+            this._set('uptime', formatUptime(up));
     }
 
     // --------------------------------------------------------- Autodarts
@@ -428,63 +625,88 @@ export default class HwOverlayExtension extends Extension {
     }
 
     _renderAutodarts(data) {
-        if (!data) {
-            this._set('engine', 'offline', 'suit-hwmon-bad');
-            this._setCams([], 0);
-            this._set('avg', '—');
-            this._set('proc', '—');
-            return;
+        this._lastAd = data;
+        const ad = this._ad;
+        const running = data?.camState?.isRunning ?? true;
+
+        if (ad.pill) {
+            let text = 'Offline', cls = 'suit-hwmon-bad';
+            if (data && !running)
+                [text, cls] = ['Standby', 'suit-hwmon-warn'];
+            else if (data)
+                [text, cls] = [capitalize(data.turn?.status ?? data.state?.status ?? 'running'), 'suit-hwmon-ok'];
+            ad.pill.text = text;
+            setLevel(ad.pill, cls);
+            const version = data?.status?.version ?? data?.version ?? '';
+            ad.version.text = version ? `v${String(version).replace(/^v/, '')}` : '';
         }
 
-        const version = data.status?.version ?? data.version ?? '';
-        const running = data.camState?.isRunning ?? true;
-        const state = running ? (data.turn?.status ?? data.state?.status ?? 'running') : 'standby';
-        this._set('engine', `${state}${version ? `  v${String(version).replace(/^v/, '')}` : ''}`,
-            running ? 'suit-hwmon-ok' : 'suit-hwmon-warn');
-
-        const target = data.config?.cam?.fps ?? 30;
-        const fps = (data.camStats ?? []).map(c => Number(c.fps) || 0);
-        this._setCams(fps, running ? target : null);
+        const target = data?.config?.cam?.fps ?? 30;
+        const fps = (data?.camStats ?? []).map(c => Number(c.fps) || 0);
+        if (ad.cams)
+            this._setCams(fps, running ? target : null);
 
         if (fps.length && running) {
             const avg = fps.reduce((a, b) => a + b, 0) / fps.length;
             const now = Date.now();
             this._fpsLows.push({ t: now, v: Math.min(...fps) });
             this._fpsLows = this._fpsLows.filter(s => now - s.t <= FPS_LOW_WINDOW_MS);
-            const low = Math.min(...this._fpsLows.map(s => s.v));
-            const cam = data.camStats[0];
-            const res = cam?.width ? `  ${cam.width}×${cam.height}` : '';
-            this._set('avg', `${avg.toFixed(1)} fps  1m low ${low}${res}`, fpsLevel(avg, target));
-        } else if (fps.length) {
+            if (ad.fps) {
+                const cam = data.camStats[0];
+                this._showFps(true);
+                ad.fps.text = avg.toFixed(1);
+                setLevel(ad.fps, fpsLevel(avg, target));
+                ad.fpsLow.text = `1m low ${Math.min(...this._fpsLows.map(s => s.v))}`;
+                ad.fpsRes.text = cam?.width ? `${cam.width}×${cam.height}` : '';
+            }
+        } else {
             // Standby streams black frames; keep those zeros out of the 1m low.
             this._fpsLows = [];
-            this._set('avg', 'cameras in standby', 'suit-hwmon-dim');
-        } else {
-            this._set('avg', running ? 'no cameras' : 'cameras paused', 'suit-hwmon-warn');
+            if (ad.fps) {
+                this._showFps(false);
+                if (!data)
+                    ad.fpsNote.text = 'Autodarts is not running';
+                else if (fps.length)
+                    ad.fpsNote.text = 'Cameras in standby';
+                else
+                    ad.fpsNote.text = running ? 'No cameras found' : 'Cameras paused';
+            }
         }
 
-        const stats = data.stats ?? {};
-        if (stats.cpuPercent !== undefined) {
-            const cpu = Number(stats.cpuPercent) || 0;
-            this._set('proc', `CPU ${cpu.toFixed(0)}%  RAM ${formatBytes(Number(stats.memoryBytes) || 0)}`);
-        }
+        const stats = data?.stats ?? {};
+        if (!data)
+            this._set('proc', '—');
+        else if (stats.cpuPercent !== undefined)
+            this._set('proc', `${(Number(stats.cpuPercent) || 0).toFixed(0)}%`, formatBytes(Number(stats.memoryBytes) || 0));
+    }
+
+    _showFps(live) {
+        const ad = this._ad;
+        ad.fps.visible = live;
+        ad.fpsUnit.visible = live;
+        ad.fpsLow.visible = live;
+        ad.fpsRes.visible = live;
+        ad.fpsNote.visible = !live;
     }
 
     _setCams(fps, target) {
-        if (this._camLabels.length !== fps.length + 1) {
-            this._camBox.destroy_all_children();
-            this._camLabels = [new St.Label({ text: 'CAMS', style_class: 'suit-hwmon-key' })];
-            this._camBox.add_child(this._camLabels[0]);
-            for (let i = 0; i < fps.length; i++) {
-                const lbl = new St.Label();
-                this._camLabels.push(lbl);
-                this._camBox.add_child(lbl);
-            }
+        const ad = this._ad;
+        if (ad.camLabels.length !== fps.length) {
+            ad.cams.destroy_all_children();
+            ad.camLabels = fps.map((_, i) => {
+                const tile = vbox('suit-hwmon-cam');
+                tile.x_expand = true;
+                const lbl = new St.Label({ style_class: 'suit-hwmon-cam-fps', x_align: Clutter.ActorAlign.CENTER });
+                tile.add_child(lbl);
+                tile.add_child(new St.Label({ text: `CAM ${i + 1}`, style_class: 'suit-hwmon-cam-name', x_align: Clutter.ActorAlign.CENTER }));
+                ad.cams.add_child(tile);
+                return lbl;
+            });
         }
-        this._camBox.visible = fps.length > 0;
+        ad.cams.visible = fps.length > 0;
         fps.forEach((v, i) => {
-            const lbl = this._camLabels[i + 1];
-            lbl.text = `#${i + 1} ${String(v).padStart(2)}`;
+            const lbl = ad.camLabels[i];
+            lbl.text = target === null ? '—' : String(Math.round(v));
             setLevel(lbl, target === null ? 'suit-hwmon-dim' : fpsLevel(v, target));
         });
     }

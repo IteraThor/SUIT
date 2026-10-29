@@ -388,6 +388,18 @@ class SystemService:
     def set_hw_overlay(enabled: bool) -> tuple[bool, str]:
         return DesktopService.set_hw_overlay(enabled)
 
+    @staticmethod
+    def hw_overlay_needs_relogin() -> bool:
+        return DesktopService.hw_overlay_needs_relogin()
+
+    @staticmethod
+    def get_hw_overlay_config() -> dict:
+        return DesktopService.get_hw_overlay_config()
+
+    @staticmethod
+    def save_hw_overlay_config(cfg: dict) -> dict:
+        return DesktopService.save_hw_overlay_config(cfg)
+
     # --- BootService delegation ---
     @staticmethod
     def is_fast_boot_enabled() -> bool:
