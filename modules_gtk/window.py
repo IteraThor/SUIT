@@ -22,6 +22,9 @@ CAMERA_PAGES = ("camera_controls", "camera_optimizer")
 # Longest the window stays open after a close request while a Camera Optimizer job (optimize/restore) runs
 JOB_WAIT_S = 360.0
 
+# Input-free time before the background OpenCV import starts (it briefly freezes the UI)
+PREWARM_QUIET_S = 1.5
+
 class SuitWindow(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="SUIT for Fedora")
@@ -166,7 +169,31 @@ class SuitWindow(Adw.ApplicationWindow):
 
     def _start_background_prewarm(self):
         """Asynchronously pre-warm heavy dependencies (OpenCV, GStreamer, CameraFocusView)
-        so that tapping the Camera Focus menu card is instantaneous on the first click."""
+        so that tapping the Camera Focus menu card is instantaneous on the first click.
+
+        Importing OpenCV holds the GIL for ~0.4 s, which freezes the UI even from a thread,
+        so it waits until the user has left the window alone for PREWARM_QUIET_S."""
+        quiet = threading.Event()
+        last_input = [time.monotonic()]
+
+        def _on_event(_ctl, _event):
+            last_input[0] = time.monotonic()
+            return False
+
+        ctl = Gtk.EventControllerLegacy()
+        ctl.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        ctl.connect("event", _on_event)
+        self.add_controller(ctl)
+
+        def _check_quiet():
+            if time.monotonic() - last_input[0] < PREWARM_QUIET_S:
+                return True
+            self.remove_controller(ctl)
+            quiet.set()
+            return False
+
+        GLib.timeout_add(250, _check_quiet)
+
         def _bg_prewarm():
             time.sleep(0.4)  # Let main menu render smoothly first
             # Auto-heal boot services (e.g. after CLI git pull); independent of OpenCV availability
@@ -177,6 +204,7 @@ class SuitWindow(Adw.ApplicationWindow):
             except Exception as e:
                 logger.debug("Background service heal notice: %s", e)
 
+            quiet.wait()
             try:
                 # Pre-import heavy native C extensions in background thread
                 import cv2  # noqa: F401

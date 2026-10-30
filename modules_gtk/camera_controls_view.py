@@ -133,6 +133,7 @@ class CameraControlsPage(Adw.NavigationPage):
         self._rate = (0, 0, time.time(), 0)  # (frame_count, ident, time, fps)
         self._overlays = {"zebra": False, "hist": False, "mask": False}
         self._masks: Dict[tuple, Optional[np.ndarray]] = {}
+        self._zebra: Dict[tuple, np.ndarray] = {}
         self._tag_text = ""
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1015,7 +1016,7 @@ class CameraControlsPage(Adw.NavigationPage):
         live.stop_all()
 
     def _mask(self, dev: str, shape: tuple, full: tuple) -> Optional[np.ndarray]:
-        """Board area of the scores at the size of the shown picture (only known at 1280x960)."""
+        """255 outside the board area of the scores, at the size of the shown picture (only known at 1280x960)."""
         key = (dev, shape)
         if key not in self._masks:
             m = None
@@ -1023,9 +1024,17 @@ class CameraControlsPage(Adw.NavigationPage):
                 H = board.load_homography(dev, 1280, 960)
                 if H is not None:
                     full_mask = board.board_mask_image(H, full).astype(np.uint8)
-                    m = cv2.resize(full_mask, (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+                    inside = cv2.resize(full_mask, (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+                    m = np.where(inside, 0, 255).astype(np.uint8)
             self._masks[key] = m
         return self._masks[key]
+
+    def _stripes(self, shape: tuple) -> np.ndarray:
+        """255 on the zebra stripes, for a picture of this size (built once: it runs every frame)."""
+        if shape not in self._zebra:
+            yy, xx = np.indices(shape)
+            self._zebra = {shape: np.where(((xx + yy) // 6) % 2 == 0, 255, 0).astype(np.uint8)}
+        return self._zebra[shape]
 
     def _compose(self, dev: str, bgr: np.ndarray) -> np.ndarray:
         """The picture with the overlays the user switched on (zebra, mask, histogram)."""
@@ -1034,13 +1043,14 @@ class CameraControlsPage(Adw.NavigationPage):
         s = 960 / max(bgr.shape[:2])
         img = cv2.resize(bgr, None, fx=s, fy=s, interpolation=cv2.INTER_AREA) if s < 1 else bgr.copy()
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # cv2 rather than numpy boolean indexing: this runs on the UI thread for every frame
         if self._overlays["mask"]:
-            m = self._mask(dev, img.shape[:2], bgr.shape[:2])
-            if m is not None:
-                img[~m] = (img[~m] * 0.3).astype(np.uint8)
+            outside = self._mask(dev, img.shape[:2], bgr.shape[:2])
+            if outside is not None:
+                cv2.copyTo(cv2.convertScaleAbs(img, alpha=0.3), outside, img)
         if self._overlays["zebra"]:
-            yy, xx = np.indices(gray.shape)
-            img[(gray >= 250) & (((xx + yy) // 6) % 2 == 0)] = (0, 0, 255)
+            hot = cv2.threshold(gray, 249, 255, cv2.THRESH_BINARY)[1]
+            cv2.copyTo(np.full_like(img, (0, 0, 255)), cv2.bitwise_and(hot, self._stripes(gray.shape)), img)
         if self._overlays["hist"]:
             h = cv2.calcHist([gray], [0], None, [64], [0, 256]).ravel()
             h = np.sqrt(h / max(h.max(), 1))
