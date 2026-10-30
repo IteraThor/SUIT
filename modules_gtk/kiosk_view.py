@@ -8,231 +8,131 @@ from core.kiosk_service import KioskService
 from core.light_service import LightService
 from core.system_service import SystemService
 from modules_gtk.async_utils import run_async
+from modules_gtk.camera_widgets import segmented
 
-from modules_gtk.ui_helpers import build_page_shell
+from modules_gtk.ui_helpers import build_page_shell, create_button_with_icon
 
 logger = get_logger("kiosk_view")
+
+DEFAULT_URL = "https://play.autodarts.com/"
+LIGHT_TYPES = [("wled", "WLED"), ("tasmota", "Tasmota"), ("shelly", "Shelly")]
+
 
 class KioskView(Adw.NavigationPage):
     def __init__(self, window):
         super().__init__(title="Kiosk Mode", tag="kiosk")
         self.window = window
+        self._loading_light_config = False
+        self._light_type = "wled"
 
         scrolled, main_box = build_page_shell()
         self.set_child(scrolled)
 
-        # 1. Fullscreen Kiosk Group
-        grp_kiosk = Adw.PreferencesGroup(
-            title="Fullscreen Kiosk"
-        )
+        # Kiosk: where it opens and when, with Launch in the group header
+        grp_kiosk = Adw.PreferencesGroup(title="Kiosk")
+        self.btn_launch = create_button_with_icon(
+            "media-playback-start-symbolic", "Launch", "suggested-action compact-btn", height=36)
+        self.btn_launch.set_tooltip_text("Open the kiosk session now")
+        self.btn_launch.connect("clicked", self._launch_kiosk)
+        grp_kiosk.set_header_suffix(self.btn_launch)
         main_box.append(grp_kiosk)
 
-        # URL Entry Row with Reset Button
-        self.row_url = Adw.EntryRow(title="Target URL")
-        self.row_url.set_text("https://play.autodarts.com/")
-
-        btn_reset_url = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
+        self.row_url = Adw.EntryRow(title="Address")
+        self.row_url.set_text(DEFAULT_URL)
+        btn_reset_url = Gtk.Button.new_from_icon_name("edit-undo-symbolic")
         btn_reset_url.set_valign(Gtk.Align.CENTER)
         btn_reset_url.add_css_class("flat")
-        btn_reset_url.set_tooltip_text("Reset to default URL")
-        btn_reset_url.connect("clicked", lambda b: self.row_url.set_text("https://play.autodarts.com/"))
+        btn_reset_url.set_tooltip_text("Reset to play.autodarts.com")
+        btn_reset_url.connect("clicked", lambda b: self.row_url.set_text(DEFAULT_URL))
         self.row_url.add_suffix(btn_reset_url)
         grp_kiosk.add(self.row_url)
 
-        # Autostart Toggle Switch
-        self.row_autostart = Adw.SwitchRow(
-            title="Autostart on Boot",
-            subtitle="Launch kiosk automatically when Fedora logs in."
-        )
+        self.row_autostart = Adw.SwitchRow(title="Start on Login")
         self.row_autostart.connect("notify::active", self._on_autostart_toggled)
         grp_kiosk.add(self.row_autostart)
 
-        # Launch Kiosk Touch Button
-        self.btn_launch = Gtk.Button(label="Launch Kiosk Session")
-        self.btn_launch.add_css_class("suggested-action")
-        self.btn_launch.add_css_class("touch-btn")
-        self.btn_launch.set_size_request(-1, 44)
-        self.btn_launch.connect("clicked", self._launch_kiosk)
-        main_box.append(self.btn_launch)
+        # In-page controls: the Chromium extension that adds power and config buttons to Autodarts
+        self.grp_ext = Adw.PreferencesGroup(title="In-Page Controls")
+        main_box.append(self.grp_ext)
 
-        # 2. Browser Integration Group with Lock Overlay
-        self.overlay_browser = Gtk.Overlay()
-        main_box.append(self.overlay_browser)
+        self.row_chromium = Adw.ActionRow(title="Chromium Required", subtitle="The in-page controls run in Chromium.")
+        self.btn_install_chromium = Gtk.Button(label="Install")
+        self.btn_install_chromium.set_valign(Gtk.Align.CENTER)
+        self.btn_install_chromium.add_css_class("suggested-action")
+        self.btn_install_chromium.add_css_class("compact-btn")
+        self.btn_install_chromium.connect("clicked", self._on_install_chromium_clicked)
+        self.row_chromium.add_suffix(self.btn_install_chromium)
+        self.row_chromium.set_visible(False)
+        self.grp_ext.add(self.row_chromium)
 
-        self.grp_ext = Adw.PreferencesGroup(
-            title="Browser Integration",
-            description="Adds controls and illumination toggles directly into the Autodarts web interface in Chromium."
-        )
-        self.overlay_browser.set_child(self.grp_ext)
-
-        self.row_ext = Adw.ActionRow(
-            title="In-Page Controls in Chromium",
-            subtitle="Checking installation status..."
-        )
-        img_ext = Gtk.Image.new_from_icon_name("web-browser-symbolic")
-        img_ext.set_pixel_size(24)
-        self.row_ext.add_prefix(img_ext)
-
-        self.lbl_ext_status = Gtk.Label(label="Not Installed")
-        self.lbl_ext_status.set_valign(Gtk.Align.CENTER)
-        self.row_ext.add_suffix(self.lbl_ext_status)
-
-        self.btn_ext_toggle = Gtk.Button(label="Install to Chromium")
+        self.row_ext = Adw.ActionRow(title="Chromium Extension", subtitle="Checking...")
+        self.btn_ext_toggle = Gtk.Button(label="Install")
         self.btn_ext_toggle.set_valign(Gtk.Align.CENTER)
         self.btn_ext_toggle.add_css_class("compact-btn")
-        self.btn_ext_toggle.add_css_class("suggested-action")
         self.btn_ext_toggle.connect("clicked", self._on_ext_toggle_clicked)
         self.row_ext.add_suffix(self.btn_ext_toggle)
         self.grp_ext.add(self.row_ext)
 
-        # Compact expander row for light controls inside Browser Integration
-        self.expander_light = Adw.ExpanderRow(
-            title="Dartboard Light Controls"
-        )
-        img_light = Gtk.Image.new_from_icon_name("display-brightness-symbolic")
-        img_light.set_pixel_size(24)
-        self.expander_light.add_prefix(img_light)
+        # Dartboard light: adds a light toggle to the in-page controls
+        self.grp_light = Adw.PreferencesGroup(title="Dartboard Light")
+        main_box.append(self.grp_light)
 
-        self.switch_light = Gtk.Switch()
-        self.switch_light.set_valign(Gtk.Align.CENTER)
-        self.switch_light.connect("notify::active", self._on_light_enable_toggled)
-        self.expander_light.add_suffix(self.switch_light)
+        self.row_light_enable = Adw.SwitchRow(title="Light Button")
+        self.row_light_enable.connect("notify::active", self._on_light_enable_toggled)
+        self.grp_light.add(self.row_light_enable)
 
-        # Alias for backwards compatibility with tests and callers
-        self.row_light_enable = self.switch_light
+        self.row_light_device = Adw.ActionRow(title="Device")
+        self.row_light_type = segmented(LIGHT_TYPES, self._light_type, self._on_light_type_changed)
+        self.row_light_device.add_suffix(self.row_light_type)
+        self.grp_light.add(self.row_light_device)
 
-        # Single unified sub-row: Type DropDown + IP Entry + ON/OFF test buttons
         self.row_light_ip = Adw.EntryRow(title="IP Address")
         self.row_light_ip.connect("notify::text", self._on_light_ip_changed)
+        self.grp_light.add(self.row_light_ip)
 
-        self.light_type_options = [
-            "WLED",
-            "Tasmota",
-            "Shelly"
-        ]
-        self.row_light_type = Gtk.DropDown.new_from_strings(self.light_type_options)
-        self.row_light_type.set_valign(Gtk.Align.CENTER)
-        self.row_light_type.set_margin_end(6)
-        self.row_light_type.connect("notify::selected", self._on_light_type_changed)
-        self.row_light_ip.add_prefix(self.row_light_type)
-
+        self.row_light_test = Adw.ActionRow(title="Test")
         box_test_btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         box_test_btns.set_valign(Gtk.Align.CENTER)
-
-        self.btn_light_on = Gtk.Button(label="Turn ON")
-        self.btn_light_on.add_css_class("suggested-action")
-        self.btn_light_on.add_css_class("compact-btn")
-        self.btn_light_on.set_valign(Gtk.Align.CENTER)
-        self.btn_light_on.connect("clicked", lambda b: self._test_light_power(True))
-        box_test_btns.append(self.btn_light_on)
-
-        self.btn_light_off = Gtk.Button(label="Turn OFF")
-        self.btn_light_off.add_css_class("secondary-btn")
-        self.btn_light_off.add_css_class("compact-btn")
-        self.btn_light_off.set_valign(Gtk.Align.CENTER)
-        self.btn_light_off.connect("clicked", lambda b: self._test_light_power(False))
-        box_test_btns.append(self.btn_light_off)
-
-        # Aliases for backwards compatibility with tests
-        self.btn_light_test = self.btn_light_on
-        self.row_light_test = self.expander_light
-
-        self.row_light_ip.add_suffix(box_test_btns)
-        self.expander_light.add_row(self.row_light_ip)
-
-        self.grp_ext.add(self.expander_light)
-
-        # Floating lock card overlay shown when Chromium is not installed
-        self.box_chromium_lock = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        self.box_chromium_lock.set_halign(Gtk.Align.CENTER)
-        self.box_chromium_lock.set_valign(Gtk.Align.CENTER)
-        self.box_chromium_lock.add_css_class("browser-integration-lock-overlay")
-
-        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        header_box.set_halign(Gtk.Align.CENTER)
-        img_lock = Gtk.Image.new_from_icon_name("web-browser-symbolic")
-        img_lock.set_pixel_size(24)
-        header_box.append(img_lock)
-
-        lbl_lock_title = Gtk.Label(label="Chromium Required")
-        lbl_lock_title.add_css_class("title")
-        header_box.append(lbl_lock_title)
-        self.box_chromium_lock.append(header_box)
-
-        lbl_lock_desc = Gtk.Label(
-            label="Chromium needs to be installed to use In-Page Controls & Dartboard Lighting."
-        )
-        lbl_lock_desc.add_css_class("subtitle")
-        lbl_lock_desc.set_justify(Gtk.Justification.CENTER)
-        lbl_lock_desc.set_wrap(True)
-        lbl_lock_desc.set_max_width_chars(42)
-        self.box_chromium_lock.append(lbl_lock_desc)
-
-        self.btn_install_chromium = Gtk.Button()
-        self.btn_install_chromium.add_css_class("suggested-action")
-        self.btn_install_chromium.add_css_class("compact-btn")
-        self.btn_install_chromium.set_halign(Gtk.Align.CENTER)
-        self.btn_install_chromium.set_size_request(180, 42)
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        btn_box.set_halign(Gtk.Align.CENTER)
-        btn_box.append(Gtk.Image.new_from_icon_name("software-install-symbolic"))
-        btn_box.append(Gtk.Label(label="Install Chromium"))
-        self.btn_install_chromium.set_child(btn_box)
-        self.btn_install_chromium.connect("clicked", self._on_install_chromium_clicked)
-        self.box_chromium_lock.append(self.btn_install_chromium)
-
-        self.overlay_browser.add_overlay(self.box_chromium_lock)
+        self.btn_light_on = Gtk.Button(label="On")
+        self.btn_light_off = Gtk.Button(label="Off")
+        for btn, target in ((self.btn_light_on, True), (self.btn_light_off, False)):
+            btn.add_css_class("secondary-btn")
+            btn.add_css_class("compact-btn")
+            btn.set_size_request(64, -1)
+            btn.connect("clicked", lambda b, t=target: self._test_light_power(t))
+            box_test_btns.append(btn)
+        self.row_light_test.add_suffix(box_test_btns)
+        self.grp_light.add(self.row_light_test)
 
         self.connect("map", lambda w: self.refresh())
 
     def refresh(self):
-        is_enabled = KioskService.is_autostart_enabled()
-        self.row_autostart.set_active(is_enabled)
+        self.row_autostart.set_active(KioskService.is_autostart_enabled())
 
-        is_ext_installed = KioskService.is_permanent_extension_installed()
-        if is_ext_installed:
-            self.lbl_ext_status.set_label("Active")
-            self.lbl_ext_status.remove_css_class("dim-label")
-            self.lbl_ext_status.add_css_class("status-pill-running")
-            self.btn_ext_toggle.set_label("Remove from Chromium")
+        if KioskService.is_permanent_extension_installed():
+            self.row_ext.set_subtitle("Active in Chromium.")
+            self.btn_ext_toggle.set_label("Remove")
             self.btn_ext_toggle.remove_css_class("suggested-action")
             self.btn_ext_toggle.add_css_class("secondary-btn")
-            self.row_ext.set_subtitle("Extension is permanently active in Chromium.")
         else:
-            self.lbl_ext_status.set_label("Not Installed")
-            self.lbl_ext_status.remove_css_class("status-pill-running")
-            self.lbl_ext_status.add_css_class("dim-label")
-            self.btn_ext_toggle.set_label("Install to Chromium")
+            self.row_ext.set_subtitle("Adds power, restart and board config to the Autodarts header.")
+            self.btn_ext_toggle.set_label("Install")
             self.btn_ext_toggle.remove_css_class("secondary-btn")
             self.btn_ext_toggle.add_css_class("suggested-action")
-            self.row_ext.set_subtitle("Load shutdown, restart, and session controls on all Chromium launches.")
 
-        # Check Chromium installation status
-        has_chrom = SystemService.is_app_installed("chromium")
-        if not has_chrom:
-            self.box_chromium_lock.set_visible(True)
-            self.grp_ext.set_sensitive(False)
-            self.grp_ext.add_css_class("dimmed-overlay-target")
-        else:
-            self.box_chromium_lock.set_visible(False)
-            self.grp_ext.set_sensitive(True)
-            self.grp_ext.remove_css_class("dimmed-overlay-target")
+        has_chromium = SystemService.is_app_installed("chromium")
+        self.row_chromium.set_visible(not has_chromium)
+        self.row_ext.set_sensitive(has_chromium)
+        self.grp_light.set_sensitive(has_chromium)
 
-        # Load light config
         cfg = LightService.read_config()
         self._loading_light_config = True
         try:
             enabled = cfg.get("light_enabled", False)
             self.row_light_enable.set_active(enabled)
-            self.expander_light.set_enable_expansion(enabled)
-            self.expander_light.set_expanded(enabled)
             dev_type = cfg.get("light_device_type", "wled")
-            sel_type = 0
-            if dev_type in ("tasmota", "smart_plug"):
-                sel_type = 1
-            elif dev_type == "shelly":
-                sel_type = 2
-            self.row_light_type.set_selected(sel_type)
+            self._light_type = "tasmota" if dev_type == "smart_plug" else dev_type
+            self.row_light_type.set_active_name(self._light_type)
             self.row_light_ip.set_text(cfg.get("light_ip", ""))
             self._update_light_ui_sensitivity(enabled)
         finally:
@@ -240,60 +140,39 @@ class KioskView(Adw.NavigationPage):
 
     def _on_install_chromium_clicked(self, btn):
         btn.set_sensitive(False)
+        btn.set_label("Installing...")
         self.window.show_toast("Installing Chromium in background...")
-
-        spinner = Gtk.Spinner()
-        spinner.start()
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        box.set_halign(Gtk.Align.CENTER)
-        box.append(spinner)
-        box.append(Gtk.Label(label="Installing..."))
-        btn.set_child(box)
-
-        def worker():
-            return SystemService.install_chromium()
 
         def on_done(res):
             success, msg = res
             self.window.show_toast(msg)
-            btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            btn_box.set_halign(Gtk.Align.CENTER)
-            btn_box.append(Gtk.Image.new_from_icon_name("software-install-symbolic"))
-            btn_box.append(Gtk.Label(label="Install Chromium"))
-            btn.set_child(btn_box)
+            btn.set_label("Install")
             btn.set_sensitive(True)
             self.refresh()
 
-        run_async(worker, on_done=on_done)
+        run_async(SystemService.install_chromium, on_done=on_done)
 
     def _update_light_ui_sensitivity(self, enabled: bool):
-        self.row_light_type.set_sensitive(enabled)
-        self.row_light_ip.set_sensitive(enabled)
-        self.btn_light_on.set_sensitive(enabled)
-        self.btn_light_off.set_sensitive(enabled)
+        for row in (self.row_light_device, self.row_light_ip, self.row_light_test):
+            row.set_sensitive(enabled)
 
     def _save_light_settings(self):
-        if getattr(self, "_loading_light_config", False):
+        if self._loading_light_config:
             return
-        enabled = self.row_light_enable.get_active()
-        sel_idx = self.row_light_type.get_selected()
-        type_keys = ["wled", "tasmota", "shelly"]
-        dev_type = type_keys[sel_idx] if 0 <= sel_idx < len(type_keys) else "wled"
-        ip = self.row_light_ip.get_text().strip()
-        LightService.save_config(enabled=enabled, device_type=dev_type, ip=ip)
+        LightService.save_config(enabled=self.row_light_enable.get_active(), device_type=self._light_type,
+                                 ip=self.row_light_ip.get_text().strip())
         KioskService.sync_extension_files()
 
     def _on_light_enable_toggled(self, row, param):
         enabled = row.get_active()
-        self.expander_light.set_enable_expansion(enabled)
-        self.expander_light.set_expanded(enabled)
         self._update_light_ui_sensitivity(enabled)
         self._save_light_settings()
-        if not getattr(self, "_loading_light_config", False):
+        if not self._loading_light_config:
             msg = "Dartboard light button enabled." if enabled else "Dartboard light button disabled."
             self.window.show_toast(msg)
 
-    def _on_light_type_changed(self, row, param):
+    def _on_light_type_changed(self, dev_type):
+        self._light_type = dev_type
         self._save_light_settings()
 
     def _on_light_ip_changed(self, row, param):
@@ -305,14 +184,10 @@ class KioskView(Adw.NavigationPage):
             self.window.show_toast("Please enter a device IP address first.")
             return
 
-        sel_idx = self.row_light_type.get_selected()
-        type_keys = ["wled", "tasmota", "shelly"]
-        dev_type = type_keys[sel_idx] if 0 <= sel_idx < len(type_keys) else "wled"
-
+        dev_type = self._light_type
         self.btn_light_on.set_sensitive(False)
         self.btn_light_off.set_sensitive(False)
-        action_name = "ON" if target_on else "OFF"
-        self.row_light_test.set_subtitle(f"Sending power {action_name} command...")
+        self.row_light_test.set_subtitle("Sending...")
 
         def worker():
             return LightService.set_power(target_on, config={"light_ip": ip, "light_device_type": dev_type, "light_port": 80})
@@ -322,9 +197,8 @@ class KioskView(Adw.NavigationPage):
             self.btn_light_off.set_sensitive(True)
             ok, is_on, msg = res
             if ok:
-                state_str = "ON" if is_on else "OFF"
-                self.row_light_test.set_subtitle(f"Connected: Light is currently {state_str}")
-                self.window.show_toast(f"Dartboard light turned {state_str}")
+                state_str = "on" if is_on else "off"
+                self.row_light_test.set_subtitle(f"Connected. Light is {state_str}.")
             else:
                 self.row_light_test.set_subtitle(f"Error: {msg}")
                 self.window.show_toast(f"Error: {msg}")
@@ -338,8 +212,7 @@ class KioskView(Adw.NavigationPage):
         def worker():
             if is_installed:
                 return KioskService.uninstall_permanent_extension()
-            else:
-                return KioskService.install_permanent_extension()
+            return KioskService.install_permanent_extension()
 
         def on_done(res):
             btn.set_sensitive(True)
@@ -349,20 +222,16 @@ class KioskView(Adw.NavigationPage):
 
         run_async(worker, on_done=on_done)
 
-    def _get_browser_binary(self) -> str:
-        return KioskService.resolve_browser()
-
     def _on_autostart_toggled(self, row, param):
         active = row.get_active()
-        url = self.row_url.get_text().strip() or "https://play.autodarts.com/"
-        browser = self._get_browser_binary()
-        KioskService.set_autostart(active, url=url, browser=browser, enable_controls=True)
+        url = self.row_url.get_text().strip() or DEFAULT_URL
+        KioskService.set_autostart(active, url=url, browser=KioskService.resolve_browser(), enable_controls=True)
         msg = "Kiosk autostart enabled." if active else "Kiosk autostart disabled."
         self.window.show_toast(msg)
 
     def _launch_kiosk(self, btn):
-        url = self.row_url.get_text().strip() or "https://play.autodarts.com/"
-        browser = self._get_browser_binary()
+        url = self.row_url.get_text().strip() or DEFAULT_URL
+        browser = KioskService.resolve_browser()
         KioskService.ensure_native_messaging_host()
         KioskService.clean_stale_singleton_locks()
 
