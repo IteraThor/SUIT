@@ -267,7 +267,27 @@ class SystemView(Adw.NavigationPage):
         self.row_chromium.add_suffix(self.box_chromium)
         self.grp_system.add(self.row_chromium)
 
-        # 3. Advanced Users Submenu Row
+        # 3. Discord (IteraThor community, AutoGlow and SUIT news)
+        self.row_discord = Adw.ActionRow(
+            title="Discord",
+            subtitle="Join the official Autodarts and IteraThor community servers for quick support and updates."
+        )
+        self.box_discord = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.box_discord.set_valign(Gtk.Align.CENTER)
+        self.lbl_discord_badge = Gtk.Label(label="Checking...")
+        self.lbl_discord_badge.add_css_class("status-pill-checking")
+        self.btn_discord = create_button_with_icon(
+            "software-update-available-symbolic",
+            "Install Discord",
+            "suggested-action compact-btn",
+            height=36
+        )
+        self.btn_discord.connect("clicked", self._on_install_discord_clicked)
+        self.box_discord.append(self.lbl_discord_badge)
+        self.row_discord.add_suffix(self.box_discord)
+        self.grp_extras.add(self.row_discord)
+
+        # 4. Advanced Users Submenu Row
         self.row_advanced = Adw.ActionRow(
             title="Advanced Users",
             subtitle="Tailscale remote VPN and Android Darts Scorer app."
@@ -296,6 +316,7 @@ class SystemView(Adw.NavigationPage):
             seahorse_installed = SystemService.is_seahorse_installed()
             bloat = SystemService.get_installed_bloatware()
             has_chrom = SystemService.get_software_status().get("chromium", False)
+            has_discord = SystemService.is_discord_installed()
             vis_status = SystemService.get_visuals_status()
             is_touch = SystemService.is_touch_scaling_enabled()
             fast_boot = SystemService.get_boot_tweak_counts()
@@ -306,6 +327,7 @@ class SystemView(Adw.NavigationPage):
                 "keyring": (is_blank, reason, seahorse_installed),
                 "bloat": bloat,
                 "chromium": has_chrom,
+                "discord": has_discord,
                 "visuals": vis_status,
                 "touch": is_touch,
                 "fast_boot": (fast_boot, boot_time),
@@ -461,6 +483,19 @@ class SystemView(Adw.NavigationPage):
                     self.btn_chromium.set_sensitive(True)
                     self.box_chromium.append(self.btn_chromium)
                     self.row_chromium.set_subtitle("Required for board display and kiosk.")
+
+                # 7. Extras: Discord Row
+                while child := self.box_discord.get_first_child():
+                    self.box_discord.remove(child)
+
+                if data["discord"]:
+                    self.lbl_discord_badge.set_label("Installed")
+                    self.lbl_discord_badge.remove_css_class("status-pill-checking")
+                    self.lbl_discord_badge.add_css_class("status-pill-running")
+                    self.box_discord.append(self.lbl_discord_badge)
+                else:
+                    self.btn_discord.set_sensitive(True)
+                    self.box_discord.append(self.btn_discord)
 
                 self.queue_draw()
             finally:
@@ -673,6 +708,18 @@ class SystemView(Adw.NavigationPage):
             self.refresh()
 
         run_async(worker, on_done=on_done)
+
+    def _on_install_discord_clicked(self, btn):
+        self.window.show_toast("Installing Discord in background...")
+        btn.set_sensitive(False)
+
+        def on_done(res):
+            btn.set_sensitive(True)
+            success, msg = res
+            self.window.show_toast(msg)
+            self.refresh()
+
+        run_async(SystemService.install_discord, on_done=on_done)
 
     def _on_advanced_clicked(self, row):
         if not self.advanced_view:

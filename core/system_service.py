@@ -174,6 +174,14 @@ class SystemService:
     def install_chromium(cls) -> tuple[bool, str]:
         return DebloatService.install_chromium.__func__(cls)
 
+    @staticmethod
+    def is_discord_installed() -> bool:
+        return DebloatService.is_discord_installed()
+
+    @classmethod
+    def install_discord(cls) -> tuple[bool, str]:
+        return DebloatService.install_discord.__func__(cls)
+
     # --- TailscaleService delegation ---
     @staticmethod
     def install_tailscale() -> tuple[bool, str]:

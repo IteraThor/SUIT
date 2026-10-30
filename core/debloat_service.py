@@ -7,6 +7,8 @@ from core.logger import get_logger
 
 logger = get_logger("debloat")
 
+DISCORD_FLATPAK = "com.discordapp.Discord"
+
 
 class DebloatService:
     BLOATWARE_PACKAGES = [
@@ -238,6 +240,26 @@ class DebloatService:
             "tailscale": tail_status.get("installed", False),
             "tailscale_details": tail_status
         }
+
+    @staticmethod
+    def is_discord_installed() -> bool:
+        try:
+            return subprocess.run(["flatpak", "info", DISCORD_FLATPAK], capture_output=True, timeout=5).returncode == 0
+        except Exception:
+            return False
+
+    @classmethod
+    def install_discord(cls) -> tuple[bool, str]:
+        # Not in the Fedora repos; Flathub ships the official client
+        try:
+            subprocess.run(["sudo", "-n", "flatpak", "remote-modify", "--enable", "flathub"], capture_output=True, timeout=15)
+            subprocess.run(["sudo", "-n", "flatpak", "install", "-y", "--noninteractive", "flathub", DISCORD_FLATPAK],
+                           check=True, capture_output=True, timeout=900)
+            cls.add_favorite_app(f"{DISCORD_FLATPAK}.desktop")
+            return True, "Discord installed and pinned to Dash."
+        except Exception as e:
+            logger.exception("Failed installing Discord")
+            return False, f"Failed installing Discord: {e}"
 
     @classmethod
     def install_chromium(cls) -> tuple[bool, str]:
