@@ -101,6 +101,10 @@ One-click image calibration for HBV OV2710 cameras (USB ID `0bdc:2710`), found u
 
 Only cameras with the HBV USB ID and a verified firmware build are touched; you confirm once that you use HBV OV2710 cameras. Profiles live in `~/.config/hbvcal`.
 
+<p align="center">
+  <img src="docs/assets/screenshots/07-camera-before-after.png" alt="Camera Optimizer before (left) and after (right)" width="420">
+</p>
+
 ---
 
 ### 6. Camera Controls
