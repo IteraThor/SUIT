@@ -68,15 +68,15 @@ One-click performance, display, and desktop optimizations for dartboard machines
 ---
 
 ### 3. Autodarts Setup
-Manage the Autodarts core service daemon, camera configurations, and board pairing.
+The official Autodarts v2 console, embedded and sized to fit, plus install and maintenance tools.
 
 <div align="center">
   <img src="docs/assets/screenshots/03-autodarts-setup.png" alt="Autodarts Setup" width="700">
 </div>
 
-* One-tap service controls to start, stop, or restart `autodarts.service`.
-* Live camera selection with resolution and frame rate adjustments (up to 1080p, 30 FPS).
-* Direct board pairing wizard and local web UI launcher.
+* Everything from the Autodarts console in one page: board info and sign-in, run as a service, start / stop / reset / calibrate, cameras, resolution, FPS, standby time and detection speed.
+* The console scales its font to the window, so every section is visible without scrolling.
+* **Tools and Maintenance**: restart the console, and reinstall or uninstall Autodarts.
 
 ---
 
@@ -133,6 +133,6 @@ Run Autodarts as a dedicated full-screen appliance with customized browser contr
   <img src="docs/assets/screenshots/06-kiosk-controls.png" alt="Fullscreen Kiosk Mode with In-Page Controls" width="560">
 </div>
 
-* Boots Chromium directly into fullscreen mode without desktop distractions.
-* Toggle automatic autostart on boot.
-* Built-in Chromium extension adding Power, Reboot, and Exit buttons directly into the Autodarts web scoreboard.
+* Boots Chromium directly into fullscreen mode without desktop distractions, optionally on login.
+* Built-in Chromium extension adding Power, Restart, Exit and Board Configuration buttons directly into the Autodarts header.
+* Optional dartboard light button for WLED, Tasmota or Shelly devices, with an On / Off test.
