@@ -28,6 +28,16 @@ __all__ = [
     "create_button_with_icon",
 ]
 
+
+def summarize_minimal_desktop(enabled: bool, needs_relogin: bool) -> str:
+    """One-line state for the Minimal Desktop switch."""
+    if not enabled:
+        return "Off. Desktop dock and a trimmed top bar and quick settings."
+    if needs_relogin:
+        return "On. Log out and back in once to apply."
+    return "On. Dock on the desktop, top bar and quick settings trimmed."
+
+
 class SystemView(Adw.NavigationPage):
     def __init__(self, window):
         super().__init__(title="System Utilities and Tweaks", tag="system")
@@ -204,6 +214,18 @@ class SystemView(Adw.NavigationPage):
         self.row_touch.connect("notify::active", self._on_touch_scaling_toggled)
         self.grp_extras.add(self.row_touch)
 
+        # 6b. Minimal Desktop Switch (desktop dock, trimmed top bar and quick settings)
+        self.row_minimal_desktop = Adw.SwitchRow(
+            title="Minimal Desktop",
+            subtitle="Checking..."
+        )
+        self.row_minimal_desktop.connect("notify::active", self._on_minimal_desktop_toggled)
+        lbl_experimental = Gtk.Label(label="EXPERIMENTAL")
+        lbl_experimental.add_css_class("status-pill-experimental")
+        lbl_experimental.set_valign(Gtk.Align.CENTER)
+        self.row_minimal_desktop.add_suffix(lbl_experimental)
+        self.grp_extras.add(self.row_minimal_desktop)
+
         # 7. Fast Boot submenu (not part of Apply All)
         self.row_fast_boot = Adw.ActionRow(
             title="Fast Boot",
@@ -319,6 +341,8 @@ class SystemView(Adw.NavigationPage):
             has_discord = SystemService.is_discord_installed()
             vis_status = SystemService.get_visuals_status()
             is_touch = SystemService.is_touch_scaling_enabled()
+            minimal_desktop = (SystemService.is_minimal_desktop_enabled(),
+                               SystemService.minimal_desktop_needs_relogin())
             fast_boot = SystemService.get_boot_tweak_counts()
             boot_time = SystemService.get_last_boot_time()
             hw_overlay = (SystemService.is_hw_overlay_enabled(), SystemService.get_hw_overlay_config())
@@ -330,6 +354,7 @@ class SystemView(Adw.NavigationPage):
                 "discord": has_discord,
                 "visuals": vis_status,
                 "touch": is_touch,
+                "minimal_desktop": minimal_desktop,
                 "fast_boot": (fast_boot, boot_time),
                 "hw_overlay": hw_overlay,
             }
@@ -425,6 +450,10 @@ class SystemView(Adw.NavigationPage):
 
                 # 4. Touchscreen Tweaks Switch
                 self.row_touch.set_active(is_touch)
+
+                # 4a. Minimal Desktop Switch
+                self.row_minimal_desktop.set_active(data["minimal_desktop"][0])
+                self.row_minimal_desktop.set_subtitle(summarize_minimal_desktop(*data["minimal_desktop"]))
 
                 # 4b. Fast Boot submenu row
                 (applied, total), boot_time = data["fast_boot"]
@@ -747,6 +776,13 @@ class SystemView(Adw.NavigationPage):
             return
         active = row.get_active()
         success, msg = SystemService.set_touch_scaling(active)
+        self.window.show_toast(msg)
+        self.refresh()
+
+    def _on_minimal_desktop_toggled(self, row, param):
+        if self._updating:
+            return
+        success, msg = SystemService.set_minimal_desktop(row.get_active())
         self.window.show_toast(msg)
         self.refresh()
 

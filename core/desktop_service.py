@@ -17,6 +17,9 @@ HW_OVERLAY_SOURCE_DIR = Path(__file__).resolve().parent.parent / "assets" / "hw_
 HW_OVERLAY_USER_DIR = Path.home() / ".local" / "share" / "gnome-shell" / "extensions" / HW_OVERLAY_UUID
 # Watched by the extension, which redraws live on every save (see loadConfig in extension.js)
 HW_OVERLAY_CONFIG_PATH = Path.home() / ".config" / "suit" / "hw_overlay.json"
+MINIMAL_DESKTOP_UUID = "minimal-desktop@suit"
+MINIMAL_DESKTOP_SOURCE_DIR = Path(__file__).resolve().parent.parent / "assets" / "minimal_desktop_extension"
+MINIMAL_DESKTOP_USER_DIR = Path.home() / ".local" / "share" / "gnome-shell" / "extensions" / MINIMAL_DESKTOP_UUID
 HW_OVERLAY_METRICS = ("cpu", "temp", "ram", "gpu", "disk", "net", "ip_local", "ip_tailscale", "load", "uptime",
                       "ad_state", "ad_fps", "ad_cams", "ad_proc")
 # Clickable Autodarts controls: start/stop, reset, debug snapshot (opt-in) and the update button,
@@ -80,6 +83,9 @@ class DesktopService:
     HW_OVERLAY_METRICS = HW_OVERLAY_METRICS
     HW_OVERLAY_BUTTONS = HW_OVERLAY_BUTTONS
     HW_OVERLAY_DEFAULTS = HW_OVERLAY_DEFAULTS
+    MINIMAL_DESKTOP_UUID = MINIMAL_DESKTOP_UUID
+    MINIMAL_DESKTOP_SOURCE_DIR = MINIMAL_DESKTOP_SOURCE_DIR
+    MINIMAL_DESKTOP_USER_DIR = MINIMAL_DESKTOP_USER_DIR
     GTK4_CSS_PATH = GTK4_CSS_PATH
     GTK3_CSS_PATH = GTK3_CSS_PATH
     SUIT_TOUCH_MARKER_START = SUIT_TOUCH_MARKER_START
@@ -198,26 +204,10 @@ class DesktopService:
                 # 3. Text scaling factor for instant UI/panel enlargement
                 subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "text-scaling-factor", str(scale_factor)], check=False)
 
-                # 4. Copy extension files
-                dest.mkdir(parents=True, exist_ok=True)
-                if src.exists():
-                    shutil.copytree(src, dest, dirs_exist_ok=True)
+                # 4. Install and enable the GNOME Shell extension
+                DesktopService.enable_extension(uuid, src, dest)
 
-                # 5. Enable user extensions setting
-                subprocess.run(["gsettings", "set", "org.gnome.shell", "disable-user-extensions", "false"], check=False)
-
-                # 6. Add to enabled-extensions list
-                res = subprocess.run(["gsettings", "get", "org.gnome.shell", "enabled-extensions"], capture_output=True, text=True)
-                out = res.stdout.strip()
-                enabled_list = ast.literal_eval(out) if out.startswith("[") else []
-                if uuid not in enabled_list:
-                    enabled_list.append(uuid)
-                    subprocess.run(["gsettings", "set", "org.gnome.shell", "enabled-extensions", str(enabled_list).replace('"', "'")], check=False)
-
-                # Try gnome-extensions enable command
-                subprocess.run(["gnome-extensions", "enable", uuid], check=False)
-
-                # 7. Inject GTK CSS
+                # 5. Inject GTK CSS
                 for p in (p4, p3):
                     p.parent.mkdir(parents=True, exist_ok=True)
                     existing = p.read_text(encoding="utf-8") if p.exists() else ""
@@ -246,13 +236,7 @@ class DesktopService:
                 subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "text-scaling-factor", "1.0"], check=False)
 
                 # 4. Disable GNOME Shell extension
-                subprocess.run(["gnome-extensions", "disable", uuid], check=False)
-                res = subprocess.run(["gsettings", "get", "org.gnome.shell", "enabled-extensions"], capture_output=True, text=True)
-                out = res.stdout.strip()
-                enabled_list = ast.literal_eval(out) if out.startswith("[") else []
-                if uuid in enabled_list:
-                    enabled_list.remove(uuid)
-                    subprocess.run(["gsettings", "set", "org.gnome.shell", "enabled-extensions", str(enabled_list).replace('"', "'")], check=False)
+                DesktopService.disable_extension(uuid)
 
                 # 5. Strip GTK CSS
                 for p in (p4, p3):
@@ -288,16 +272,14 @@ class DesktopService:
     def _set_enabled_extensions(enabled_list: list[str]):
         subprocess.run(["gsettings", "set", "org.gnome.shell", "enabled-extensions", str(enabled_list).replace('"', "'")], check=False)
 
-    @classmethod
-    def install_hw_overlay_files(cls, source_dir: Path | None = None, target_dir: Path | None = None) -> bool:
-        """Copy the overlay extension into the user extension folder without enabling it.
+    @staticmethod
+    def install_extension_files(src: Path, dest: Path) -> bool:
+        """Copy a bundled shell extension into the user extension folder without enabling it.
 
         GNOME Shell on Wayland only discovers extension folders at login, so SUIT installs
-        the files ahead of time; the Hardware Overlay switch can then enable it instantly.
+        the files ahead of time; a switch in SUIT can then enable it instantly.
         Returns True when files were added or changed.
         """
-        src = source_dir or cls.HW_OVERLAY_SOURCE_DIR
-        dest = target_dir or cls.HW_OVERLAY_USER_DIR
         if not src.exists():
             return False
         changed = False
@@ -310,8 +292,14 @@ class DesktopService:
                 shutil.copy2(str(f), str(target))
                 changed = True
         if changed:
-            logger.info("Hardware overlay extension files installed to %s", dest)
+            logger.info("Shell extension files installed to %s", dest)
         return changed
+
+    @classmethod
+    def install_suit_extensions(cls) -> None:
+        """Pre-install every switchable SUIT shell extension (disabled) for discovery at next login."""
+        cls.install_hw_overlay_files()
+        cls.install_minimal_desktop_files()
 
     @staticmethod
     def is_extension_loaded(uuid: str) -> bool:
@@ -322,14 +310,12 @@ class DesktopService:
         except Exception:
             return False
 
-    @classmethod
-    def hw_overlay_needs_relogin(cls, target_dir: Path | None = None, ext_uuid: str | None = None) -> bool:
-        """True when newer overlay files are installed than the running GNOME Shell has loaded.
+    @staticmethod
+    def extension_needs_relogin(uuid: str, dest: Path) -> bool:
+        """True when newer extension files are installed than the running GNOME Shell has loaded.
 
         The shell keeps an extension's code from login, so updated files only take effect
         after logging out and back in."""
-        uuid = ext_uuid or cls.HW_OVERLAY_UUID
-        dest = target_dir or cls.HW_OVERLAY_USER_DIR
         try:
             on_disk = json.loads((dest / "metadata.json").read_text(encoding="utf-8")).get("version")
             res = subprocess.run(
@@ -345,13 +331,64 @@ class DesktopService:
         return False
 
     @classmethod
-    def is_hw_overlay_enabled(cls, target_dir: Path | None = None, ext_uuid: str | None = None) -> bool:
-        uuid = ext_uuid or cls.HW_OVERLAY_UUID
-        dest = target_dir or cls.HW_OVERLAY_USER_DIR
+    def is_extension_enabled(cls, uuid: str, dest: Path) -> bool:
         try:
             return (dest / "extension.js").exists() and uuid in cls._get_enabled_extensions()
         except Exception:
             return False
+
+    @classmethod
+    def enable_extension(cls, uuid: str, src: Path, dest: Path) -> str:
+        """Install and enable a bundled extension.
+
+        Returns "active" when it runs now, "relogin" when the shell only picks it up at the
+        next login, or "failed" when the shell knows it but could not start it."""
+        loaded = cls.is_extension_loaded(uuid)
+        cls.install_extension_files(src, dest)
+        subprocess.run(["gsettings", "set", "org.gnome.shell", "disable-user-extensions", "false"], check=False)
+
+        if loaded:
+            # The shell updates enabled-extensions itself; writing the list here too
+            # could race with it and drop other extensions.
+            subprocess.run(["gnome-extensions", "enable", uuid], check=False)
+        else:
+            enabled_list = cls._get_enabled_extensions()
+            if uuid not in enabled_list:
+                enabled_list.append(uuid)
+                cls._set_enabled_extensions(enabled_list)
+
+        res = subprocess.run(
+            ["gnome-extensions", "info", uuid],
+            capture_output=True, text=True, env={**os.environ, "LC_ALL": "C"}
+        )
+        logger.info("Extension %s enabled (loaded=%s)", uuid, loaded)
+        if "ACTIVE" in res.stdout:
+            return "active"
+        # GNOME Shell on Wayland only discovers new extension folders at login
+        return "failed" if loaded else "relogin"
+
+    @classmethod
+    def disable_extension(cls, uuid: str) -> None:
+        if cls.is_extension_loaded(uuid):
+            subprocess.run(["gnome-extensions", "disable", uuid], check=False)
+        else:
+            enabled_list = cls._get_enabled_extensions()
+            if uuid in enabled_list:
+                enabled_list.remove(uuid)
+                cls._set_enabled_extensions(enabled_list)
+        logger.info("Extension %s disabled", uuid)
+
+    @classmethod
+    def install_hw_overlay_files(cls, source_dir: Path | None = None, target_dir: Path | None = None) -> bool:
+        return cls.install_extension_files(source_dir or cls.HW_OVERLAY_SOURCE_DIR, target_dir or cls.HW_OVERLAY_USER_DIR)
+
+    @classmethod
+    def hw_overlay_needs_relogin(cls, target_dir: Path | None = None, ext_uuid: str | None = None) -> bool:
+        return cls.extension_needs_relogin(ext_uuid or cls.HW_OVERLAY_UUID, target_dir or cls.HW_OVERLAY_USER_DIR)
+
+    @classmethod
+    def is_hw_overlay_enabled(cls, target_dir: Path | None = None, ext_uuid: str | None = None) -> bool:
+        return cls.is_extension_enabled(ext_uuid or cls.HW_OVERLAY_UUID, target_dir or cls.HW_OVERLAY_USER_DIR)
 
     @classmethod
     def set_hw_overlay(
@@ -364,50 +401,63 @@ class DesktopService:
         """Install and enable (or disable) the GNOME Shell extension that draws live
         hardware and Autodarts camera stats on the desktop wallpaper."""
         uuid = ext_uuid or cls.HW_OVERLAY_UUID
-        src = source_dir or cls.HW_OVERLAY_SOURCE_DIR
-        dest = target_dir or cls.HW_OVERLAY_USER_DIR
-
         try:
-            loaded = cls.is_extension_loaded(uuid)
-            if enabled:
-                cls.install_hw_overlay_files(source_dir=src, target_dir=dest)
-                subprocess.run(["gsettings", "set", "org.gnome.shell", "disable-user-extensions", "false"], check=False)
-
-                if loaded:
-                    # The shell updates enabled-extensions itself; writing the list here too
-                    # could race with it and drop other extensions (e.g. touch-scaling@suit).
-                    subprocess.run(["gnome-extensions", "enable", uuid], check=False)
-                else:
-                    enabled_list = cls._get_enabled_extensions()
-                    if uuid not in enabled_list:
-                        enabled_list.append(uuid)
-                        cls._set_enabled_extensions(enabled_list)
-
-                res = subprocess.run(
-                    ["gnome-extensions", "info", uuid],
-                    capture_output=True, text=True, env={**os.environ, "LC_ALL": "C"}
-                )
-                logger.info("Hardware overlay enabled (loaded=%s)", loaded)
-                if "ACTIVE" in res.stdout:
-                    return True, "Hardware overlay shown on the desktop."
-                if loaded:
-                    return False, "Hardware overlay failed to start. Check the GNOME Shell log."
-                # GNOME Shell on Wayland only discovers new extension folders at login
-                return True, "Hardware overlay installed. Log out and back in once to show it."
-
-            if loaded:
-                subprocess.run(["gnome-extensions", "disable", uuid], check=False)
-            else:
-                enabled_list = cls._get_enabled_extensions()
-                if uuid in enabled_list:
-                    enabled_list.remove(uuid)
-                    cls._set_enabled_extensions(enabled_list)
-            logger.info("Hardware overlay disabled (loaded=%s)", loaded)
-            return True, "Hardware overlay hidden."
-
+            if not enabled:
+                cls.disable_extension(uuid)
+                return True, "Hardware overlay hidden."
+            state = cls.enable_extension(uuid, source_dir or cls.HW_OVERLAY_SOURCE_DIR, target_dir or cls.HW_OVERLAY_USER_DIR)
+            if state == "active":
+                return True, "Hardware overlay shown on the desktop."
+            if state == "failed":
+                return False, "Hardware overlay failed to start. Check the GNOME Shell log."
+            return True, "Hardware overlay installed. Log out and back in once to show it."
         except Exception as e:
             logger.exception("Failed configuring hardware overlay")
             return False, f"Failed updating hardware overlay: {e}"
+
+    @classmethod
+    def install_minimal_desktop_files(cls, source_dir: Path | None = None, target_dir: Path | None = None) -> bool:
+        return cls.install_extension_files(source_dir or cls.MINIMAL_DESKTOP_SOURCE_DIR, target_dir or cls.MINIMAL_DESKTOP_USER_DIR)
+
+    @classmethod
+    def minimal_desktop_needs_relogin(cls, target_dir: Path | None = None, ext_uuid: str | None = None) -> bool:
+        """True when the switch is on but the running shell has not loaded the extension yet,
+        or runs older files than are installed."""
+        uuid = ext_uuid or cls.MINIMAL_DESKTOP_UUID
+        dest = target_dir or cls.MINIMAL_DESKTOP_USER_DIR
+        if cls.is_extension_enabled(uuid, dest) and not cls.is_extension_loaded(uuid):
+            return True
+        return cls.extension_needs_relogin(uuid, dest)
+
+    @classmethod
+    def is_minimal_desktop_enabled(cls, target_dir: Path | None = None, ext_uuid: str | None = None) -> bool:
+        return cls.is_extension_enabled(ext_uuid or cls.MINIMAL_DESKTOP_UUID, target_dir or cls.MINIMAL_DESKTOP_USER_DIR)
+
+    @classmethod
+    def set_minimal_desktop(
+        cls,
+        enabled: bool,
+        source_dir: Path | None = None,
+        target_dir: Path | None = None,
+        ext_uuid: str | None = None
+    ) -> tuple[bool, str]:
+        """Install and enable (or disable) the extension that adds the desktop dock and
+        hides top bar and quick settings items an Autodarts rig never needs."""
+        uuid = ext_uuid or cls.MINIMAL_DESKTOP_UUID
+        try:
+            if not enabled:
+                cls.disable_extension(uuid)
+                return True, "Minimal desktop turned off."
+            state = cls.enable_extension(
+                uuid, source_dir or cls.MINIMAL_DESKTOP_SOURCE_DIR, target_dir or cls.MINIMAL_DESKTOP_USER_DIR)
+            if state == "active":
+                return True, "Minimal desktop turned on."
+            if state == "failed":
+                return False, "Minimal desktop failed to start. Check the GNOME Shell log."
+            return True, "Minimal desktop installed. Log out and back in once to apply it."
+        except Exception as e:
+            logger.exception("Failed configuring minimal desktop")
+            return False, f"Failed updating minimal desktop: {e}"
 
     @staticmethod
     def _normalize_hw_overlay_config(raw) -> dict:

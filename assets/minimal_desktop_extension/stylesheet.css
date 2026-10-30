@@ -1,0 +1,55 @@
+/* Floating dock on the desktop: a dark glass pill, icons in soft rounded tiles,
+   running apps marked with a short bar in the system accent color. */
+.suit-dock {
+  padding: 8px;
+  spacing: 4px;
+  border-radius: 28px;
+  background-color: rgba(18, 19, 23, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+.suit-dock-apps {
+  spacing: 4px;
+}
+
+.suit-dock .overview-tile,
+.suit-dock-show-apps {
+  margin: 0;
+  padding: 8px;
+  border-radius: 20px;
+  background-color: transparent;
+  transition-duration: 150ms;
+}
+
+.suit-dock .overview-tile:hover,
+.suit-dock-show-apps:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.suit-dock .overview-tile:active,
+.suit-dock .overview-tile:checked,
+.suit-dock-show-apps:active {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+.suit-dock .app-grid-running-dot {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  background-color: -st-accent-color;
+  offset-y: 7px;
+}
+
+.suit-dock-separator {
+  width: 1px;
+  margin: 12px 6px;
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+/* Same footprint as an app tile (48px icon + padding) with a lighter symbolic glyph */
+.suit-dock-show-apps {
+  width: 48px;
+  height: 48px;
+  color: rgba(255, 255, 255, 0.85);
+}

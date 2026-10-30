@@ -55,13 +55,14 @@ Modern Libadwaita touch menu providing rapid access to all system tools and live
 ---
 
 ### 2. System Utilities & Touchscreen Tweaks
-One-click performance, display, and desktop optimizations for dartboard machines. The **Essentials** tab holds everything *Apply All* sets up; the **Extras** tab has the optional tweaks (touchscreen tweaks, Fast Boot, hardware overlay, advanced tools).
+One-click performance, display, and desktop optimizations for dartboard machines. The **Essentials** tab holds everything *Apply All* sets up; the **Extras** tab has the optional tweaks (touchscreen tweaks, minimal desktop, Fast Boot, hardware overlay, advanced tools).
 
 <div align="center">
   <img src="docs/assets/screenshots/02-system-tweaks.png" alt="System Utilities and Touchscreen Tweaks" width="700">
 </div>
 
 * **Touchscreen Tweaks**: Enlarges GNOME top bar to 54px, expands button touch padding, enables On-Screen Keyboard (OSK), and restores window Minimize/Maximize buttons across Chromium and desktop apps.
+* **Minimal Desktop**: One switch for a cleaner rig desktop: a dock with your favorite and running apps sits on the wallpaper (windows simply cover it), and top bar icons and quick settings a dart machine never needs (accessibility, microphone, power mode, night light, dark style, do not disturb) are hidden. When AutoGlow 2 is installed, an **Autoglow 2** button next to Wi-Fi opens its web interface.
 * **Performance Profile**: Locks CPU governors to high-performance mode to minimize dart detection latency.
 * **Display Keepalive & Auto-Login**: Bypasses screen blanking, sleep timeouts, and login password prompts.
 

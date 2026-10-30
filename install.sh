@@ -40,9 +40,9 @@ if [ -f "$HOME/.suit_rotation_config.json" ]; then
     fi
 fi
 
-# 6. Pre-install the Hardware Overlay shell extension (disabled) so GNOME discovers it at next login
-if ! (cd "${SCRIPT_DIR}" && python3 -c "from core.desktop_service import DesktopService; DesktopService.install_hw_overlay_files()"); then
-    echo "  ! Warning: could not pre-install the hardware overlay extension. Launch SUIT once to retry automatically."
+# 6. Pre-install the switchable SUIT shell extensions (disabled) so GNOME discovers them at next login
+if ! (cd "${SCRIPT_DIR}" && python3 -c "from core.desktop_service import DesktopService; DesktopService.install_suit_extensions()"); then
+    echo "  ! Warning: could not pre-install the SUIT shell extensions. Launch SUIT once to retry automatically."
 fi
 
 # 7. Success confirmation

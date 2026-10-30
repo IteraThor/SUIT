@@ -201,7 +201,7 @@ class SuitWindow(Adw.ApplicationWindow):
             try:
                 UpdateService.ensure_camera_keeper()
                 UpdateService.ensure_display_autostart()
-                UpdateService.ensure_hw_overlay_installed()
+                UpdateService.ensure_shell_extensions_installed()
             except Exception as e:
                 logger.debug("Background service heal notice: %s", e)
 

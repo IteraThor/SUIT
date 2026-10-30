@@ -1,0 +1,10 @@
+{
+  "name": "SUIT Minimal Desktop",
+  "description": "Adds a dock to the desktop that windows cover, and hides top bar and quick settings items an Autodarts machine never needs. Adds an Autoglow 2 shortcut to quick settings.",
+  "uuid": "minimal-desktop@suit",
+  "shell-version": [
+    "49",
+    "50"
+  ],
+  "version": 2
+}

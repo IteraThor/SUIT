@@ -401,6 +401,18 @@ class SystemService:
         return DesktopService.hw_overlay_needs_relogin()
 
     @staticmethod
+    def is_minimal_desktop_enabled() -> bool:
+        return DesktopService.is_minimal_desktop_enabled()
+
+    @staticmethod
+    def set_minimal_desktop(enabled: bool) -> tuple[bool, str]:
+        return DesktopService.set_minimal_desktop(enabled)
+
+    @staticmethod
+    def minimal_desktop_needs_relogin() -> bool:
+        return DesktopService.minimal_desktop_needs_relogin()
+
+    @staticmethod
     def get_hw_overlay_config() -> dict:
         return DesktopService.get_hw_overlay_config()
 

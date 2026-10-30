@@ -196,14 +196,14 @@ class UpdateService:
             logger.warning("Post-update display autostart check notice: %s", e)
 
     @classmethod
-    def ensure_hw_overlay_installed(cls) -> None:
-        """Pre-install the Hardware Overlay extension (disabled) so GNOME Shell discovers it at
-        the next login and the System view switch can then enable it without a relogin."""
+    def ensure_shell_extensions_installed(cls) -> None:
+        """Pre-install the switchable SUIT shell extensions (disabled) so GNOME Shell discovers
+        them at the next login and the System view switches can then enable them without a relogin."""
         try:
             from core.desktop_service import DesktopService
-            DesktopService.install_hw_overlay_files()
+            DesktopService.install_suit_extensions()
         except Exception as e:
-            logger.warning("Hardware overlay pre-install notice: %s", e)
+            logger.warning("Shell extension pre-install notice: %s", e)
 
     @classmethod
     def ensure_autodarts_service(cls) -> None:

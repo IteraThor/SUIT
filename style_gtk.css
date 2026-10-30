@@ -79,7 +79,8 @@ switch {
 .status-pill-checking,
 .status-pill-pending,
 .status-pill-coming-soon,
-.status-pill-new {
+.status-pill-new,
+.status-pill-experimental {
     border-radius: 9999px;
     padding: 3px 12px;
     font-size: 12.5px;
@@ -96,6 +97,8 @@ switch {
 .status-pill-coming-soon { background-color: alpha(@window_fg_color, 0.09); color: alpha(@window_fg_color, 0.7); }
 
 .status-pill-new { background-color: alpha(@accent_bg_color, 0.2); color: @accent_color; }
+
+.status-pill-experimental { background-color: alpha(#e5a50a, 0.18); color: #f8e45c; }
 
 .tile-card:disabled {
     opacity: 0.45;
