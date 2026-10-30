@@ -28,6 +28,7 @@ from core.camera_focus_service import (
 )
 from core.audio_tone_service import AudioToneService
 from core.autodarts_service import read_cam_config
+from modules_gtk.ui_helpers import build_page_shell
 from core.systemd_service import SystemdService, SystemdManager
 
 logger = get_logger("camera_focus_view")
@@ -69,19 +70,9 @@ class CameraFocusView(Adw.NavigationPage):
         self.peaking_enabled = True
 
         # Container
-        scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        scrolled.set_kinetic_scrolling(True)
+        scrolled, self.main_box = build_page_shell(max_width=1380)
+        self.main_box.set_spacing(10)  # dense live-view layout
         self.set_child(scrolled)
-
-        clamp = Adw.Clamp(maximum_size=1380, tightening_threshold=960)
-        clamp.set_margin_top(8)
-        clamp.set_margin_bottom(8)
-        clamp.set_margin_start(10)
-        clamp.set_margin_end(10)
-        scrolled.set_child(clamp)
-
-        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        clamp.set_child(self.main_box)
 
         # Header Bar
         self._build_header_card()

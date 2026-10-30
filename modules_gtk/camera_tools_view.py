@@ -14,41 +14,8 @@ class CameraToolsView(Adw.NavigationPage):
         super().__init__(title="Camera Tools", tag="camera_tools")
         self.window = window
 
-        # Scrolled container with kinetic touch scrolling
         scrolled, main_box = build_page_shell()
         self.set_child(scrolled)
-
-        # Header description card
-        header_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        header_card.add_css_class("card")
-        header_card.set_margin_bottom(2)
-
-        inner_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        inner_box.set_margin_top(6)
-        inner_box.set_margin_bottom(6)
-        inner_box.set_margin_start(12)
-        inner_box.set_margin_end(12)
-
-        icon_hub = Gtk.Image.new_from_icon_name("camera-photo-symbolic")
-        icon_hub.set_pixel_size(28)
-        icon_hub.set_valign(Gtk.Align.CENTER)
-        inner_box.append(icon_hub)
-
-        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        text_box.set_valign(Gtk.Align.CENTER)
-        text_box.set_hexpand(True)
-
-        lbl_title = Gtk.Label(label="Camera Tools", xalign=0)
-        lbl_title.add_css_class("title-3")
-        text_box.append(lbl_title)
-
-        lbl_desc = Gtk.Label(label="Optical calibration, sensor exposure, and diagnostic utilities.", xalign=0)
-        lbl_desc.add_css_class("dim-label")
-        text_box.append(lbl_desc)
-
-        inner_box.append(text_box)
-        header_card.append(inner_box)
-        main_box.append(header_card)
 
         # Tools Preferences Group
         self.pref_group = Adw.PreferencesGroup()

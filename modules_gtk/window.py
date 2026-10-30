@@ -278,7 +278,7 @@ class SuitWindow(Adw.ApplicationWindow):
             "camera_tools": (740, 480),
             "camera_focus": (940, 640),
             "autodarts": (840, 680),
-            "rotation": (780, 680),
+            "rotation": (780, 600),
             "kiosk": (780, 680),
             "system": (800, 700),
             "advanced_users": (800, 720),
