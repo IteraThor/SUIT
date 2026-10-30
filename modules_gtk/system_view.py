@@ -15,6 +15,7 @@ from modules_gtk.dialogs.debloat_dialog import DebloatReviewDialog
 from modules_gtk.dialogs.tailscale_dialog import TailscaleAuthDialog
 from modules_gtk.advanced_users_view import AdvancedUsersView
 from modules_gtk.hw_overlay_view import HwOverlayView, summarize_hw_overlay
+from modules_gtk.fast_boot_view import FastBootView, summarize_fast_boot
 
 __all__ = [
     "SystemView",
@@ -35,6 +36,7 @@ class SystemView(Adw.NavigationPage):
         self._updating = False
         self.advanced_view = None
         self.hw_overlay_view = None
+        self.fast_boot_view = None
 
         # Root overlay container allowing full-screen modal progress overlay
         self.root_overlay = Gtk.Overlay()
@@ -202,12 +204,14 @@ class SystemView(Adw.NavigationPage):
         self.row_touch.connect("notify::active", self._on_touch_scaling_toggled)
         self.grp_extras.add(self.row_touch)
 
-        # 7. Fast Boot Switch (experimental, not part of Apply All)
-        self.row_fast_boot = Adw.SwitchRow(
+        # 7. Fast Boot submenu (not part of Apply All)
+        self.row_fast_boot = Adw.ActionRow(
             title="Fast Boot",
-            subtitle="Skip network wait and unused services at boot."
+            subtitle="Pick boot-time tweaks one by one.",
+            activatable=True
         )
-        self.row_fast_boot.connect("notify::active", self._on_fast_boot_toggled)
+        self.row_fast_boot.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+        self.row_fast_boot.connect("activated", self._on_fast_boot_clicked)
         self.grp_extras.add(self.row_fast_boot)
 
         # 8. Hardware Overlay submenu (not part of Apply All)
@@ -294,7 +298,7 @@ class SystemView(Adw.NavigationPage):
             has_chrom = SystemService.get_software_status().get("chromium", False)
             vis_status = SystemService.get_visuals_status()
             is_touch = SystemService.is_touch_scaling_enabled()
-            fast_boot = SystemService.is_fast_boot_enabled()
+            fast_boot = SystemService.get_boot_tweak_counts()
             boot_time = SystemService.get_last_boot_time()
             hw_overlay = (SystemService.is_hw_overlay_enabled(), SystemService.get_hw_overlay_config())
             return {
@@ -400,13 +404,9 @@ class SystemView(Adw.NavigationPage):
                 # 4. Touchscreen Tweaks Switch
                 self.row_touch.set_active(is_touch)
 
-                # 4b. Fast Boot Switch
-                fast_boot, boot_time = data["fast_boot"]
-                self.row_fast_boot.set_active(fast_boot)
-                hint = "Experimental. Skip network wait and unused services at boot."
-                if boot_time:
-                    hint += f" Last boot: {boot_time:.1f} s."
-                self.row_fast_boot.set_subtitle(hint)
+                # 4b. Fast Boot submenu row
+                (applied, total), boot_time = data["fast_boot"]
+                self.row_fast_boot.set_subtitle(summarize_fast_boot(applied, total, boot_time))
 
                 # 4c. Hardware Overlay submenu row
                 self.row_hw_overlay.set_subtitle(summarize_hw_overlay(*data["hw_overlay"]))
@@ -709,25 +709,8 @@ class SystemView(Adw.NavigationPage):
         self.window.nav_view.push(self.hw_overlay_view)
         self.hw_overlay_view.refresh()
 
-    def _on_fast_boot_toggled(self, row, param):
-        if self._updating:
-            return
-        active = row.get_active()
-        row.set_sensitive(False)
-        self.window.show_toast("Enabling Fast Boot..." if active else "Reverting Fast Boot...")
-
-        def worker():
-            return SystemService.set_fast_boot(active)
-
-        def on_done(res):
-            row.set_sensitive(True)
-            success, msg = res
-            self.window.show_toast(msg)
-            self.refresh()
-
-        def on_error(err):
-            row.set_sensitive(True)
-            self.window.show_toast(f"Fast Boot error: {err}")
-            self.refresh()
-
-        run_async(worker, on_done=on_done, on_error=on_error)
+    def _on_fast_boot_clicked(self, row):
+        if not self.fast_boot_view:
+            self.fast_boot_view = FastBootView(self.window, on_changed=self.refresh)
+        self.window.nav_view.push(self.fast_boot_view)
+        self.fast_boot_view.refresh()

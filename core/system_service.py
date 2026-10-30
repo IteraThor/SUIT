@@ -8,7 +8,7 @@ from core.tailscale_service import TailscaleService
 from core.waydroid_service import WaydroidService
 from core.desktop_service import DesktopService
 from core.remote_desktop_service import RemoteDesktopService
-from core.boot_service import BootService
+from core.boot_service import BootService, TWEAKS
 
 
 class SystemService:
@@ -408,6 +408,31 @@ class SystemService:
     @staticmethod
     def set_fast_boot(enabled: bool) -> tuple[bool, str]:
         return BootService.set_fast_boot(enabled)
+
+    @staticmethod
+    def get_boot_tweak_counts() -> tuple[int, int]:
+        """(applied, total) Fast Boot tweaks, cheap enough for the System page row."""
+        return BootService.applied_count(), len(TWEAKS)
+
+    @staticmethod
+    def get_boot_tweaks() -> list[dict]:
+        return BootService.get_tweaks()
+
+    @staticmethod
+    def set_boot_tweak(tweak_id: str, enabled: bool) -> tuple[bool, str]:
+        return BootService.set_tweak(tweak_id, enabled)
+
+    @staticmethod
+    def get_boot_report() -> dict | None:
+        return BootService.get_boot_report()
+
+    @staticmethod
+    def analyze_firmware(report: dict | None = None) -> dict:
+        return BootService.analyze_firmware(report)
+
+    @staticmethod
+    def reboot_to_firmware() -> tuple[bool, str]:
+        return BootService.reboot_to_firmware()
 
     @staticmethod
     def get_last_boot_time() -> float | None:
