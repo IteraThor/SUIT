@@ -6,6 +6,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw, GLib, Gdk
 from core.logger import get_logger
+from core.i18n import tr
 
 logger = get_logger("ui_helpers")
 
@@ -90,7 +91,7 @@ def create_button_with_icon(
     img = Gtk.Image.new_from_icon_name(icon_name)
     img.set_pixel_size(18 if touch_btn else 16)
     box.append(img)
-    lbl = Gtk.Label(label=label_text)
+    lbl = Gtk.Label(label=tr(label_text))
     box.append(lbl)
     btn.set_child(box)
     if touch_btn:

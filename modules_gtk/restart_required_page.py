@@ -9,14 +9,15 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gtk
+from core.i18n import tr
 
 
 class RestartRequiredPage(Adw.NavigationPage):
     def __init__(self, window, title: str = "Restart Required", tag: str = "restart_required"):
-        super().__init__(title=title, tag=tag)
-        page = Adw.StatusPage(icon_name="view-refresh-symbolic", title="Restart SUIT to Finish the Update",
-                              description="This tool was replaced by Camera Controls and the new Camera Optimizer.")
-        btn = Gtk.Button(label="Restart SUIT", halign=Gtk.Align.CENTER)
+        super().__init__(title=tr(title), tag=tag)
+        page = Adw.StatusPage(icon_name="view-refresh-symbolic", title=tr("Restart SUIT to Finish the Update"),
+                              description=tr("This tool was replaced by Camera Controls and the new Camera Optimizer."))
+        btn = Gtk.Button(label=tr("Restart SUIT"), halign=Gtk.Align.CENTER)
         btn.add_css_class("suggested-action")
         btn.add_css_class("pill")
         btn.connect("clicked", lambda *_: self._restart())

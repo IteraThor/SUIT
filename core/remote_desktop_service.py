@@ -2,6 +2,7 @@ import subprocess
 import re
 import socket
 from core.logger import get_logger
+from core.i18n import tr
 
 logger = get_logger("remote_desktop")
 
@@ -108,7 +109,7 @@ class RemoteDesktopService:
                 return True, "Desktop sharing disabled."
         except Exception as e:
             logger.error("Failed setting desktop sharing to %s: %s", enabled, e)
-            return False, f"Failed updating desktop sharing: {e}"
+            return False, tr("Failed updating desktop sharing: {error}").format(error=e)
 
     @classmethod
     def set_remote_control(cls, enabled: bool) -> tuple[bool, str]:
@@ -123,17 +124,17 @@ class RemoteDesktopService:
                 return True, "Remote control disabled (view-only)."
         except Exception as e:
             logger.error("Failed setting remote control to %s: %s", enabled, e)
-            return False, f"Failed updating remote control: {e}"
+            return False, tr("Failed updating remote control: {error}").format(error=e)
 
     @classmethod
     def set_remote_credentials(cls, username: str, password: str) -> tuple[bool, str]:
         try:
             subprocess.run(["grdctl", "rdp", "set-credentials", username, password], check=False)
             logger.info("RDP credentials updated for user '%s'", username)
-            return True, f"RDP credentials set for '{username}'."
+            return True, tr("RDP credentials set for '{username}'.").format(username=username)
         except Exception as e:
             logger.error("Failed setting credentials: %s", e)
-            return False, f"Failed setting credentials: {e}"
+            return False, tr("Failed setting credentials: {error}").format(error=e)
 
     @classmethod
     def open_gnome_sharing_settings(cls) -> bool:

@@ -10,6 +10,7 @@ from gi.repository import Gtk, Adw, GLib
 from core.system_service import SystemService
 from modules_gtk.async_utils import run_async, open_browser_url
 from modules_gtk.ui_helpers import create_button_with_icon, copy_to_clipboard, generate_qr_texture
+from core.i18n import tr
 
 
 class TailscaleAuthDialog(Adw.Window):
@@ -22,7 +23,7 @@ class TailscaleAuthDialog(Adw.Window):
         super().__init__()
         self.set_transient_for(parent_window)
         self.set_modal(True)
-        self.set_title("Tailscale Authentication")
+        self.set_title(tr("Tailscale Authentication"))
         self.set_default_size(480, 560)
         self.on_finished = on_finished_callback
         self.auth_url = initial_status.get("auth_url") if isinstance(initial_status, dict) else None
@@ -54,12 +55,12 @@ class TailscaleAuthDialog(Adw.Window):
         self.img_header.set_pixel_size(44)
         icon_box.append(self.img_header)
 
-        self.lbl_title = Gtk.Label(label="Connect to Tailscale")
+        self.lbl_title = Gtk.Label(label=tr("Connect to Tailscale"))
         self.lbl_title.add_css_class("title-2")
         icon_box.append(self.lbl_title)
 
         self.lbl_desc = Gtk.Label(
-            label="Scan the QR code with your phone or open the link below to authenticate.",
+            label=tr("Scan the QR code with your phone or open the link below to authenticate."),
             wrap=True,
             justify=Gtk.Justification.CENTER
         )
@@ -106,7 +107,7 @@ class TailscaleAuthDialog(Adw.Window):
         self.entry_url = Gtk.Entry()
         self.entry_url.set_editable(False)
         self.entry_url.set_hexpand(True)
-        self.entry_url.set_text(self.auth_url or "Retrieving link...")
+        self.entry_url.set_text(self.auth_url or tr("Retrieving link..."))
         content_box.append(self.entry_url)
 
         # Status / Polling Box
@@ -119,7 +120,7 @@ class TailscaleAuthDialog(Adw.Window):
         self.spinner.start()
         self.status_box.append(self.spinner)
 
-        self.lbl_status = Gtk.Label(label="Waiting for authentication...")
+        self.lbl_status = Gtk.Label(label=tr("Waiting for authentication..."))
         self.lbl_status.add_css_class("caption")
         self.status_box.append(self.lbl_status)
 
@@ -129,7 +130,7 @@ class TailscaleAuthDialog(Adw.Window):
         bottom_bar.set_margin_top(4)
         content_box.append(bottom_bar)
 
-        self.btn_close = Gtk.Button(label="Cancel")
+        self.btn_close = Gtk.Button(label=tr("Cancel"))
         self.btn_close.set_size_request(90, 38)
         self.btn_close.connect("clicked", lambda b: self.close())
         bottom_bar.append(self.btn_close)
@@ -145,7 +146,7 @@ class TailscaleAuthDialog(Adw.Window):
         self._timeout_id = GLib.timeout_add(2000, self._poll_tailscale_status)
 
     def _fetch_auth_url(self):
-        self.lbl_status.set_label("Generating authentication link from Tailscale...")
+        self.lbl_status.set_label(tr("Generating authentication link from Tailscale..."))
         def worker():
             return SystemService.get_tailscale_auth_url()
         def on_done(url):
@@ -154,7 +155,7 @@ class TailscaleAuthDialog(Adw.Window):
             if url:
                 self._on_auth_url_ready(url, auto_open=False)
             else:
-                self.lbl_status.set_label("Could not retrieve authentication link. Check Tailscale service.")
+                self.lbl_status.set_label(tr("Could not retrieve authentication link. Check Tailscale service."))
                 self.spinner.stop()
         run_async(worker, on_done=on_done)
 
@@ -164,7 +165,7 @@ class TailscaleAuthDialog(Adw.Window):
         self.btn_open_browser.set_sensitive(True)
         self.btn_copy.set_sensitive(True)
         self._update_qr_code(url)
-        self.lbl_status.set_label("Waiting for authentication...")
+        self.lbl_status.set_label(tr("Waiting for authentication..."))
         if auto_open:
             self._open_browser()
 
@@ -190,7 +191,7 @@ class TailscaleAuthDialog(Adw.Window):
     def _on_copy_clicked(self, btn):
         if self.auth_url:
             copy_to_clipboard(self.auth_url)
-            self.lbl_status.set_label("Link copied to clipboard! Paste it into your browser.")
+            self.lbl_status.set_label(tr("Link copied to clipboard! Paste it into your browser."))
 
     def _poll_tailscale_status(self):
         if self._is_closed or self._is_connected or self._is_polling:
@@ -217,19 +218,19 @@ class TailscaleAuthDialog(Adw.Window):
                 self.btn_copy.set_visible(False)
                 self.entry_url.set_visible(False)
                 self.img_header.set_from_icon_name("emblem-ok-symbolic")
-                self.lbl_title.set_label("Tailscale Connected!")
+                self.lbl_title.set_label(tr("Tailscale Connected!"))
                 ips = status.get("ips", [])
                 ip = ips[0] if ips else ""
                 host = status.get("hostname", "")
-                self.lbl_desc.set_label(f"Connected to Tailscale.\nIP: {ip} ({host})")
-                self.lbl_status.set_label("Successfully authenticated")
+                self.lbl_desc.set_label(tr("Connected to Tailscale.\nIP: {ip} ({host})").format(ip=ip, host=host))
+                self.lbl_status.set_label(tr("Successfully authenticated"))
                 self.lbl_status.remove_css_class("caption")
                 self.lbl_status.add_css_class("status-pill-running")
-                self.btn_close.set_label("Done")
+                self.btn_close.set_label(tr("Done"))
                 self.btn_close.remove_css_class("secondary-btn")
                 self.btn_close.add_css_class("suggested-action")
                 if self.on_finished:
-                    self.on_finished(True, f"Tailscale connected: {ip}")
+                    self.on_finished(True, tr("Tailscale connected: {ip}").format(ip=ip))
 
         run_async(worker, on_done=on_done)
         return True

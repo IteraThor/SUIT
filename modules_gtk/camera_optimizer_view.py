@@ -25,6 +25,7 @@ from modules_gtk.async_utils import run_async
 from modules_gtk.camera_controls_view import ask_save_preset
 from modules_gtk.camera_widgets import (SELECTED, AutodartsStatus, CameraStrip, ThumbPoller, cam_name, caption, chip,
                                         port_no, segmented, set_chip, to_texture, wrap_label)
+from core.i18n import tr, get_language
 
 logger = get_logger("camera_optimizer_view")
 
@@ -43,13 +44,13 @@ def when_text(stamp: Optional[str]) -> str:
         t = time.strptime(stamp, "%Y-%m-%d %H:%M:%S")
     except (TypeError, ValueError):
         return "–"
-    day = "Today" if time.strftime("%Y-%m-%d", t) == time.strftime("%Y-%m-%d") else time.strftime("%b %d", t)
+    day = tr("Today") if time.strftime("%Y-%m-%d", t) == time.strftime("%Y-%m-%d") else time.strftime("%d.%m." if get_language() == "de" else "%b %d", t)
     return f"{day} {time.strftime('%H:%M', t)}"
 
 
 class CameraOptimizerPage(Adw.NavigationPage):
     def __init__(self, window):
-        super().__init__(title="Camera Optimizer", tag="camera_optimizer")
+        super().__init__(title=tr("Camera Optimizer"), tag="camera_optimizer")
         self.window = window
         self.status: Optional[dict] = None
         self._status_busy = False
@@ -82,14 +83,14 @@ class CameraOptimizerPage(Adw.NavigationPage):
         side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, halign=Gtk.Align.END)
         nav = Gtk.Box(spacing=6, halign=Gtk.Align.END)
         self.tab_toggle = Adw.ToggleGroup(valign=Gtk.Align.CENTER)
-        self.tab_toggle.add(Adw.Toggle(name="optimize", label="Optimize"))
-        self.tab_toggle.add(Adw.Toggle(name="compare", label="Before & After"))
+        self.tab_toggle.add(Adw.Toggle(name="optimize", label=tr("Optimize")))
+        self.tab_toggle.add(Adw.Toggle(name="compare", label=tr("Before & After")))
         self.tab_toggle.set_active_name("optimize")
         self.tab_toggle.connect("notify::active-name", lambda *_: self._show_tab(self.tab_toggle.get_active_name()))
         nav.append(self.tab_toggle)
         btn_controls = Gtk.Button()
-        btn_controls.set_child(Adw.ButtonContent(icon_name="preferences-system-symbolic", label="Controls"))
-        btn_controls.set_tooltip_text("Fine-tune every camera setting, keep settings, presets")
+        btn_controls.set_child(Adw.ButtonContent(icon_name="preferences-system-symbolic", label=tr("Controls")))
+        btn_controls.set_tooltip_text(tr("Fine-tune every camera setting, keep settings, presets"))
         btn_controls.connect("clicked", lambda *_: self.window.open_camera_controls_page())
         nav.append(btn_controls)
         side.append(nav)
@@ -167,7 +168,7 @@ class CameraOptimizerPage(Adw.NavigationPage):
 
         def fail(e):
             self._status_busy = False
-            self.hero_title.set_label("Can't read the cameras")
+            self.hero_title.set_label(tr("Can't read the cameras"))
             self.hero_text.set_label(str(e))
 
         run_async(work, on_done=done, on_error=fail)
@@ -201,7 +202,7 @@ class CameraOptimizerPage(Adw.NavigationPage):
             head = Gtk.Box(spacing=8)
             head.set_margin_start(14)  # the rows are buttons with this padding
             for text, w in zip(("CAMERA", "WHITE / TARGET", "JPEG", "LAST RUN", "NOW"), COLS + (-1,)):
-                h = Gtk.Label(label=text, xalign=0, css_classes=["camopt-table-head"], hexpand=w < 0)
+                h = Gtk.Label(label=tr(text), xalign=0, css_classes=["camopt-table-head"], hexpand=w < 0)
                 h.set_size_request(w, -1)
                 head.append(h)
             self.cam_list.append(head)
@@ -215,26 +216,29 @@ class CameraOptimizerPage(Adw.NavigationPage):
         if JOB.running:
             pass  # _render_job owns the headline
         elif self.status.get("pending"):
-            self.hero_title.set_label("Calibration ready to review")
-            self.hero_text.set_label("Nothing has changed yet. Compare before and after, then apply it or discard it.")
+            self.hero_title.set_label(tr("Calibration ready to review"))
+            self.hero_text.set_label(tr("Nothing has changed yet. Compare before and after, then apply it or discard it."))
         elif not sup:
-            self.hero_title.set_label("No supported camera found")
-            self.hero_text.set_label("Connect your HBV OV2710 cameras, then open this page again.")
+            self.hero_title.set_label(tr("No supported camera found"))
+            self.hero_text.set_label(tr("Connect your HBV OV2710 cameras, then open this page again."))
         elif bad:
-            self.hero_title.set_label("The light has changed")
-            self.hero_text.set_label("Optimize again to match the cameras to the new light.")
+            self.hero_title.set_label(tr("The light has changed"))
+            self.hero_text.set_label(tr("Optimize again to match the cameras to the new light."))
         elif done == len(sup):
-            self.hero_title.set_label("Your camera is optimized" if len(sup) == 1 else f"All {len(sup)} cameras are optimized")
-            self.hero_text.set_label("Settings stay applied, also after Autodarts restarts. Run it again after changing "
-                                     "the lights or moving the board.")
+            self.hero_title.set_label(tr("Your camera is optimized") if len(sup) == 1 else
+                                      tr("All {n} cameras are optimized").format(n=len(sup)))
+            self.hero_text.set_label(tr("Settings stay applied, also after Autodarts restarts. Run it again after changing "
+                                        "the lights or moving the board."))
         else:
             n = len(sup)
-            self.hero_title.set_label("Ready to optimize")
-            self.hero_text.set_label(f"Calibrates exposure, gain and JPEG quality for {n} camera{'s' if n > 1 else ''} "
-                                     "and matches them. Takes about 3 minutes.")
+            self.hero_title.set_label(tr("Ready to optimize"))
+            self.hero_text.set_label(tr("Calibrates exposure, gain and JPEG quality for 1 camera. Takes about 3 minutes.")
+                                     if n == 1 else
+                                     tr("Calibrates exposure, gain and JPEG quality for {n} cameras "
+                                        "and matches them. Takes about 3 minutes.").format(n=n))
         need = bool(sup) and (done < len(sup) or bool(bad))
-        self.btn_optimize.set_label((f"Optimize {len(sup)} cameras" if len(sup) > 1 else "Optimize camera")
-                                    + " · about 3 min" if need else "Optimize again")
+        self.btn_optimize.set_label((tr("Optimize {n} cameras").format(n=len(sup)) if len(sup) > 1 else tr("Optimize camera"))
+                                    + " · " + tr("about 3 min") if need else tr("Optimize again"))
         (self.btn_optimize.add_css_class if need else self.btn_optimize.remove_css_class)("suggested-action")
         self.btn_optimize.set_sensitive(bool(sup) and not JOB.running)
         self.btn_restore.set_visible(any(c.get("optimized") for c in cams) and not JOB.running)
@@ -245,18 +249,19 @@ class CameraOptimizerPage(Adw.NavigationPage):
             names = ", ".join(cam_name(p) for p in bad)
             r = self.lighting[bad[0]]
             pct = r["deviation_pct"]
-            self.banner_title.set_label(f"{names}: {abs(pct):.0f} % {'brighter' if pct > 0 else 'darker'} than calibrated")
+            self.banner_title.set_label((tr("{names}: {pct:.0f} % brighter than calibrated") if pct > 0 else
+                                         tr("{names}: {pct:.0f} % darker than calibrated")).format(names=names, pct=abs(pct)))
 
     def _cam_row(self, c: dict) -> Gtk.Widget:
         """One table line; tapping it picks the camera (for Before & After and Controls)."""
         if not c["supported"]:
-            kind, cells, tip = "bad", ["Not supported", "", "", ""], c.get("reason", "")
+            kind, cells, tip = "bad", [tr("Not supported"), "", "", ""], tr(c.get("reason", ""))
         elif c["optimized"]:
             i = c.get("info") or {}
             white = f"{i['white']:.0f} / {WHITE_TARGET:.0f}" if i.get("white") else "–"
-            kind, cells, tip = "ok", [white, str(i.get("q") or "–"), when_text(i.get("when"))], f"Firmware {c.get('firmware')}"
+            kind, cells, tip = "ok", [white, str(i.get("q") or "–"), when_text(i.get("when"))], tr("Firmware {fw}").format(fw=c.get("firmware"))
         else:
-            kind, cells, tip = "warn", ["Not optimized", "", ""], f"Firmware {c.get('firmware')}"
+            kind, cells, tip = "warn", [tr("Not optimized"), "", ""], tr("Firmware {fw}").format(fw=c.get("firmware"))
         row = Gtk.Box(spacing=8, tooltip_text=tip)
         name = status_dot_box(cam_name(c["port"]), kind)
         name.set_size_request(COLS[0], -1)
@@ -270,10 +275,10 @@ class CameraOptimizerPage(Adw.NavigationPage):
         if r and c["supported"] and c["optimized"]:
             pct = r["deviation_pct"]
             if r["verdict"] == "ok":
-                now.set_label(f"✓ OK ({pct:+.0f} %)")
+                now.set_label(tr("✓ OK ({pct:+.0f} %)").format(pct=pct))
                 now.add_css_class("camopt-ok")
             else:
-                now.set_label(f"{abs(pct):.0f} % {'brighter' if pct > 0 else 'darker'}")
+                now.set_label((tr("{pct:.0f} % brighter") if pct > 0 else tr("{pct:.0f} % darker")).format(pct=abs(pct)))
                 now.add_css_class("camopt-warn")
         row.append(now)
         btn = Gtk.Button(css_classes=["flat"], child=row)
@@ -292,10 +297,10 @@ class CameraOptimizerPage(Adw.NavigationPage):
     # ------------------------------------------------------------------------------------------
 
     def _build_declined(self) -> Gtk.Widget:
-        page = Adw.StatusPage(icon_name="camera-disabled-symbolic", title="Optimization is off")
-        page.set_description("This tool changes hidden settings that were only tested on HBV OV2710 cameras, "
-                             "so it stays off for other cameras.")
-        btn = Gtk.Button(label="I do use HBV OV2710 cameras", halign=Gtk.Align.CENTER)
+        page = Adw.StatusPage(icon_name="camera-disabled-symbolic", title=tr("Optimization is off"))
+        page.set_description(tr("This tool changes hidden settings that were only tested on HBV OV2710 cameras, "
+                                "so it stays off for other cameras."))
+        btn = Gtk.Button(label=tr("I do use HBV OV2710 cameras"), halign=Gtk.Align.CENTER)
         btn.add_css_class("pill")
         btn.connect("clicked", lambda *_: self._ask_consent())
         page.set_child(btn)
@@ -350,8 +355,8 @@ class CameraOptimizerPage(Adw.NavigationPage):
         self.preview_phase.set_max_width_chars(60)
         self.preview_box.append(self.preview_phase)
         left.append(self.preview_box)
-        self.btn_light = Gtk.Button(label="Check lighting", halign=Gtk.Align.START, css_classes=["compact-btn"],
-                                    tooltip_text="Compare the brightness of every optimized camera with its calibration")
+        self.btn_light = Gtk.Button(label=tr("Check lighting"), halign=Gtk.Align.START, css_classes=["compact-btn"],
+                                    tooltip_text=tr("Compare the brightness of every optimized camera with its calibration"))
         self.btn_light.connect("clicked", lambda *_: self._check_lighting())
         left.append(self.btn_light)
 
@@ -359,17 +364,17 @@ class CameraOptimizerPage(Adw.NavigationPage):
         self.guide.append(caption("BEFORE YOU START", "camopt-heading"))
         for t in ("Remove all darts from the board", "Turn the lights on the way you play",
                   "Keep people and hands away from the board for about 3 minutes"):
-            self.guide.append(caption("☑  " + t))
+            self.guide.append(caption("☑  " + tr(t)))
         left.append(self.guide)
 
         left.append(Gtk.Box(vexpand=True))
         acts = Gtk.Box(spacing=8)
-        self.btn_optimize = Gtk.Button(label="Optimize cameras", sensitive=False, hexpand=True)
+        self.btn_optimize = Gtk.Button(label=tr("Optimize cameras"), sensitive=False, hexpand=True)
         self.btn_optimize.add_css_class("pill")
         self.btn_optimize.connect("clicked", lambda *_: self._ask_prepare())
         acts.append(self.btn_optimize)
-        self.btn_restore = Gtk.Button(label="Restore…", visible=False, css_classes=["compact-btn"],
-                                      tooltip_text="Back to the settings Autodarts uses")
+        self.btn_restore = Gtk.Button(label=tr("Restore…"), visible=False, css_classes=["compact-btn"],
+                                      tooltip_text=tr("Back to the settings Autodarts uses"))
         self.btn_restore.connect("clicked", lambda *_: self._ask_restore())
         acts.append(self.btn_restore)
         left.append(acts)
@@ -384,7 +389,7 @@ class CameraOptimizerPage(Adw.NavigationPage):
         right.add_css_class("card")
         right.add_css_class("camopt-panel")
         right.append(caption("PROGRESS", "camopt-heading"))
-        self.job_empty = Gtk.Label(label="Steps and progress of an optimization appear here.", wrap=True, vexpand=True,
+        self.job_empty = Gtk.Label(label=tr("Steps and progress of an optimization appear here."), wrap=True, vexpand=True,
                                    css_classes=["camopt-empty"])
         right.append(self.job_empty)
         self.job_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, visible=False, vexpand=True)
@@ -406,12 +411,12 @@ class CameraOptimizerPage(Adw.NavigationPage):
         self.job_note.set_visible(False)
         self.job_box.append(self.job_note)
         job_actions = Gtk.Box(spacing=6)
-        self.btn_save_preset = Gtk.Button(label="Save as Preset…", visible=False, css_classes=["compact-btn"])
-        self.btn_save_preset.set_tooltip_text("Keep these calibrated settings under a name, to load them again later")
+        self.btn_save_preset = Gtk.Button(label=tr("Save as Preset…"), visible=False, css_classes=["compact-btn"])
+        self.btn_save_preset.set_tooltip_text(tr("Keep these calibrated settings under a name, to load them again later"))
         self.btn_save_preset.connect("clicked", lambda *_: ask_save_preset(
-            self.window, f"Optimized {time.strftime('%Y-%m-%d %H:%M')}"))
+            self.window, tr("Optimized {when}").format(when=time.strftime('%Y-%m-%d %H:%M'))))
         job_actions.append(self.btn_save_preset)
-        self.btn_after = Gtk.Button(label="See before & after", visible=False, css_classes=["compact-btn"])
+        self.btn_after = Gtk.Button(label=tr("See before & after"), visible=False, css_classes=["compact-btn"])
         self.btn_after.connect("clicked", lambda *_: self.tab_toggle.set_active_name("compare"))
         job_actions.append(self.btn_after)
         job_actions.append(Gtk.Box(hexpand=True))
@@ -420,7 +425,7 @@ class CameraOptimizerPage(Adw.NavigationPage):
         log_scroll = Gtk.ScrolledWindow(min_content_width=480, min_content_height=260)
         log_scroll.set_child(self.log_view)
         log_pop = Gtk.Popover(child=log_scroll)
-        btn_log = Gtk.MenuButton(label="Log", popover=log_pop, tooltip_text="Details of the last run")
+        btn_log = Gtk.MenuButton(label=tr("Log"), popover=log_pop, tooltip_text=tr("Details of the last run"))
         btn_log.add_css_class("flat")
         btn_log.add_css_class("compact-btn")
         job_actions.append(btn_log)
@@ -435,11 +440,11 @@ class CameraOptimizerPage(Adw.NavigationPage):
         # left: the pictures
         left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, hexpand=True)
         self.ba_stack = Gtk.Stack(vexpand=True)
-        self.ba_empty = Gtk.Label(label="Before and after pictures appear here after an optimization.", wrap=True)
+        self.ba_empty = Gtk.Label(label=tr("Before and after pictures appear here after an optimization."), wrap=True)
         self.ba_empty.add_css_class("camopt-empty")
         self.ba_stack.add_named(self.ba_empty, "empty")
         self.ba_picture = Gtk.Picture(content_fit=Gtk.ContentFit.CONTAIN, can_shrink=True)
-        self.ba_picture.set_tooltip_text("Double-tap or scroll to zoom into a spot; drag to move around when zoomed")
+        self.ba_picture.set_tooltip_text(tr("Double-tap or scroll to zoom into a spot; drag to move around when zoomed"))
         self.ba_picture.add_css_class("camopt-frame")
         drag = Gtk.GestureDrag()
         drag.connect("drag-begin", lambda g, x, y: self._ba_drag_begin(x))
@@ -456,14 +461,14 @@ class CameraOptimizerPage(Adw.NavigationPage):
         self.ba_picture.add_controller(wheel)
         self.ba_picture.add_controller(motion)
         ov = Gtk.Overlay(child=self.ba_picture)
-        self.tag_before = Gtk.Label(label="BEFORE", halign=Gtk.Align.START, valign=Gtk.Align.START, css_classes=["camopt-tag"])
-        self.tag_after = Gtk.Label(label="AFTER", halign=Gtk.Align.END, valign=Gtk.Align.START, css_classes=["camopt-tag"])
+        self.tag_before = Gtk.Label(label=tr("BEFORE"), halign=Gtk.Align.START, valign=Gtk.Align.START, css_classes=["camopt-tag"])
+        self.tag_after = Gtk.Label(label=tr("AFTER"), halign=Gtk.Align.END, valign=Gtk.Align.START, css_classes=["camopt-tag"])
         for t in (self.tag_before, self.tag_after):
             t.set_margin_top(10)
             t.set_margin_start(10)
             t.set_margin_end(10)
             ov.add_overlay(t)
-        self.ba_zoom_toggle = Adw.ToggleGroup(valign=Gtk.Align.END, halign=Gtk.Align.END, tooltip_text="Zoom")
+        self.ba_zoom_toggle = Adw.ToggleGroup(valign=Gtk.Align.END, halign=Gtk.Align.END, tooltip_text=tr("Zoom"))
         self.ba_zoom_toggle.set_margin_bottom(10)
         self.ba_zoom_toggle.set_margin_end(10)
         self.ba_zoom_toggle.add_css_class("osd")
@@ -507,20 +512,20 @@ class CameraOptimizerPage(Adw.NavigationPage):
         right.append(Gtk.Box(vexpand=True))
         self.ba_pending = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, visible=False)
         self.ba_pending.append(caption("Not applied yet: the cameras still run their previous settings.", wrap=True))
-        self.btn_apply = Gtk.Button(label="Apply now & set as default", css_classes=["pill", "suggested-action"])
-        self.btn_apply.set_tooltip_text("Keep this calibration, save it as a preset and load that preset at every start")
+        self.btn_apply = Gtk.Button(label=tr("Apply now & set as default"), css_classes=["pill", "suggested-action"])
+        self.btn_apply.set_tooltip_text(tr("Keep this calibration, save it as a preset and load that preset at every start"))
         self.btn_apply.connect("clicked", lambda *_: self._start_job("apply", oneclick.apply))
         self.ba_pending.append(self.btn_apply)
-        btn_discard = Gtk.Button(label="Discard", css_classes=["flat"])
-        btn_discard.set_tooltip_text("Forget this calibration and keep the previous settings")
+        btn_discard = Gtk.Button(label=tr("Discard"), css_classes=["flat"])
+        btn_discard.set_tooltip_text(tr("Forget this calibration and keep the previous settings"))
         btn_discard.connect("clicked", lambda *_: self._ask_discard())
         self.ba_pending.append(btn_discard)
         right.append(self.ba_pending)
-        self.btn_ba_preset = Gtk.Button(label="Save as Preset…")
+        self.btn_ba_preset = Gtk.Button(label=tr("Save as Preset…"))
         self.btn_ba_preset.connect("clicked", lambda *_: ask_save_preset(
-            self.window, f"Optimized {time.strftime('%Y-%m-%d %H:%M')}"))
+            self.window, tr("Optimized {when}").format(when=time.strftime('%Y-%m-%d %H:%M'))))
         right.append(self.btn_ba_preset)
-        btn_fine = Gtk.Button(label="Fine-tune in Camera Controls →", css_classes=["flat"])
+        btn_fine = Gtk.Button(label=tr("Fine-tune in Camera Controls →"), css_classes=["flat"])
         btn_fine.connect("clicked", lambda *_: self.window.open_camera_controls_page())
         right.append(btn_fine)
         self.ba_side = right
@@ -534,15 +539,15 @@ class CameraOptimizerPage(Adw.NavigationPage):
         lines = []
         for c in cams:
             hbv = c.get("usb_id") == oneclick.HBV_USB_ID
-            what = "HBV camera detected" if hbv else f"other camera ({c.get('usb_id') or 'unknown'})"
+            what = tr("HBV camera detected") if hbv else tr("other camera ({usb_id})").format(usb_id=c.get("usb_id") or tr("unknown"))
             lines.append(f"{'✓' if hbv else '✗'}  {cam_name(c['port'])}: {what}")
-        body = ("The optimizer uses hidden camera settings (JPEG quality, sensor gain) that were verified on "
-                "HBV OV2710 cameras only.")
+        body = tr("The optimizer uses hidden camera settings (JPEG quality, sensor gain) that were verified on "
+                  "HBV OV2710 cameras only.")
         if lines:
             body += "\n\n" + "\n".join(lines)
-        d = Adw.AlertDialog(heading="Are these HBV OV2710 cameras?", body=body)
-        d.add_response("no", "No / Not Sure")
-        d.add_response("yes", "Yes, Continue")
+        d = Adw.AlertDialog(heading=tr("Are these HBV OV2710 cameras?"), body=body)
+        d.add_response("no", tr("No / Not Sure"))
+        d.add_response("yes", tr("Yes, Continue"))
         d.set_response_appearance("yes", Adw.ResponseAppearance.SUGGESTED)
         d.set_default_response("yes")
 
@@ -553,37 +558,37 @@ class CameraOptimizerPage(Adw.NavigationPage):
         d.present(self.window)
 
     def _ask_prepare(self):
-        d = Adw.AlertDialog(heading="Start the Optimization?",
-                            body="Autodarts stops for about 3 minutes and restarts by itself.\n\n"
-                                 "Darts removed, lights on, hands away from the board?")
-        d.add_response("cancel", "Cancel")
-        d.add_response("start", "Start")
+        d = Adw.AlertDialog(heading=tr("Start the Optimization?"),
+                            body=tr("Autodarts stops for about 3 minutes and restarts by itself.\n\n"
+                                 "Darts removed, lights on, hands away from the board?"))
+        d.add_response("cancel", tr("Cancel"))
+        d.add_response("start", tr("Start"))
         d.set_response_appearance("start", Adw.ResponseAppearance.SUGGESTED)
         d.set_default_response("start")
         d.connect("response", lambda _d, r: r == "start" and self._start_job("optimize", oneclick.optimize, 30))
         d.present(self.window)
 
     def _ask_discard(self):
-        d = Adw.AlertDialog(heading="Discard This Calibration?",
-                            body="The cameras keep the settings they run now. You can optimize again at any time.")
-        d.add_response("cancel", "Cancel")
-        d.add_response("discard", "Discard")
+        d = Adw.AlertDialog(heading=tr("Discard This Calibration?"),
+                            body=tr("The cameras keep the settings they run now. You can optimize again at any time."))
+        d.add_response("cancel", tr("Cancel"))
+        d.add_response("discard", tr("Discard"))
         d.set_response_appearance("discard", Adw.ResponseAppearance.DESTRUCTIVE)
 
         def on_resp(_d, r):
             if r == "discard":
                 oneclick.discard()
-                self.window.show_toast("Calibration discarded")
+                self.window.show_toast(tr("Calibration discarded"))
                 self.refresh_status()
 
         d.connect("response", on_resp)
         d.present(self.window)
 
     def _ask_restore(self):
-        d = Adw.AlertDialog(heading="Restore Original Settings?",
-                            body="Your cameras go back to the settings Autodarts uses. Autodarts will restart.")
-        d.add_response("cancel", "Cancel")
-        d.add_response("restore", "Restore")
+        d = Adw.AlertDialog(heading=tr("Restore Original Settings?"),
+                            body=tr("Your cameras go back to the settings Autodarts uses. Autodarts will restart."))
+        d.add_response("cancel", tr("Cancel"))
+        d.add_response("restore", tr("Restore"))
         d.set_response_appearance("restore", Adw.ResponseAppearance.DESTRUCTIVE)
         d.connect("response", lambda _d, r: r == "restore" and self._start_job("restore", oneclick.restore))
         d.present(self.window)
@@ -594,7 +599,7 @@ class CameraOptimizerPage(Adw.NavigationPage):
         targets = [c["device"] for c in self.status["cameras"] if c["supported"] and c["optimized"]]
         ports = {c["device"]: c["port"] for c in self.status["cameras"]}
         self.btn_light.set_sensitive(False)
-        self.btn_light.set_label("Checking…")
+        self.btn_light.set_label(tr("Checking…"))
 
         def work():
             out = {}
@@ -607,15 +612,15 @@ class CameraOptimizerPage(Adw.NavigationPage):
 
         def done(res):
             self.btn_light.set_sensitive(True)
-            self.btn_light.set_label("Check lighting")
+            self.btn_light.set_label(tr("Check lighting"))
             self.lighting = res
             if not res:
-                self.window.show_toast("No picture to compare yet, try again")
+                self.window.show_toast(tr("No picture to compare yet, try again"))
             self._render_cams()
 
         def fail(e):
             self.btn_light.set_sensitive(True)
-            self.btn_light.set_label("Check lighting")
+            self.btn_light.set_label(tr("Check lighting"))
             self.window.show_toast(str(e))
 
         run_async(work, done, fail)
@@ -625,7 +630,7 @@ class CameraOptimizerPage(Adw.NavigationPage):
     def _start_job(self, name: str, fn: Callable, *args):
         live.stop_all()
         if not JOB.start(name, fn, live.pause_live, *args):
-            self.window.show_toast("A camera job is already running")
+            self.window.show_toast(tr("A camera job is already running"))
             return
         self._job_t0 = time.time()
         self.lighting = {}
@@ -651,7 +656,7 @@ class CameraOptimizerPage(Adw.NavigationPage):
             self._preview_timer = 0
             return False
         dev, phase, jpeg, seq = PREVIEW.state
-        self.preview_phase.set_label(phase or "Waiting for the cameras…")
+        self.preview_phase.set_label(tr(phase or "Waiting for the cameras…"))
         if not jpeg:
             self.preview_pic.set_paintable(None)
             self.preview_tag.set_visible(False)
@@ -690,16 +695,17 @@ class CameraOptimizerPage(Adw.NavigationPage):
         self.cam_list.set_visible(not watching)
         self.preview_box.set_visible(watching)
         if j["running"]:
-            self.hero_title.set_label("Restoring original settings…" if restoring else
-                                      "Applying the calibration…" if applying else "Optimizing…")
-            self.hero_text.set_label("Please don't touch the board or the cameras.")
+            self.hero_title.set_label(tr("Restoring original settings…") if restoring else
+                                      tr("Applying the calibration…") if applying else tr("Optimizing…"))
+            self.hero_text.set_label(tr("Please don't touch the board or the cameras."))
             self.guide.set_visible(False)
             el = time.time() - (self._job_t0 or time.time())
             eta = ETA_S.get(j["name"], ETA_S["optimize"])
             self.progress.set_fraction(min(el / eta, 0.97))
             left = max(0, int(eta - el))
             self.lbl_time.set_label(f"{int(el) // 60}:{int(el) % 60:02d} · " +
-                                    (f"about {left // 60}:{left % 60:02d} left" if left else "almost done"))
+                                    (tr("about {time} left").format(time=f"{left // 60}:{left % 60:02d}") if left
+                                     else tr("almost done")))
         else:
             self.progress.set_fraction(0 if j["error"] else 1)
             self.lbl_time.set_label("")
@@ -727,29 +733,32 @@ class CameraOptimizerPage(Adw.NavigationPage):
         self.log_view.get_buffer().set_text("\n".join(j["log"]))
         note, kind = "", ""
         if j["error"]:
-            note, kind = (f"Something went wrong: {j['error']}. Your previous settings are still in place."), "bad"
+            note, kind = tr("Something went wrong: {error}. Your previous settings are still in place.").format(
+                error=tr(j["error"])), "bad"
         elif not j["running"] and applying and j["result"]:
             r = j["result"]
-            note, kind = (f"Applied. Saved as “{r['preset']}”, loaded at every start."
-                          + (f" Autodarts now runs at {r['resolution']}." if r.get("resolution") else "")
-                          + {"started": " Autodarts is calibrating the board at it.",
-                             "needed": " Calibrate the board in Autodarts at it."}.get(r.get("board"), "")), "ok"
+            note, kind = (tr("Applied. Saved as “{preset}”, loaded at every start.").format(preset=r["preset"])
+                          + (" " + tr("Autodarts now runs at {resolution}.").format(resolution=r["resolution"])
+                             if r.get("resolution") else "")
+                          + {"started": " " + tr("Autodarts is calibrating the board at it."),
+                             "needed": " " + tr("Calibrate the board in Autodarts at it.")}.get(r.get("board"), "")), "ok"
         elif not j["running"] and not restoring and j["result"]:
             qs = {r.get("mjpeg_q") for r in j["result"].values()}
             first = next(iter(j["result"].values()))
-            change = (f" Applying sets Autodarts to {first['resolution']} (needs a new board calibration if it"
-                      f" has none at it).") if first.get("resolution_change") else ""
-            note, kind = ("All cameras calibrated and matched"
-                          + (f" at {first['resolution']}" if first.get("resolution") else "")
-                          + (f" · JPEG level {qs.pop()}" if len(qs) == 1 else "")
-                          + "." + change + " Review before & after, then apply."), "review"
+            change = (" " + tr("Applying sets Autodarts to {resolution} (needs a new board calibration if it"
+                               " has none at it).").format(resolution=first["resolution"])
+                      if first.get("resolution_change") else "")
+            note, kind = ((tr("All cameras calibrated and matched at {resolution}").format(resolution=first["resolution"])
+                           if first.get("resolution") else tr("All cameras calibrated and matched"))
+                          + (" · " + tr("JPEG level {q}").format(q=qs.pop()) if len(qs) == 1 else "")
+                          + "." + change + " " + tr("Review before & after, then apply.")), "review"
         elif not j["running"] and restoring:
-            note, kind = "Original settings restored.", ""
+            note, kind = tr("Original settings restored."), ""
         self.job_note.set_label(note)
         self.job_note.set_visible(bool(note))
         self.btn_save_preset.set_visible(False)  # saving happens on apply
         self.btn_after.set_visible(kind in ("ok", "review"))
-        self.btn_after.set_label("Review & apply" if kind == "review" else "See before & after")
+        self.btn_after.set_label(tr("Review & apply") if kind == "review" else tr("See before & after"))
         for c in ("camopt-note-ok", "camopt-note-bad"):
             self.job_note.remove_css_class(c)
         if kind:
@@ -773,17 +782,19 @@ class CameraOptimizerPage(Adw.NavigationPage):
         cam = self._cam(name)
         if info is None:
             self.ba_stack.set_visible_child_name("empty")
-            self.ba_empty.set_label("Before and after pictures appear here after an optimization." if not self.ba else
-                                    f"No before and after pictures for {cam_name(name)} yet." if name else "")
+            self.ba_empty.set_label(tr("Before and after pictures appear here after an optimization.") if not self.ba else
+                                    tr("No before and after pictures for {camera} yet.").format(camera=cam_name(name))
+                                    if name else "")
             self.ba_imgs, self.ba_data, self.ba_key = None, None, ""
             self.ba_note.set_label("")
             self._render_stats(None)
             return
         meta = info.get("meta") or {}
         after = meta.get("after", {})
-        self.ba_note.set_label((f"{'Calibrated' if info.get('pending') else 'Optimized'} {after['time']} · "
-                                if after.get("time") else "") +
-                               "drag the handle · double-tap or scroll to zoom")
+        stamp = ""
+        if after.get("time"):
+            stamp = (tr("Calibrated {when}") if info.get("pending") else tr("Optimized {when}")).format(when=after["time"]) + " · "
+        self.ba_note.set_label(stamp + tr("drag the handle · double-tap or scroll to zoom"))
         # the meta time is per minute: the file times tell a rerun within the same minute apart
         d = info["dir"]
         stamps = [(d / f"{w}.jpg").stat().st_mtime_ns if (d / f"{w}.jpg").exists() else 0 for w in ("before", "after")]
@@ -808,7 +819,7 @@ class CameraOptimizerPage(Adw.NavigationPage):
             self.ba_imgs = data["imgs"] if data else None
             self.ba_stack.set_visible_child_name("picture" if data else "empty")
             if not data:
-                self.ba_empty.set_label("The before and after pictures cannot be compared.")
+                self.ba_empty.set_label(tr("The before and after pictures cannot be compared."))
             self._render_stats(data)
             self._render_ba()
 
@@ -841,7 +852,7 @@ class CameraOptimizerPage(Adw.NavigationPage):
         self.ba_chip.set_visible(False)
         self.btn_ba_preset.set_sensitive(has)
         name = cam_name(self.strip.active) if self.strip.active else ""
-        self.ba_title.set_label(f"RESULT · {name.upper()}" if has else "RESULT")
+        self.ba_title.set_label(f"{tr('RESULT')} · {name.upper()}" if has else tr("RESULT"))
         if not has:
             return
         b, a = data["stats"]
@@ -850,9 +861,9 @@ class CameraOptimizerPage(Adw.NavigationPage):
                 ("JPEG level", str(data["q"][0] or "–"), str(data["q"][1] or "–"), True),
                 ("Size / frame", f"{data['kb'][0]:.0f} KB", f"{data['kb'][1]:.0f} KB", None)]
         for c, h in enumerate(("", "BEFORE", "AFTER")):
-            t.attach(Gtk.Label(label=h, xalign=1 if c else 0, css_classes=["camopt-table-head"]), c, 0, 1, 1)
+            t.attach(Gtk.Label(label=tr(h), xalign=1 if c else 0, css_classes=["camopt-table-head"]), c, 0, 1, 1)
         for r, (label, before, after, good) in enumerate(rows, 1):
-            t.attach(Gtk.Label(label=label, xalign=0, css_classes=["camopt-cell"]), 0, r, 1, 1)
+            t.attach(Gtk.Label(label=tr(label), xalign=0, css_classes=["camopt-cell"]), 0, r, 1, 1)
             t.attach(Gtk.Label(label=before, xalign=1, hexpand=True, css_classes=["camopt-cell"]), 1, r, 1, 1)
             la = Gtk.Label(label=after, xalign=1, css_classes=["camopt-cell"])
             if good:
@@ -864,8 +875,8 @@ class CameraOptimizerPage(Adw.NavigationPage):
                  if ref and (c.get("info") or {}).get("white")]
         if diffs:
             worst = max(diffs) * 100
-            set_chip(self.ba_chip, f"✓ Matches the other cameras within {max(worst, 1):.0f} %" if worst < 5 else
-                     f"Differs from another camera by {worst:.0f} %", "ok" if worst < 5 else "warn")
+            set_chip(self.ba_chip, tr("✓ Matches the other cameras within {pct:.0f} %").format(pct=max(worst, 1)) if worst < 5
+                     else tr("Differs from another camera by {pct:.0f} %").format(pct=worst), "ok" if worst < 5 else "warn")
             self.ba_chip.set_visible(True)
 
     def _ba_set_mode(self, mode: str):

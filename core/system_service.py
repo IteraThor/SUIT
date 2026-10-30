@@ -9,6 +9,7 @@ from core.waydroid_service import WaydroidService
 from core.desktop_service import DesktopService
 from core.remote_desktop_service import RemoteDesktopService
 from core.boot_service import BootService, TWEAKS
+from core.i18n import tr
 
 
 class SystemService:
@@ -592,7 +593,7 @@ class SystemService:
             except Exception as e:
                 logger.exception("Error executing step %s during apply_all", title)
                 success = False
-                msg = f"Error: {e}"
+                msg = tr("Error: {msg}").format(msg=e)
 
             results.append({"step": title, "success": success, "message": msg})
 
@@ -601,7 +602,7 @@ class SystemService:
             summary_msg = "All system configurations applied successfully."
         else:
             failed = [r["step"] for r in results if not r["success"]]
-            summary_msg = f"Completed with warnings on: {', '.join(failed)}."
+            summary_msg = tr("Completed with warnings on: {steps}.").format(steps=", ".join(tr(s) for s in failed))
 
         return all_success, summary_msg, results
 

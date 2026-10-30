@@ -7,6 +7,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from core.logger import get_logger
+from core.i18n import tr
 
 logger = get_logger("boot")
 
@@ -373,23 +374,23 @@ class BootService:
             cls._save_state(state, path)
             logger.info(f"Fast Boot tweak {tweak_id} applied: {entry}, failed: {failed}")
             if failed:
-                return False, f"{tweak.title} partly applied, failed: {', '.join(failed)}"
-            return True, f"{tweak.title} on. Takes effect on next boot."
+                return False, tr("{title} partly applied, failed: {failed}").format(title=tr(tweak.title), failed=", ".join(failed))
+            return True, tr("{title} on. Takes effect on next boot.").format(title=tr(tweak.title))
 
         entry = state["tweaks"].get(tweak_id)
         if entry is None:
-            return True, f"{tweak.title} already off."
+            return True, tr("{title} already off.").format(title=tr(tweak.title))
         remaining = cls._revert(entry)
         if remaining:
             # Keep what is still applied so the switch stays on and a retry finishes the job
             state["tweaks"][tweak_id] = {**remaining, "saved_s": entry.get("saved_s", tweak.default_s)}
             cls._save_state(state, path)
             logger.error(f"Fast Boot tweak {tweak_id} revert incomplete: {remaining}")
-            return False, f"Could not fully revert {tweak.title}. Try again."
+            return False, tr("Could not fully revert {title}. Try again.").format(title=tr(tweak.title))
         del state["tweaks"][tweak_id]
         cls._save_state(state, path)
         logger.info(f"Fast Boot tweak {tweak_id} reverted")
-        return True, f"{tweak.title} off. Original setting restored."
+        return True, tr("{title} off. Original setting restored.").format(title=tr(tweak.title))
 
     @classmethod
     def set_fast_boot(cls, enabled: bool, state_path: Path | None = None) -> tuple[bool, str]:
@@ -401,7 +402,7 @@ class BootService:
             ids = list(cls._load_state(state_path or DEFAULT_STATE_PATH)["tweaks"])
         failed = [TWEAKS_BY_ID[i].title for i in ids if not cls.set_tweak(i, enabled, state_path)[0]]
         if failed:
-            return False, f"Some tweaks failed: {', '.join(failed)}"
+            return False, tr("Some tweaks failed: {failed}").format(failed=", ".join(failed))
         if enabled:
             return True, "Recommended tweaks on. Takes effect on next boot."
         return True, "All Fast Boot tweaks reverted."
@@ -456,9 +457,9 @@ class BootService:
         order = efi.get("order", [])
         if order and efi.get("current") and order[0] != efi["current"]:
             first = entries.get(order[0], (order[0], True))[0]
-            findings.append(f"'{first}' is tried before Fedora in the boot order.")
+            findings.append(tr("'{name}' is tried before Fedora in the boot order.").format(name=first))
         if efi.get("timeout"):
-            findings.append(f"The firmware boot menu waits {efi['timeout']} s.")
+            findings.append(tr("The firmware boot menu waits {seconds} s.").format(seconds=efi["timeout"]))
         if not EFI_DIR.exists():
             findings.append("Boots in Legacy mode, usually slower than UEFI.")
 

@@ -11,6 +11,7 @@ import subprocess
 import getpass
 from pathlib import Path
 from core.logger import get_logger
+from core.i18n import tr
 
 logger = get_logger("autodarts")
 
@@ -309,10 +310,10 @@ def control_calibrate(host: str = DEFAULT_HOST, port: int | None = None) -> tupl
             return True, "Calibration started."
     except urllib.error.HTTPError as e:
         err_msg = e.read().decode("utf-8", errors="ignore").strip() or str(e)
-        return False, f"Calibration failed: {err_msg}"
+        return False, tr("Calibration failed: {error}").format(error=err_msg)
     except Exception as e:
         logger.exception("Failed triggering calibration")
-        return False, f"Calibration error: {e}"
+        return False, tr("Calibration error: {error}").format(error=e)
 
 
 
@@ -991,7 +992,7 @@ def install_autodarts() -> tuple[bool, str]:
         proc = subprocess.run(install_cmd, shell=True, capture_output=True, text=True, timeout=120)
         if proc.returncode != 0:
             logger.warning("Installer script returned %s: %s", proc.returncode, proc.stderr)
-            return False, f"Installation script failed: {proc.stderr.strip() or 'Unknown error'}"
+            return False, tr("Installation script failed: {error}").format(error=proc.stderr.strip() or tr("Unknown error"))
     except Exception as e:
         logger.exception("Failed executing autodarts.sh installer")
         return False, str(e)

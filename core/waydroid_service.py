@@ -5,6 +5,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from core.logger import get_logger
+from core.i18n import tr
 
 logger = get_logger("waydroid")
 
@@ -134,10 +135,10 @@ class WaydroidService:
             subprocess.run(init_cmd, check=True, capture_output=True)
             subprocess.run(["sudo", "-n", "waydroid", "prop", "set", "persist.sys.locale", loc], check=False)
             logger.info(f"Waydroid installed and initialized with locale {loc}")
-            return True, f"Waydroid installed and initialized ({loc})."
+            return True, tr("Waydroid installed and initialized ({loc}).").format(loc=loc)
         except Exception as e:
             logger.exception("Failed installing Waydroid")
-            return False, f"Failed installing Waydroid: {e}"
+            return False, tr("Failed installing Waydroid: {error}").format(error=e)
 
     @classmethod
     def waydroid_debloat_and_seamless(cls) -> tuple[bool, str]:
@@ -182,7 +183,7 @@ class WaydroidService:
             return True, "Waydroid debloat and fullscreen configured."
         except Exception as e:
             logger.exception("Failed configuring Waydroid debloat and fullscreen")
-            return False, f"Failed configuring Waydroid debloat: {e}"
+            return False, tr("Failed configuring Waydroid debloat: {error}").format(error=e)
 
     @classmethod
     def install_aurora_store(cls) -> tuple[bool, str]:
@@ -260,7 +261,7 @@ class WaydroidService:
             return True, "Aurora Store installed into Waydroid."
         except Exception as e:
             logger.exception("Failed installing Aurora Store")
-            return False, f"Failed installing Aurora Store: {e}"
+            return False, tr("Failed installing Aurora Store: {error}").format(error=e)
 
     @classmethod
     def full_waydroid_setup(cls) -> tuple[bool, str]:
@@ -299,7 +300,7 @@ class WaydroidService:
             return True, "ARM translation (libndk) installed."
         except Exception as e:
             logger.exception("Failed installing libndk ARM translation")
-            return False, f"Failed installing ARM translation: {e}"
+            return False, tr("Failed installing ARM translation: {error}").format(error=e)
 
     @classmethod
     def has_private_darts_scorer(cls) -> bool:
@@ -435,7 +436,7 @@ class WaydroidService:
             return True, "Darts Scorer installed and ready to launch."
         except Exception as e:
             logger.exception("Full Darts Scorer setup failed")
-            return False, f"Setup failed: {e}"
+            return False, tr("Setup failed: {error}").format(error=e)
 
     @staticmethod
     def is_virtual_machine() -> tuple[bool, str]:
@@ -465,11 +466,11 @@ class WaydroidService:
 
             subprocess.Popen(["waydroid", "app", "launch", "com.aurora.store"])
             if is_vm:
-                return True, f"Launched Aurora Store. Note: Running in a virtual machine ({virt_type}). Waydroid requires physical GPU hardware acceleration (Intel/AMD) to render UI windows."
+                return True, tr("Launched Aurora Store. Note: Running in a virtual machine ({virt_type}). Waydroid requires physical GPU hardware acceleration (Intel/AMD) to render UI windows.").format(virt_type=virt_type)
             return True, "Launched Aurora Store. Search for 'Darts Scorer' to install or open."
         except Exception as e:
             logger.exception("Failed launching Aurora Store")
-            return False, f"Failed launching Aurora Store: {e}"
+            return False, tr("Failed launching Aurora Store: {error}").format(error=e)
 
     @classmethod
     def launch_darts_scorer(cls) -> tuple[bool, str]:
@@ -481,7 +482,7 @@ class WaydroidService:
                     subprocess.Popen([str(launcher)])
                     is_vm, virt_type = cls.is_virtual_machine()
                     if is_vm:
-                        return True, f"Launched Darts Scorer. Note: Running in a virtual machine ({virt_type})."
+                        return True, tr("Launched Darts Scorer. Note: Running in a virtual machine ({virt_type}).").format(virt_type=virt_type)
                     return True, "Launched Darts Scorer."
         except Exception:
             pass

@@ -5,13 +5,14 @@ from gi.repository import Gtk, Adw, GLib
 from core.logger import get_logger
 
 from modules_gtk.ui_helpers import build_page_shell
+from core.i18n import tr
 
 logger = get_logger("camera_tools_view")
 
 
 class CameraToolsView(Adw.NavigationPage):
     def __init__(self, window):
-        super().__init__(title="Camera Tools", tag="camera_tools")
+        super().__init__(title=tr("Camera Tools"), tag="camera_tools")
         self.window = window
 
         scrolled, main_box = build_page_shell()
@@ -23,8 +24,8 @@ class CameraToolsView(Adw.NavigationPage):
 
         # 1. Focus Calibration Row
         self.row_focus = Adw.ActionRow()
-        self.row_focus.set_title(GLib.markup_escape_text("Focus Calibration"))
-        self.row_focus.set_subtitle(GLib.markup_escape_text("Tune optical sharpness, target sweet spots, and audio tone guidance."))
+        self.row_focus.set_title(GLib.markup_escape_text(tr("Focus Calibration")))
+        self.row_focus.set_subtitle(GLib.markup_escape_text(tr("Tune optical sharpness, target sweet spots, and audio tone guidance.")))
         icon_focus = Gtk.Image.new_from_icon_name("camera-photo-symbolic")
         icon_focus.set_pixel_size(24)
         icon_focus.set_margin_end(10)
@@ -40,8 +41,8 @@ class CameraToolsView(Adw.NavigationPage):
 
         # 2. Camera Controls Row
         self.row_manual = Adw.ActionRow()
-        self.row_manual.set_title(GLib.markup_escape_text("Camera Controls"))
-        self.row_manual.set_subtitle(GLib.markup_escape_text("Live view and every camera setting, kept across restarts, with presets."))
+        self.row_manual.set_title(GLib.markup_escape_text(tr("Camera Controls")))
+        self.row_manual.set_subtitle(GLib.markup_escape_text(tr("Live view and every camera setting, kept across restarts, with presets.")))
         icon_manual = Gtk.Image.new_from_icon_name("preferences-system-symbolic")
         icon_manual.set_pixel_size(24)
         icon_manual.set_margin_end(10)
@@ -57,8 +58,8 @@ class CameraToolsView(Adw.NavigationPage):
 
         # 3. Camera Optimizer
         self.row_optimizer = Adw.ActionRow()
-        self.row_optimizer.set_title(GLib.markup_escape_text("Camera Optimizer"))
-        self.row_optimizer.set_subtitle(GLib.markup_escape_text("One-click exposure, gain, and JPEG quality calibration for HBV OV2710 cameras."))
+        self.row_optimizer.set_title(GLib.markup_escape_text(tr("Camera Optimizer")))
+        self.row_optimizer.set_subtitle(GLib.markup_escape_text(tr("One-click exposure, gain, and JPEG quality calibration for HBV OV2710 cameras.")))
         icon_optimizer = Gtk.Image.new_from_icon_name("applications-science-symbolic")
         icon_optimizer.set_pixel_size(24)
         icon_optimizer.set_margin_end(10)

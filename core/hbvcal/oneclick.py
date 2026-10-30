@@ -17,6 +17,7 @@ from typing import Callable, List, Optional
 
 from . import board, profiles, service
 from .autocal import PREVIEW, calibrate_all, start_clean
+from ..i18n import tr
 from .autodarts import calibrate_board, set_stream_size, stream_size
 from .capture import burst
 from .daemon import cameras, is_streaming, tick
@@ -41,18 +42,18 @@ def support(dev: str) -> dict:
     uid = profiles.usb_id(dev)
     out = {"device": dev, "port": profiles.port_key(dev), "usb_id": uid, "supported": False}
     if uid != HBV_USB_ID:
-        out["reason"] = f"not an HBV OV2710 camera (USB ID {uid}, expected {HBV_USB_ID})"
+        out["reason"] = tr("not an HBV OV2710 camera (USB ID {uid}, expected {expected})").format(uid=uid, expected=HBV_USB_ID)
         return out
     try:
         with XU(dev) as xu:
             xu.unlock()
             build = xu.firmware_build()
     except OSError as e:
-        out["reason"] = f"camera did not answer the tuning interface ({e})"
+        out["reason"] = tr("camera did not answer the tuning interface ({error})").format(error=e)
         return out
     out["firmware"] = build
     if build not in Q_ADDR:
-        out["reason"] = f"unknown firmware build {build}: memory layout not verified"
+        out["reason"] = tr("unknown firmware build {build}: memory layout not verified").format(build=build)
         return out
     out["supported"] = True
     out["optimized"] = profiles.is_calibrated(profiles.get(dev))
@@ -111,7 +112,7 @@ class Job:
     def step(self, title: str):
         if self.steps and self.steps[-1]["state"] == "running":
             self.steps[-1]["state"] = "done"
-        self.steps.append({"title": title, "state": "running"})
+        self.steps.append({"title": tr(title), "state": "running"})
         log.info("%s step: %s", self.name, title)
 
     def skip(self, note: str):
@@ -119,7 +120,7 @@ class Job:
         picture): shown as a yellow note, not a failure. Real failures end the job (red)."""
         if self.steps and self.steps[-1]["state"] == "running":
             self.steps[-1]["state"] = "skipped"
-            self.steps[-1]["title"] += f": {note}"
+            self.steps[-1]["title"] += f": {tr(note)}"
             log.info("%s step skipped: %s", self.name, self.steps[-1]["title"])
 
     def finish(self):
@@ -282,8 +283,8 @@ def _calibrate_best(job: Job, devs: List[str], fps: int) -> tuple:
                 raise
             nw, nh = RESOLUTIONS[i + 1]
             job.say(f"{w}x{h} not usable: {e}")
-            job.skip(f"not possible at {w}x{h}, see the log")
-            job.step(f"Stepping down to {nw}x{nh}")
+            job.skip(tr("not possible at {size}, see the log").format(size=f"{w}x{h}"))
+            job.step(tr("Stepping down to {size}").format(size=f"{nw}x{nh}"))
             for d in devs:  # the failed attempt may have left its Q in camera memory
                 _put_back(d)
 
@@ -325,7 +326,7 @@ def optimize(job: Job, pause_live: Callable[[bool], None], fps: int = 30) -> Non
         results, size = _calibrate_best(job, devs, fps)
         job.say(f"calibrated at {size[0]}x{size[1]}")
         if size != ad_size:  # before & after compare at one resolution: the old settings again, at the new one
-            job.step(f"Taking 'before' pictures again at {size[0]}x{size[1]}")
+            job.step(tr("Taking 'before' pictures again at {size}").format(size=f"{size[0]}x{size[1]}"))
             for d, r in results.items():
                 try:
                     before[d] = snapshot_frame(d, Settings.from_json(r.meta["previous"]), say=job.say, size=size)
@@ -390,7 +391,7 @@ def apply(job: Job, pause_live: Callable[[bool], None]) -> None:
                 BEFORE_AFTER.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(src), str(BEFORE_AFTER / profiles.port_key(d)))
         name = f"Optimized {time.strftime('%Y-%m-%d %H:%M')}"
-        job.step(f"Saving as default preset “{name}”")
+        job.step(tr("Saving as default preset “{name}”").format(name=name))
         live.save_preset(name)
         profiles.set_default_preset(name)
         job.result = {"preset": name}
@@ -402,7 +403,7 @@ def apply(job: Job, pause_live: Callable[[bool], None]) -> None:
         service.stop()
         new_size = size if size and size != stream_size() else None
         if new_size:  # after the stop: Autodarts writes its config back when it exits
-            job.step(f"Setting Autodarts to {new_size[0]}x{new_size[1]}")
+            job.step(tr("Setting Autodarts to {size}").format(size=f"{new_size[0]}x{new_size[1]}"))
             set_stream_size(*new_size)
             job.result["resolution"] = f"{new_size[0]}x{new_size[1]}"
         _wait_cameras_free(devs)
@@ -415,7 +416,7 @@ def apply(job: Job, pause_live: Callable[[bool], None]) -> None:
             if not _wait_streaming(devs, AUTODARTS_START_TIMEOUT):
                 job.say("Autodarts did not open all cameras in time; the keeper will apply later")
         if new_size and any(board.load_homography(d, *new_size) is None for d in devs):
-            job.step(f"Calibrating the board in Autodarts at {new_size[0]}x{new_size[1]}")
+            job.step(tr("Calibrating the board in Autodarts at {size}").format(size=f"{new_size[0]}x{new_size[1]}"))
             if was_running and calibrate_board():
                 job.result["board"] = "started"
             else:

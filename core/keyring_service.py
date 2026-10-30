@@ -3,6 +3,7 @@ import time
 import shutil
 from pathlib import Path
 from core.logger import get_logger
+from core.i18n import tr
 
 logger = get_logger("keyring")
 
@@ -43,7 +44,7 @@ class KeyringService:
             return False, "Keyring uninitialized or unrecognized format"
         except Exception as e:
             logger.debug(f"Failed reading keyring file: {e}")
-            return False, f"Could not inspect keyring: {e}"
+            return False, tr("Could not inspect keyring: {error}").format(error=e)
 
     @classmethod
     def reset_keyring_to_blank(cls, keyring_path: Path | None = None) -> tuple[bool, str]:
@@ -93,7 +94,7 @@ class KeyringService:
             return True, "Keyring password removed. It will now unlock automatically on boot."
         except Exception as e:
             logger.exception("Failed resetting keyring to blank")
-            return False, f"Failed resetting keyring: {e}"
+            return False, tr("Failed resetting keyring: {error}").format(error=e)
 
     @staticmethod
     def is_seahorse_installed() -> bool:

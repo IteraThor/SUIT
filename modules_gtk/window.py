@@ -13,6 +13,7 @@ from core.privileges import check_sudo_privileges, setup_sudoers_pkexec
 from core.update_service import UpdateService
 from modules_gtk.async_utils import run_async
 from modules_gtk.menu import MainMenuView
+from core.i18n import tr, set_language
 
 logger = get_logger("window")
 
@@ -27,7 +28,7 @@ PREWARM_QUIET_S = 1.5
 
 class SuitWindow(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="SUIT for Fedora")
+        super().__init__(application=app, title=tr("SUIT for Fedora"))
         # Determine monitor size for display-aware default window bounds
         display = Gdk.Display.get_default()
         screen_w, screen_h = 1280, 800
@@ -83,14 +84,14 @@ class SuitWindow(Adw.ApplicationWindow):
         # Touch-Friendly Back Button (visible on subpages)
         self.btn_back = Gtk.Button.new_from_icon_name("go-previous-symbolic")
         self.btn_back.add_css_class("flat")
-        self.btn_back.set_tooltip_text("Back to Menu")
+        self.btn_back.set_tooltip_text(tr("Back to Menu"))
         self.btn_back.set_size_request(30, 28)
         self.btn_back.set_visible(False)
         self.btn_back.connect("clicked", lambda b: self._on_back_clicked())
         self.header_bar.pack_start(self.btn_back)
 
         # Title Widget
-        self.title_widget = Adw.WindowTitle(title="SUIT for Fedora")
+        self.title_widget = Adw.WindowTitle(title=tr("SUIT for Fedora"))
         self.header_bar.set_title_widget(self.title_widget)
 
         # Navigation View (smooth hardware-accelerated transitions)
@@ -153,7 +154,7 @@ class SuitWindow(Adw.ApplicationWindow):
             return False
 
         self.set_sensitive(False)
-        self.title_widget.set_subtitle("Finishing the camera optimization…")
+        self.title_widget.set_subtitle(tr("Finishing the camera optimization…"))
         deadline = time.monotonic() + JOB_WAIT_S
 
         def _poll():
@@ -226,11 +227,11 @@ class SuitWindow(Adw.ApplicationWindow):
     def _check_first_run_privileges(self):
         if not check_sudo_privileges():
             dialog = Adw.AlertDialog(
-                heading="Administrator Privileges Required",
-                body="SUIT requires administrator rights to configure systemd background services, kiosk mode, and system settings without interrupting you.\n\nAuthorize once to enable seamless passwordless access for future runs?"
+                heading=tr("Administrator Privileges Required"),
+                body=tr("SUIT requires administrator rights to configure systemd background services, kiosk mode, and system settings without interrupting you.\n\nAuthorize once to enable seamless passwordless access for future runs?")
             )
-            dialog.add_response("cancel", "Not Now")
-            dialog.add_response("auth", "Authorize")
+            dialog.add_response("cancel", tr("Not Now"))
+            dialog.add_response("auth", tr("Authorize"))
             dialog.set_response_appearance("auth", Adw.ResponseAppearance.SUGGESTED)
 
             def on_response(d, response):
@@ -239,9 +240,9 @@ class SuitWindow(Adw.ApplicationWindow):
                         ok, msg = setup_sudoers_pkexec()
                         def _notify():
                             if ok:
-                                self.show_toast("Administrator privileges successfully authorized.")
+                                self.show_toast(tr("Administrator privileges successfully authorized."))
                             else:
-                                self.show_toast("Authorization was not completed.")
+                                self.show_toast(tr("Authorization was not completed."))
                         GLib.idle_add(_notify)
                     threading.Thread(target=_do_auth, daemon=True).start()
 
@@ -262,11 +263,11 @@ class SuitWindow(Adw.ApplicationWindow):
 
         if page and page != self.menu_page:
             self.btn_back.set_visible(True)
-            self.title_widget.set_title(page.get_title() or "SUIT for Fedora")
-            self.title_widget.set_subtitle("SUIT for Fedora")
+            self.title_widget.set_title(page.get_title() or tr("SUIT for Fedora"))
+            self.title_widget.set_subtitle(tr("SUIT for Fedora"))
         else:
             self.btn_back.set_visible(False)
-            self.title_widget.set_title("SUIT for Fedora")
+            self.title_widget.set_title(tr("SUIT for Fedora"))
             self.title_widget.set_subtitle("")
 
         self._adapt_window_size_for_page(page)
@@ -321,8 +322,26 @@ class SuitWindow(Adw.ApplicationWindow):
         self.set_default_size(target_w, target_h)
 
 
+    def set_language(self, lang):
+        """Switch the UI language: rebuild the main menu and drop cached pages so they rebuild on next open."""
+        set_language(lang)
+        self.set_title(tr("SUIT for Fedora"))
+        self.btn_back.set_tooltip_text(tr("Back to Menu"))
+        for attr in ("autodarts_page", "focus_page", "camera_tools_page", "camera_controls_page",
+                     "rotation_page", "kiosk_page", "system_page", "autoglow_page"):
+            setattr(self, attr, None)
+        # A running Camera Optimizer job needs its page; it keeps the old language until restart
+        opt = self.camera_optimizer_page
+        t = opt.job_thread if opt is not None else None
+        if t is None or not t.is_alive():
+            self.camera_optimizer_page = None
+
+        self.menu_page = MainMenuView(self)
+        self._last_visible_page = self.menu_page
+        self.nav_view.replace([self.menu_page])
+
     def show_toast(self, text):
-        toast = Adw.Toast(title=text, timeout=3)
+        toast = Adw.Toast(title=tr(text), timeout=3)
         self.toast_overlay.add_toast(toast)
 
     def open_autodarts_page(self):
@@ -356,29 +375,29 @@ class SuitWindow(Adw.ApplicationWindow):
             self.camera_controls_page.on_page_opened()
         except ImportError as e:
             logger.exception("Camera Controls unavailable due to missing dependency: %s", e)
-            self._prompt_install_opencv("Camera Controls", self.open_camera_controls_page)
+            self._prompt_install_opencv(tr("Camera Controls"), self.open_camera_controls_page)
         except Exception as e:
             logger.exception("Failed to open Camera Controls: %s", e)
             dialog = Adw.AlertDialog(
-                heading="Camera Controls Error",
-                body="Unable to open Camera Controls. Check system log for details."
+                heading=tr("Camera Controls Error"),
+                body=tr("Unable to open Camera Controls. Check system log for details.")
             )
-            dialog.add_response("ok", "OK")
+            dialog.add_response("ok", tr("OK"))
             dialog.present(self)
 
     def _prompt_install_opencv(self, tool_name, retry_cb):
         dialog = Adw.AlertDialog(
-            heading="OpenCV Required",
-            body=f"{tool_name} requires OpenCV (python3-opencv)."
+            heading=tr("OpenCV Required"),
+            body=tr("{tool} requires OpenCV (python3-opencv).").format(tool=tool_name)
         )
-        dialog.add_response("cancel", "Later")
-        dialog.add_response("install", "Install Now")
+        dialog.add_response("cancel", tr("Later"))
+        dialog.add_response("install", tr("Install Now"))
         dialog.set_response_appearance("install", Adw.ResponseAppearance.SUGGESTED)
 
         def on_resp(d, resp):
             if resp != "install":
                 return
-            self.show_toast("Installing python3-opencv...")
+            self.show_toast(tr("Installing python3-opencv..."))
 
             def worker():
                 return UpdateService.install_requirements(["python3-opencv"])
@@ -395,7 +414,7 @@ class SuitWindow(Adw.ApplicationWindow):
                 try:
                     import cv2  # noqa: F401
                 except ImportError:
-                    self.show_toast("OpenCV installed. Please restart SUIT to use this tool.")
+                    self.show_toast(tr("OpenCV installed. Please restart SUIT to use this tool."))
                     return
                 self.show_toast(msg)
                 retry_cb()
@@ -414,14 +433,14 @@ class SuitWindow(Adw.ApplicationWindow):
             self.camera_optimizer_page.on_page_opened()
         except ImportError as e:
             logger.exception("Camera Optimizer unavailable due to missing dependency: %s", e)
-            self._prompt_install_opencv("Camera Optimizer", self.open_camera_optimizer_page)
+            self._prompt_install_opencv(tr("Camera Optimizer"), self.open_camera_optimizer_page)
         except Exception as e:
             logger.exception("Failed to open Camera Optimizer: %s", e)
             dialog = Adw.AlertDialog(
-                heading="Camera Optimizer Error",
-                body="Unable to open Camera Optimizer. Check system log for details."
+                heading=tr("Camera Optimizer Error"),
+                body=tr("Unable to open Camera Optimizer. Check system log for details.")
             )
-            dialog.add_response("ok", "OK")
+            dialog.add_response("ok", tr("OK"))
             dialog.present(self)
 
     def open_focus_page(self):
@@ -434,14 +453,14 @@ class SuitWindow(Adw.ApplicationWindow):
                 self.focus_page.on_page_opened()
         except ImportError as e:
             logger.exception("Camera Focus Tool unavailable due to missing dependency: %s", e)
-            self._prompt_install_opencv("Camera Focus Tool", self.open_focus_page)
+            self._prompt_install_opencv(tr("Camera Focus Tool"), self.open_focus_page)
         except Exception as e:
             logger.exception("Failed to open Camera Focus Tool: %s", e)
             dialog = Adw.AlertDialog(
-                heading="Camera Focus Error",
-                body="Unable to open Camera Focus Tool. Check system log for details."
+                heading=tr("Camera Focus Error"),
+                body=tr("Unable to open Camera Focus Tool. Check system log for details.")
             )
-            dialog.add_response("ok", "OK")
+            dialog.add_response("ok", tr("OK"))
             dialog.present(self)
 
     def open_rotation_page(self):

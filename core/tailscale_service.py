@@ -3,6 +3,7 @@ import shutil
 import json
 import re
 from core.logger import get_logger
+from core.i18n import tr
 
 logger = get_logger("tailscale")
 
@@ -16,7 +17,7 @@ class TailscaleService:
             return True, "Tailscale installed and service started."
         except Exception as e:
             logger.exception("Failed installing Tailscale")
-            return False, f"Failed installing Tailscale: {e}"
+            return False, tr("Failed installing Tailscale: {error}").format(error=e)
 
     @classmethod
     def get_tailscale_status(cls) -> dict:
@@ -119,7 +120,7 @@ class TailscaleService:
             return True, "Tailscale disconnected."
         except Exception as e:
             logger.exception("Failed disconnecting Tailscale")
-            return False, f"Failed disconnecting Tailscale: {e}"
+            return False, tr("Failed disconnecting Tailscale: {error}").format(error=e)
 
     @classmethod
     def connect_tailscale(cls) -> tuple[bool, str]:
@@ -128,7 +129,7 @@ class TailscaleService:
             return True, "Tailscale connected."
         except Exception as e:
             logger.exception("Failed connecting Tailscale")
-            return False, f"Failed connecting Tailscale: {e}"
+            return False, tr("Failed connecting Tailscale: {error}").format(error=e)
 
     @classmethod
     def launch_tailscale_up(cls) -> bool:

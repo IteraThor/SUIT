@@ -7,6 +7,7 @@ from modules_gtk.async_utils import run_async
 from modules_gtk.ui_helpers import (
     PAGE_MAX_WIDTH, PAGE_TIGHTEN_AT, build_page_shell, create_button_with_icon,
 )
+from core.i18n import tr
 
 __all__ = ["FastBootView", "summarize_fast_boot", "format_boot_phases"]
 
@@ -17,23 +18,26 @@ RATING_TEXT = {"good": "Fast", "ok": "Could be faster", "slow": "Slow", "unknown
 
 def summarize_fast_boot(applied: int, total: int, boot_time: float | None) -> str:
     """One-line state for the System page row, e.g. '4 of 11 tweaks on · Last boot 33.3 s'."""
-    text = f"{applied} of {total} tweaks on" if applied else "Off. Pick boot-time tweaks one by one."
+    if applied:
+        text = tr("{applied} of {total} tweaks on").format(applied=applied, total=total)
+    else:
+        text = tr("Off. Pick boot-time tweaks one by one.")
     if boot_time:
-        text += f" · Last boot {boot_time:.1f} s"
+        text += " · " + tr("Last boot {seconds:.1f} s").format(seconds=boot_time)
     return text
 
 
 def format_boot_phases(report: dict | None) -> str:
     if not report:
-        return "Boot time not available."
-    return " · ".join(f"{label} {report[key]:.1f} s" for key, label in PHASE_LABELS if key in report)
+        return tr("Boot time not available.")
+    return " · ".join(f"{tr(label)} {report[key]:.1f} s" for key, label in PHASE_LABELS if key in report)
 
 
 class FastBootView(Adw.NavigationPage):
     """Fast Boot submenu: one switch per boot tweak with its estimated saving, and a BIOS guide."""
 
     def __init__(self, window, on_changed=None):
-        super().__init__(title="Fast Boot", tag="fast_boot")
+        super().__init__(title=tr("Fast Boot"), tag="fast_boot")
         self.window = window
         self._on_changed = on_changed
         self._updating = False
@@ -43,7 +47,7 @@ class FastBootView(Adw.NavigationPage):
         self.estimate_labels = {}
 
         # Last boot and the bulk actions stay pinned above the two tabs
-        self.grp_summary = Adw.PreferencesGroup(title="Last Boot")
+        self.grp_summary = Adw.PreferencesGroup(title=tr("Last Boot"))
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.btn_revert_all = create_button_with_icon("edit-undo-symbolic", "Revert All",
                                                       "secondary-btn compact-btn", height=36)
@@ -55,7 +59,7 @@ class FastBootView(Adw.NavigationPage):
         actions.append(self.btn_recommended)
         self.grp_summary.set_header_suffix(actions)
 
-        self.row_total = Adw.ActionRow(title="Checking...", subtitle="")
+        self.row_total = Adw.ActionRow(title=tr("Checking..."), subtitle="")
         self.grp_summary.add(self.row_total)
 
         top = Adw.Clamp(maximum_size=PAGE_MAX_WIDTH, tightening_threshold=PAGE_TIGHTEN_AT)
@@ -67,7 +71,7 @@ class FastBootView(Adw.NavigationPage):
         scrolled_tweaks, tweaks_box = build_page_shell()
         scrolled_bios, self.bios_box = build_page_shell()
         self.stack = Adw.ViewStack(vexpand=True)
-        self.stack.add_titled(scrolled_tweaks, "tweaks", "Tweaks")
+        self.stack.add_titled(scrolled_tweaks, "tweaks", tr("Tweaks"))
         self.stack.add_titled(scrolled_bios, "bios", "BIOS")
 
         switcher = Adw.InlineViewSwitcher(stack=self.stack, display_mode=Adw.InlineViewSwitcherDisplayMode.LABELS)
@@ -81,11 +85,11 @@ class FastBootView(Adw.NavigationPage):
         self.set_child(page_box)
 
         self.grp_login = Adw.PreferencesGroup(
-            title="Faster to the Desktop",
-            description="Login waits for these. Estimates come from your last boot.")
+            title=tr("Faster to the Desktop"),
+            description=tr("Login waits for these. Estimates come from your last boot."))
         self.grp_background = Adw.PreferencesGroup(
-            title="Less Background Load",
-            description="These start alongside login and compete for CPU and disk.")
+            title=tr("Less Background Load"),
+            description=tr("These start alongside login and compete for CPU and disk."))
         tweaks_box.append(self.grp_login)
         tweaks_box.append(self.grp_background)
 
@@ -113,14 +117,15 @@ class FastBootView(Adw.NavigationPage):
 
     def _load_summary(self, report):
         if report:
-            self.row_total.set_title(f"{report['total']:.1f} s from power-on to desktop")
+            self.row_total.set_title(tr("{seconds:.1f} s from power-on to desktop").format(seconds=report["total"]))
         else:
-            self.row_total.set_title("Boot time not available")
+            self.row_total.set_title(tr("Boot time not available"))
         pending = sum(t["estimate_s"] for t in self.tweaks
                       if not t["applied"] and not t["unavailable"])
         phases = format_boot_phases(report)
-        self.row_total.set_subtitle(f"{phases}\nUp to ≈ {pending:.1f} s more available below."
-                                    if pending >= 0.1 else phases)
+        if pending >= 0.1:
+            phases += "\n" + tr("Up to ≈ {seconds:.1f} s more available below.").format(seconds=pending)
+        self.row_total.set_subtitle(phases)
         has_recommended = any(t["recommended"] and not t["applied"] and not t["unavailable"]
                               for t in self.tweaks)
         self.btn_recommended.set_visible(has_recommended)
@@ -132,7 +137,7 @@ class FastBootView(Adw.NavigationPage):
             for t in self.tweaks:
                 row = self.tweak_rows.get(t["id"])
                 if row is None:
-                    row = Adw.SwitchRow(title=t["title"])
+                    row = Adw.SwitchRow(title=tr(t["title"]))
                     # Fixed width so every title lines up whatever the estimate says
                     label = Gtk.Label(valign=Gtk.Align.CENTER, width_chars=10)
                     label.add_css_class("status-pill-checking")
@@ -142,17 +147,20 @@ class FastBootView(Adw.NavigationPage):
                     self.tweak_rows[t["id"]] = row
                     self.estimate_labels[t["id"]] = label
 
-                subtitle = t["summary"]
+                subtitle = tr(t["summary"])
                 if t["unavailable"]:
-                    subtitle += f"\n{t['unavailable']}"
+                    subtitle += f"\n{tr(t['unavailable'])}"
                 elif t["warning"]:
-                    subtitle += f"\n⚠ {t['warning']}"
+                    subtitle += f"\n⚠ {tr(t['warning'])}"
                 row.set_subtitle(subtitle)
                 row.set_active(t["applied"])
                 row.set_sensitive(not self._busy and (t["applied"] or not t["unavailable"]))
 
                 label = self.estimate_labels[t["id"]]
-                label.set_label(f"{'saves' if t['applied'] else '≈'} {t['estimate_s']:.1f} s")
+                if t["applied"]:
+                    label.set_label(tr("saves {seconds:.1f} s").format(seconds=t["estimate_s"]))
+                else:
+                    label.set_label(f"≈ {t['estimate_s']:.1f} s")
                 for cls in ("status-pill-checking", "status-pill-running"):
                     label.remove_css_class(cls)
                 label.add_css_class("status-pill-running" if t["applied"] else "status-pill-checking")
@@ -167,21 +175,22 @@ class FastBootView(Adw.NavigationPage):
         took = f"{fw['firmware_s']:.1f} s · " if fw["firmware_s"] is not None else ""
         machine = fw["model"] if fw["model"].startswith(fw["vendor"]) else f"{fw['vendor']} {fw['model']}"
         self.grp_bios = Adw.PreferencesGroup(
-            title=f"BIOS · {took}{RATING_TEXT[fw['rating']]}",
-            description=f"{machine.strip() or 'This machine'}: press {fw['setup_key']} at power-on. "
-                        "Change one thing at a time and check it still boots.")
+            title=f"BIOS · {took}{tr(RATING_TEXT[fw['rating']])}",
+            description=tr("{machine}: press {key} at power-on. "
+                           "Change one thing at a time and check it still boots.").format(
+                machine=machine.strip() or tr("This machine"), key=tr(fw["setup_key"])))
         self.grp_bios.set_header_suffix(self.btn_setup)
 
         for text in fw["findings"]:
-            row = Adw.ActionRow(title=text, title_lines=1)
+            row = Adw.ActionRow(title=tr(text), title_lines=1)
             row.add_css_class("property")
             row.add_prefix(Gtk.Image.new_from_icon_name("dialog-warning-symbolic"))
             self.grp_bios.add(row)
 
         for i, step in enumerate(fw["steps"], 1):
-            row = Adw.ActionRow(title=f"{i}. {step['title']}", subtitle=step["where"] or step["detail"],
+            row = Adw.ActionRow(title=f"{i}. {tr(step['title'])}", subtitle=tr(step["where"] or step["detail"]),
                                 title_lines=1, subtitle_lines=1)
-            row.set_tooltip_text(step["detail"])
+            row.set_tooltip_text(tr(step["detail"]))
             self.grp_bios.add(row)
         self.bios_box.append(self.grp_bios)
 
@@ -210,10 +219,10 @@ class FastBootView(Adw.NavigationPage):
         active = row.get_active()
         tweak = next(t for t in self.tweaks if t["id"] == tweak_id)
         if active and tweak["warning"]:
-            dialog = Adw.AlertDialog(heading=f"Turn on {tweak['title']}?",
-                                     body=f"{tweak['summary']}\n\n{tweak['warning']}")
-            dialog.add_response("cancel", "Cancel")
-            dialog.add_response("apply", "Turn On")
+            dialog = Adw.AlertDialog(heading=tr("Turn on {title}?").format(title=tr(tweak["title"])),
+                                     body=f"{tr(tweak['summary'])}\n\n{tr(tweak['warning'])}")
+            dialog.add_response("cancel", tr("Cancel"))
+            dialog.add_response("apply", tr("Turn On"))
             dialog.set_response_appearance("apply", Adw.ResponseAppearance.SUGGESTED)
 
             def on_response(d, resp):
@@ -232,35 +241,35 @@ class FastBootView(Adw.NavigationPage):
     def _run_tweak(self, tweak_id: str, active: bool):
         self._set_busy(True)
         if tweak_id == "splash":
-            self.window.show_toast("Rebuilding the boot image, this takes about a minute...")
+            self.window.show_toast(tr("Rebuilding the boot image, this takes about a minute..."))
 
         def on_done(res):
             self._finish(res[1])
 
         def on_error(err):
-            self._finish(f"Fast Boot error: {err}")
+            self._finish(tr("Fast Boot error: {err}").format(err=err))
 
         run_async(lambda: SystemService.set_boot_tweak(tweak_id, active), on_done=on_done, on_error=on_error)
 
     def _run_bulk(self, enable: bool):
         self._set_busy(True)
-        self.window.show_toast("Applying recommended tweaks..." if enable else "Reverting all tweaks...")
+        self.window.show_toast(tr("Applying recommended tweaks...") if enable else tr("Reverting all tweaks..."))
 
         def on_done(res):
             self._finish(res[1])
 
         def on_error(err):
-            self._finish(f"Fast Boot error: {err}")
+            self._finish(tr("Fast Boot error: {err}").format(err=err))
 
         run_async(lambda: SystemService.set_fast_boot(enable), on_done=on_done, on_error=on_error)
 
     def _on_open_setup_clicked(self, btn):
         dialog = Adw.AlertDialog(
-            heading="Restart into BIOS Setup?",
-            body="The computer restarts straight into the BIOS. Save your work first. "
-                 "Autodarts stops until you leave the BIOS again.")
-        dialog.add_response("cancel", "Cancel")
-        dialog.add_response("restart", "Restart Now")
+            heading=tr("Restart into BIOS Setup?"),
+            body=tr("The computer restarts straight into the BIOS. Save your work first. "
+                 "Autodarts stops until you leave the BIOS again."))
+        dialog.add_response("cancel", tr("Cancel"))
+        dialog.add_response("restart", tr("Restart Now"))
         dialog.set_response_appearance("restart", Adw.ResponseAppearance.DESTRUCTIVE)
 
         def on_response(d, resp):

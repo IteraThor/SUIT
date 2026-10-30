@@ -17,6 +17,7 @@ from gi.repository import Adw, Gdk, GLib, Gtk, Pango
 
 from core.hbvcal import live, oneclick, profiles
 from modules_gtk.async_utils import run_async
+from core.i18n import tr
 
 
 def port_no(port: str) -> str:
@@ -38,7 +39,7 @@ def to_texture(bgr: Optional[np.ndarray], max_side: int = 0) -> Optional[Gdk.Tex
 
 
 def wrap_label(text: str = "", css: Optional[List[str]] = None) -> Gtk.Label:
-    lbl = Gtk.Label(label=text, xalign=0, wrap=True)
+    lbl = Gtk.Label(label=tr(text), xalign=0, wrap=True)
     for c in css or []:
         lbl.add_css_class(c)
     return lbl
@@ -46,7 +47,7 @@ def wrap_label(text: str = "", css: Optional[List[str]] = None) -> Gtk.Label:
 
 def caption(text: str = "", *css: str, wrap: bool = False) -> Gtk.Label:
     """Small, non-interactive text."""
-    lbl = Gtk.Label(label=text, xalign=0, wrap=wrap,
+    lbl = Gtk.Label(label=tr(text), xalign=0, wrap=wrap,
                     ellipsize=Pango.EllipsizeMode.NONE if wrap else Pango.EllipsizeMode.END)
     if wrap:
         lbl.set_max_width_chars(34)  # wrapped text must not widen its column
@@ -82,7 +83,7 @@ def _load_names() -> Dict[str, str]:
 
 def cam_name(port: str) -> str:
     """The name the user gave this camera, else 'Port n'."""
-    return _load_names().get(port) or f"Port {port_no(port)}"
+    return _load_names().get(port) or tr("Port {n}").format(n=port_no(port))
 
 
 def set_cam_name(port: str, name: str) -> None:
@@ -96,12 +97,12 @@ def set_cam_name(port: str, name: str) -> None:
 
 
 def ask_rename(window, port: str, on_done: Callable[[], None]) -> None:
-    d = Adw.AlertDialog(heading="Name This Camera", body=f"Shown instead of “Port {port_no(port)}” on the camera pages. "
-                                                         "Leave empty to go back to the port number.")
-    e = Gtk.Entry(text=_load_names().get(port, ""), activates_default=True, placeholder_text="e.g. Left", max_length=24)
+    d = Adw.AlertDialog(heading=tr("Name This Camera"), body=tr("Shown instead of “Port {n}” on the camera pages. "
+                                                            "Leave empty to go back to the port number.").format(n=port_no(port)))
+    e = Gtk.Entry(text=_load_names().get(port, ""), activates_default=True, placeholder_text=tr("e.g. Left"), max_length=24)
     d.set_extra_child(e)
-    d.add_response("cancel", "Cancel")
-    d.add_response("save", "Save")
+    d.add_response("cancel", tr("Cancel"))
+    d.add_response("save", tr("Save"))
     d.set_response_appearance("save", Adw.ResponseAppearance.SUGGESTED)
     d.set_default_response("save")
 
@@ -120,14 +121,14 @@ def ask_rename(window, port: str, on_done: Callable[[], None]) -> None:
 
 def chip(text: str = "", kind: str = "neutral") -> Gtk.Label:
     """Small tinted pill (ok / warn / bad / neutral)."""
-    lbl = Gtk.Label(label=text, valign=Gtk.Align.CENTER)
+    lbl = Gtk.Label(label=tr(text), valign=Gtk.Align.CENTER)
     lbl.add_css_class("status-chip")
     lbl.add_css_class(f"chip-{kind}")
     return lbl
 
 
 def set_chip(lbl: Gtk.Label, text: str, kind: str) -> None:
-    lbl.set_label(text)
+    lbl.set_label(tr(text))
     for k in ("ok", "warn", "bad", "neutral"):
         lbl.remove_css_class(f"chip-{k}")
     lbl.add_css_class(f"chip-{kind}")
@@ -139,7 +140,7 @@ def segmented(options: List[tuple], active, on_change: Callable[[object], None])
     g.add_css_class("camctl-seg")
     keys = {}
     for key, label in options:
-        g.add(Adw.Toggle(name=str(key), label=label))
+        g.add(Adw.Toggle(name=str(key), label=tr(label)))
         keys[str(key)] = key
     g.set_active_name(str(active) if str(active) in keys else None)
     g.connect("notify::active-name", lambda *_: g.get_active_name() in keys and on_change(keys[g.get_active_name()]))
@@ -207,7 +208,7 @@ class CameraStrip:
         self._mark()
 
     def _add(self, port: str, texture) -> None:
-        btn = Gtk.Button(css_classes=["cam-card"], tooltip_text="Long-press to rename", halign=Gtk.Align.START)
+        btn = Gtk.Button(css_classes=["cam-card"], tooltip_text=tr("Long-press to rename"), halign=Gtk.Align.START)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         pic = Thumb(self.THUMB_PX, self.THUMB_PX * 3 // 4)
         pic.set_texture(texture)
@@ -339,7 +340,7 @@ class AutodartsStatus:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.buttons = {}
         for action, label in (("start", "Start Autodarts"), ("restart", "Restart Autodarts"), ("stop", "Stop Autodarts")):
-            b = Gtk.Button(label=label, css_classes=["flat"])
+            b = Gtk.Button(label=tr(label), css_classes=["flat"])
             b.connect("clicked", lambda _b, a=action: self._do(a, pop))
             box.append(b)
             self.buttons[action] = b
@@ -352,7 +353,12 @@ class AutodartsStatus:
     def show(self, state: str) -> None:
         self.state = state
         ok = state == "active"
-        self.text.set_label("Autodarts running" if ok else f"Autodarts {state or 'not found'}")
+        if ok:
+            self.text.set_label(tr("Autodarts running"))
+        elif state:
+            self.text.set_label(tr("Autodarts {state}").format(state=tr(state)))
+        else:
+            self.text.set_label(tr("Autodarts not found"))
         for k in ("ok", "neutral"):
             self.dot.remove_css_class(f"camopt-{k}")
         self.dot.add_css_class("camopt-ok" if ok else "camopt-neutral")

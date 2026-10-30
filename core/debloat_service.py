@@ -4,6 +4,7 @@ import ast
 import re
 import shutil
 from core.logger import get_logger
+from core.i18n import tr
 
 logger = get_logger("debloat")
 
@@ -68,7 +69,7 @@ class DebloatService:
                 icon = info[2] if len(info) > 2 else "application-x-executable-symbolic"
             else:
                 title = key.replace("gnome-", "").replace("-", " ").capitalize()
-                desc = f"Package: {key}"
+                desc = tr("Package: {name}").format(name=key)
                 icon = "application-x-executable-symbolic"
 
             full_pkg_name = key
@@ -181,7 +182,7 @@ class DebloatService:
                             if pkg_name.startswith(k):
                                 disp_name = info[0]
                                 break
-                        progress_callback(cur_val, tot_val, f"Removing {disp_name} ({cur_val}/{tot_val})...")
+                        progress_callback(cur_val, tot_val, tr("Removing {name} ({cur}/{tot})...").format(name=tr(disp_name), cur=cur_val, tot=tot_val))
                     except ValueError:
                         pass
                 elif progress_callback:
@@ -198,10 +199,10 @@ class DebloatService:
             cls.clean_dash_favorites()
             cls.move_seahorse_to_utilities()
             logger.info("Debloat and Dash cleanup completed successfully")
-            return True, f"Successfully removed {len(packages)} application(s)."
+            return True, tr("Successfully removed {packages} application(s).").format(packages=len(packages))
         except Exception as e:
             logger.exception("Failed debloating selected packages")
-            return False, f"Debloat failed: {e}"
+            return False, tr("Debloat failed: {error}").format(error=e)
 
     @classmethod
     def debloat_system(cls, package_list: list[str] | None = None, progress_callback=None) -> tuple[bool, str]:
@@ -259,7 +260,7 @@ class DebloatService:
             return True, "Discord installed and pinned to Dash."
         except Exception as e:
             logger.exception("Failed installing Discord")
-            return False, f"Failed installing Discord: {e}"
+            return False, tr("Failed installing Discord: {error}").format(error=e)
 
     @classmethod
     def install_chromium(cls) -> tuple[bool, str]:
@@ -269,4 +270,4 @@ class DebloatService:
             return True, "Chromium installed and pinned to Dash."
         except Exception as e:
             logger.exception("Failed installing Chromium")
-            return False, f"Failed installing Chromium: {e}"
+            return False, tr("Failed installing Chromium: {error}").format(error=e)

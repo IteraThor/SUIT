@@ -30,6 +30,7 @@ from core.audio_tone_service import AudioToneService
 from core.autodarts_service import read_cam_config
 from modules_gtk.ui_helpers import build_page_shell
 from core.systemd_service import SystemdService, SystemdManager
+from core.i18n import tr
 
 logger = get_logger("camera_focus_view")
 
@@ -38,7 +39,7 @@ CAMERA_NAMES = ["Camera 1", "Camera 2", "Camera 3"]
 
 class CameraFocusView(Adw.NavigationPage):
     def __init__(self, window):
-        super().__init__(title="Camera Focus Tool", tag="camera_focus")
+        super().__init__(title=tr("Camera Focus Tool"), tag="camera_focus")
         self.window = window
 
         self.focus_service = CameraFocusService()
@@ -113,12 +114,12 @@ class CameraFocusView(Adw.NavigationPage):
         text_box.set_hexpand(True)
         header_card.append(text_box)
 
-        self.lbl_step_title = Gtk.Label(label="Camera 1", xalign=0)
+        self.lbl_step_title = Gtk.Label(label=tr("Camera 1"), xalign=0)
         self.lbl_step_title.add_css_class("title-4")
         text_box.append(self.lbl_step_title)
 
         self.lbl_step_desc = Gtk.Label(
-            label="Optical focus tuning with real-time oscilloscope tracking.",
+            label=tr("Optical focus tuning with real-time oscilloscope tracking."),
             xalign=0,
             wrap=True,
         )
@@ -130,7 +131,7 @@ class CameraFocusView(Adw.NavigationPage):
         self.btn_mute.add_css_class("flat")
         self.btn_mute.set_size_request(40, 36)
         self.btn_mute.set_valign(Gtk.Align.CENTER)
-        self.btn_mute.set_tooltip_text("Unmute Audio Guidance")
+        self.btn_mute.set_tooltip_text(tr("Unmute Audio Guidance"))
         self.btn_mute.connect("clicked", self._on_mute_clicked)
         header_card.append(self.btn_mute)
 
@@ -143,7 +144,7 @@ class CameraFocusView(Adw.NavigationPage):
 
         self.cam_tab_buttons = []
         for i, cam_name in enumerate(CAMERA_NAMES):
-            btn = Gtk.Button(label=cam_name)
+            btn = Gtk.Button(label=tr(cam_name))
             btn.add_css_class("flat")
             btn.add_css_class("camera-tab-btn")
             if i == 0:
@@ -165,7 +166,7 @@ class CameraFocusView(Adw.NavigationPage):
         self.active_banner.append(banner_text_box)
 
         self.active_banner_title = Gtk.Label(
-            label="Rotate focus ring slowly. Look for highest peak.",
+            label=tr("Rotate focus ring slowly. Look for highest peak."),
             xalign=0,
             wrap=True,
         )
@@ -175,24 +176,24 @@ class CameraFocusView(Adw.NavigationPage):
         banner_info_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         banner_text_box.append(banner_info_row)
 
-        self.target_pill = Gtk.Label(label="Target: Furthest Double", xalign=0)
+        self.target_pill = Gtk.Label(label=tr("Target: Furthest Double"), xalign=0)
         self.target_pill.add_css_class("usb-path-tag")
         banner_info_row.append(self.target_pill)
 
-        self.trend_badge = Gtk.Label(label="Tuning", xalign=0)
+        self.trend_badge = Gtk.Label(label=tr("Tuning"), xalign=0)
         self.trend_badge.add_css_class("focus-trend-badge")
         self.trend_badge.add_css_class("stable")
         banner_info_row.append(self.trend_badge)
 
         # Focus Peaking / Contour Filter Toggle Button
-        self.btn_toggle_peaking = Gtk.Button(label="Peaking: ON")
+        self.btn_toggle_peaking = Gtk.Button(label=tr("Peaking: ON"))
         self.btn_toggle_peaking.add_css_class("suggested-action")
         self.btn_toggle_peaking.set_valign(Gtk.Align.CENTER)
-        self.btn_toggle_peaking.set_tooltip_text("Toggle Green Focus Peaking Contour Overlay")
+        self.btn_toggle_peaking.set_tooltip_text(tr("Toggle Green Focus Peaking Contour Overlay"))
         self.btn_toggle_peaking.connect("clicked", lambda b: self._on_toggle_peaking())
         self.active_banner.append(self.btn_toggle_peaking)
 
-        self.btn_change_target = Gtk.Button(label="Change Target")
+        self.btn_change_target = Gtk.Button(label=tr("Change Target"))
         self.btn_change_target.add_css_class("flat")
         self.btn_change_target.set_valign(Gtk.Align.CENTER)
         self.btn_change_target.connect("clicked", lambda b: self._show_target_prompt())
@@ -231,12 +232,12 @@ class CameraFocusView(Adw.NavigationPage):
         self.target_prompt_card.set_margin_top(16)
         self.target_prompt_card.set_margin_bottom(16)
 
-        prompt_title = Gtk.Label(label="Select Focus Target", xalign=0.5)
+        prompt_title = Gtk.Label(label=tr("Select Focus Target"), xalign=0.5)
         prompt_title.add_css_class("title-3")
         self.target_prompt_card.append(prompt_title)
 
         prompt_sub = Gtk.Label(
-            label="Choose where to focus. The camera only starts after you pick:",
+            label=tr("Choose where to focus. The camera only starts after you pick:"),
             xalign=0.5,
             justify=Gtk.Justification.CENTER,
             wrap=True,
@@ -250,21 +251,21 @@ class CameraFocusView(Adw.NavigationPage):
         target_btn_row.set_homogeneous(True)
         self.target_prompt_card.append(target_btn_row)
 
-        self.btn_target_furthest = Gtk.Button(label="Furthest Double (Recommended)")
+        self.btn_target_furthest = Gtk.Button(label=tr("Furthest Double (Recommended)"))
         self.btn_target_furthest.add_css_class("suggested-action")
         self.btn_target_furthest.add_css_class("touch-btn")
         self.btn_target_furthest.set_size_request(-1, 42)
         self.btn_target_furthest.connect("clicked", lambda b: self._select_target_mode(TargetMode.FURTHEST_DOUBLE))
         target_btn_row.append(self.btn_target_furthest)
 
-        self.btn_target_t20 = Gtk.Button(label="Triple 20 (T20)")
+        self.btn_target_t20 = Gtk.Button(label=tr("Triple 20 (T20)"))
         self.btn_target_t20.add_css_class("secondary-btn")
         self.btn_target_t20.add_css_class("touch-btn")
         self.btn_target_t20.set_size_request(-1, 42)
         self.btn_target_t20.connect("clicked", lambda b: self._select_target_mode(TargetMode.T20))
         target_btn_row.append(self.btn_target_t20)
 
-        self.btn_target_pick = Gtk.Button(label="Pick Point on Video")
+        self.btn_target_pick = Gtk.Button(label=tr("Pick Point on Video"))
         self.btn_target_pick.add_css_class("secondary-btn")
         self.btn_target_pick.add_css_class("touch-btn")
         self.btn_target_pick.set_size_request(-1, 42)
@@ -272,7 +273,7 @@ class CameraFocusView(Adw.NavigationPage):
         self.target_prompt_card.append(self.btn_target_pick)
 
         tip_lbl = Gtk.Label(
-            label="Tip: Insert a dart into the target segment for maximum edge contrast.",
+            label=tr("Tip: Insert a dart into the target segment for maximum edge contrast."),
             xalign=0.5,
             justify=Gtk.Justification.CENTER,
             wrap=True,
@@ -297,7 +298,7 @@ class CameraFocusView(Adw.NavigationPage):
         self.loading_spinner.set_size_request(36, 36)
         self.loading_box.append(self.loading_spinner)
 
-        self.loading_lbl = Gtk.Label(label="Stopping Autodarts & Opening Camera 1...")
+        self.loading_lbl = Gtk.Label(label=tr("Stopping Autodarts & Opening Camera 1..."))
         self.loading_lbl.add_css_class("title-4")
         self.loading_box.append(self.loading_lbl)
 
@@ -312,14 +313,14 @@ class CameraFocusView(Adw.NavigationPage):
         osc_header_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.osc_card.append(osc_header_row)
 
-        osc_title = Gtk.Label(label="Relative Sharpness Timeline", xalign=0)
+        osc_title = Gtk.Label(label=tr("Relative Sharpness Timeline"), xalign=0)
         osc_title.add_css_class("title-4")
         osc_header_row.append(osc_title)
 
-        self.osc_peak_lbl = Gtk.Label(label="Peak: 0.0%", xalign=1)
+        self.osc_peak_lbl = Gtk.Label(label=tr("Peak: 0.0%"), xalign=1)
         self.osc_peak_lbl.add_css_class("dim-label")
         self.osc_peak_lbl.set_hexpand(True)
-        self.osc_peak_lbl.set_tooltip_text("Click to reset peak")
+        self.osc_peak_lbl.set_tooltip_text(tr("Click to reset peak"))
         osc_header_row.append(self.osc_peak_lbl)
 
         peak_click = Gtk.GestureClick()
@@ -337,7 +338,7 @@ class CameraFocusView(Adw.NavigationPage):
         bottom_bar.set_margin_top(4)
         self.focus_page.append(bottom_bar)
 
-        self.btn_reset_peak = Gtk.Button(label="Reset Peak")
+        self.btn_reset_peak = Gtk.Button(label=tr("Reset Peak"))
         self.btn_reset_peak.add_css_class("secondary-btn")
         self.btn_reset_peak.connect("clicked", lambda b: self.focus_service.reset_peak())
         bottom_bar.append(self.btn_reset_peak)
@@ -346,7 +347,7 @@ class CameraFocusView(Adw.NavigationPage):
         spacer.set_hexpand(True)
         bottom_bar.append(spacer)
 
-        self.btn_finish = Gtk.Button(label="Finish")
+        self.btn_finish = Gtk.Button(label=tr("Finish"))
         self.btn_finish.add_css_class("suggested-action")
         self.btn_finish.add_css_class("touch-btn")
         self.btn_finish.set_size_request(130, 42)
@@ -362,12 +363,12 @@ class CameraFocusView(Adw.NavigationPage):
         header_banner.add_css_class("tile-card")
         summary_box.append(header_banner)
 
-        lbl_sum_h = Gtk.Label(label="Focus Calibration Summary", xalign=0)
+        lbl_sum_h = Gtk.Label(label=tr("Focus Calibration Summary"), xalign=0)
         lbl_sum_h.add_css_class("title-2")
         header_banner.append(lbl_sum_h)
 
         lbl_sum_desc = Gtk.Label(
-            label="Review recorded sharpness across all 3 cameras before resuming Autodarts.",
+            label=tr("Review recorded sharpness across all 3 cameras before resuming Autodarts."),
             xalign=0,
         )
         lbl_sum_desc.add_css_class("dim-label")
@@ -386,15 +387,15 @@ class CameraFocusView(Adw.NavigationPage):
             card.set_margin_start(8)
             card.set_margin_end(8)
 
-            title = Gtk.Label(label=cam_name, xalign=0)
+            title = Gtk.Label(label=tr(cam_name), xalign=0)
             title.add_css_class("title-3")
             card.append(title)
 
-            score_lbl = Gtk.Label(label="Status: Not tuned", xalign=0)
+            score_lbl = Gtk.Label(label=tr("Status: Not tuned"), xalign=0)
             score_lbl.add_css_class("title-4")
             card.append(score_lbl)
 
-            btn_refocus = Gtk.Button(label="Refocus")
+            btn_refocus = Gtk.Button(label=tr("Refocus"))
             btn_refocus.add_css_class("secondary-btn")
             btn_refocus.connect("clicked", lambda b, idx=i: self._jump_to_cam(idx))
             card.append(btn_refocus)
@@ -402,7 +403,7 @@ class CameraFocusView(Adw.NavigationPage):
             self.summary_cards_box.append(card)
             self.sum_tiles.append((score_lbl, btn_refocus))
 
-        self.btn_sum_finish = Gtk.Button(label="Finish")
+        self.btn_sum_finish = Gtk.Button(label=tr("Finish"))
         self.btn_sum_finish.add_css_class("suggested-action")
         self.btn_sum_finish.add_css_class("touch-btn")
         self.btn_sum_finish.set_size_request(-1, 44)
@@ -414,7 +415,7 @@ class CameraFocusView(Adw.NavigationPage):
         """Toggle green focus peaking edge contour overlay."""
         self.peaking_enabled = not self.peaking_enabled
         if hasattr(self, "btn_toggle_peaking"):
-            self.btn_toggle_peaking.set_label("Peaking: ON" if self.peaking_enabled else "Peaking: OFF")
+            self.btn_toggle_peaking.set_label(tr("Peaking: ON") if self.peaking_enabled else tr("Peaking: OFF"))
             if self.peaking_enabled:
                 self.btn_toggle_peaking.add_css_class("suggested-action")
                 self.btn_toggle_peaking.remove_css_class("flat")
@@ -439,8 +440,8 @@ class CameraFocusView(Adw.NavigationPage):
         self.active_banner.set_visible(True)
         self.osc_card.set_visible(True)
 
-        self.active_banner_title.set_label("Rotate focus ring slowly. Look for highest peak.")
-        self.target_pill.set_label(f"Target: {self.focus_service.target_name}")
+        self.active_banner_title.set_label(tr("Rotate focus ring slowly. Look for highest peak."))
+        self.target_pill.set_label(tr("Target: {target}").format(target=tr(self.focus_service.target_name)))
         self.drawing_area.queue_draw()
         self.osc_drawing_area.queue_draw()
 
@@ -456,8 +457,8 @@ class CameraFocusView(Adw.NavigationPage):
         self.target_prompt_card.set_visible(False)
         self.active_banner.set_visible(True)
         self.osc_card.set_visible(False)
-        self.active_banner_title.set_label("Click on the video where you want to focus.")
-        self.target_pill.set_label("Target: not set")
+        self.active_banner_title.set_label(tr("Click on the video where you want to focus."))
+        self.target_pill.set_label(tr("Target: not set"))
         self.drawing_area.queue_draw()
 
     def _open_camera_then(self, pending):
@@ -467,9 +468,9 @@ class CameraFocusView(Adw.NavigationPage):
         self._is_switching_camera = True
         self._pending_target = pending
         idx = self.current_step
-        cam_name = CAMERA_NAMES[idx]
+        cam_name = tr(CAMERA_NAMES[idx])
         self.target_prompt_card.set_visible(False)
-        self.loading_lbl.set_label(f"Stopping Autodarts & Opening {cam_name}...")
+        self.loading_lbl.set_label(tr("Stopping Autodarts & Opening {camera}...").format(camera=cam_name))
         self.loading_box.set_visible(True)
         self.loading_spinner.start()
 
@@ -621,7 +622,7 @@ class CameraFocusView(Adw.NavigationPage):
             return
         self.current_step = idx
         self._update_tab_buttons(idx)
-        self.lbl_step_title.set_label(CAMERA_NAMES[idx])
+        self.lbl_step_title.set_label(tr(CAMERA_NAMES[idx]))
 
         # Release the current camera; the next one opens once a target is picked
         was_open = self._camera_open
@@ -693,10 +694,10 @@ class CameraFocusView(Adw.NavigationPage):
         peak = analysis.peak_score
         trend = analysis.trend
 
-        self.osc_peak_lbl.set_label(f"Peak: {peak:.0f}%")
+        self.osc_peak_lbl.set_label(tr("Peak: {peak:.0f}%").format(peak=peak))
 
         if self.current_step < len(self.cam_tab_buttons):
-            cam_name = CAMERA_NAMES[self.current_step]
+            cam_name = tr(CAMERA_NAMES[self.current_step])
             self.cam_tab_buttons[self.current_step].set_label(f"{cam_name} ({score:.0f}%)")
 
         self.trend_badge.remove_css_class("sharpening")
@@ -704,13 +705,13 @@ class CameraFocusView(Adw.NavigationPage):
         self.trend_badge.remove_css_class("overshot")
 
         if trend == FocusTrend.OVERSHOT:
-            self.trend_badge.set_label("Turn Back — Overshot")
+            self.trend_badge.set_label(tr("Turn Back — Overshot"))
             self.trend_badge.add_css_class("overshot")
         elif trend == FocusTrend.SHARPENING:
-            self.trend_badge.set_label("Sharpening")
+            self.trend_badge.set_label(tr("Sharpening"))
             self.trend_badge.add_css_class("sharpening")
         else:
-            self.trend_badge.set_label("In Focus" if score >= 85.0 else "Tuning")
+            self.trend_badge.set_label(tr("In Focus") if score >= 85.0 else tr("Tuning"))
             self.trend_badge.add_css_class("stable")
 
         self.drawing_area.queue_draw()
@@ -731,7 +732,7 @@ class CameraFocusView(Adw.NavigationPage):
             cr.set_source_rgb(0.6, 0.6, 0.6)
             cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
             cr.set_font_size(15)
-            msg = "Waiting for camera feed..."
+            msg = tr("Waiting for camera feed...")
             cr.move_to(max(10, width / 2 - 90), height / 2)
             cr.show_text(msg)
             return
@@ -839,7 +840,7 @@ class CameraFocusView(Adw.NavigationPage):
             cr.fill()
             cr.set_source_rgba(0.0, 0.85, 0.95, 0.95)
             cr.move_to(pip_x + 14, pip_y + 21)
-            peaking_text = "PEAKING ON" if self.peaking_enabled else "2.5× LOUPE"
+            peaking_text = tr("PEAKING ON") if self.peaking_enabled else tr("2.5× LOUPE")
             cr.show_text(f"2.5× • {peaking_text}")
 
             # Center crosshair inside loupe
@@ -878,7 +879,7 @@ class CameraFocusView(Adw.NavigationPage):
             cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
             cr.set_font_size(13)
             cr.move_to(max(10, width / 2 - 100), height / 2 + 4)
-            cr.show_text("Select target to activate oscilloscope")
+            cr.show_text(tr("Select target to activate oscilloscope"))
             return
 
         history = analysis.history
@@ -954,7 +955,7 @@ class CameraFocusView(Adw.NavigationPage):
         cr.set_font_size(11)
         cr.set_source_rgba(1.0, 1.0, 1.0, 0.85)
         cr.move_to(10, 16)
-        cr.show_text(f"{analysis.fps:.0f} FPS  |  Score: {analysis.score:.1f}%")
+        cr.show_text(f"{analysis.fps:.0f} FPS  |  {tr('Score')}: {analysis.score:.1f}%")
 
     def _jump_to_cam(self, idx: int):
         """Jump to refocus a specific camera."""
@@ -979,4 +980,4 @@ class CameraFocusView(Adw.NavigationPage):
         self.audio_service.set_muted(muted)
         icon_name = "audio-volume-muted-symbolic" if muted else "audio-volume-high-symbolic"
         self.btn_mute.set_icon_name(icon_name)
-        self.btn_mute.set_tooltip_text("Unmute Audio Tone" if muted else "Mute Audio Tone")
+        self.btn_mute.set_tooltip_text(tr("Unmute Audio Tone") if muted else tr("Mute Audio Tone"))

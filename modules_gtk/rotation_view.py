@@ -7,12 +7,13 @@ from core.display_service import DisplayService, normalize_rotation
 from modules_gtk.async_utils import run_async
 
 from modules_gtk.ui_helpers import build_page_shell
+from core.i18n import tr
 
 logger = get_logger("rotation_view")
 
 class RotationView(Adw.NavigationPage):
     def __init__(self, window):
-        super().__init__(title="Screen & Touch Manager", tag="rotation")
+        super().__init__(title=tr("Screen & Touch Manager"), tag="rotation")
         self.window = window
 
         self.staged_rotations = {}
@@ -38,7 +39,7 @@ class RotationView(Adw.NavigationPage):
         warning_card.append(warn_icon)
 
         warn_lbl = Gtk.Label(
-            label="Only use this tool if your device has issues rotating touch input using default system settings.",
+            label=tr("Only use this tool if your device has issues rotating touch input using default system settings."),
             xalign=0,
             wrap=True
         )
@@ -54,10 +55,10 @@ class RotationView(Adw.NavigationPage):
         self.btn_clear_config.add_css_class("secondary-btn")
         self.btn_clear_config.add_css_class("compact-btn")
         self.btn_clear_config.set_valign(Gtk.Align.CENTER)
-        self.btn_clear_config.set_tooltip_text("Clear SUIT rotation overrides and remove boot autostart")
+        self.btn_clear_config.set_tooltip_text(tr("Clear SUIT rotation overrides and remove boot autostart"))
         clear_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         clear_content.append(Gtk.Image.new_from_icon_name("edit-clear-symbolic"))
-        clear_content.append(Gtk.Label(label="Clear Config"))
+        clear_content.append(Gtk.Label(label=tr("Clear Config")))
         self.btn_clear_config.set_child(clear_content)
         self.btn_clear_config.connect("clicked", self._on_clear_config_clicked)
         actions_box.append(self.btn_clear_config)
@@ -66,11 +67,11 @@ class RotationView(Adw.NavigationPage):
         self.btn_default_settings.add_css_class("secondary-btn")
         self.btn_default_settings.add_css_class("compact-btn")
         self.btn_default_settings.set_valign(Gtk.Align.CENTER)
-        self.btn_default_settings.set_tooltip_text("Open GNOME Display Settings")
+        self.btn_default_settings.set_tooltip_text(tr("Open GNOME Display Settings"))
 
         btn_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         btn_content.append(Gtk.Image.new_from_icon_name("preferences-desktop-display-symbolic"))
-        btn_content.append(Gtk.Label(label="Display Settings"))
+        btn_content.append(Gtk.Label(label=tr("Display Settings")))
         self.btn_default_settings.set_child(btn_content)
         self.btn_default_settings.connect("clicked", lambda b: DisplayService.open_display_settings())
         actions_box.append(self.btn_default_settings)
@@ -78,7 +79,7 @@ class RotationView(Adw.NavigationPage):
         warning_card.append(actions_box)
 
         # Dynamic Monitors Group
-        self.monitors_group = Adw.PreferencesGroup(title="Connected Displays")
+        self.monitors_group = Adw.PreferencesGroup(title=tr("Connected Displays"))
         self.monitors_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.monitors_group.add(self.monitors_container)
         self.main_box.append(self.monitors_group)
@@ -104,13 +105,13 @@ class RotationView(Adw.NavigationPage):
 
         if not monitors:
             empty_row = Adw.ActionRow(
-                title="No monitors detected via GNOME Mutter",
-                subtitle="Check display connections."
+                title=tr("No monitors detected via GNOME Mutter"),
+                subtitle=tr("Check display connections.")
             )
             self.monitors_container.append(empty_row)
             return
 
-        rot_names = {0: "Normal (0°)", 1: "Right (90°)", 2: "Inverted (180°)", 3: "Left (270°)"}
+        rot_names = {0: tr("Normal (0°)"), 1: tr("Right (90°)"), 2: tr("Inverted (180°)"), 3: tr("Left (270°)")}
 
         for mon in monitors:
             name = mon["name"]
@@ -160,11 +161,11 @@ class RotationView(Adw.NavigationPage):
             title_box.append(lbl_t)
 
             if is_pri:
-                pri_pill = Gtk.Label(label="Primary")
+                pri_pill = Gtk.Label(label=tr("Primary"))
                 pri_pill.add_css_class("status-pill-checking")
                 title_box.append(pri_pill)
 
-            pill = Gtk.Label(label=rot_names.get(live_rot, "Unknown"))
+            pill = Gtk.Label(label=rot_names.get(live_rot, tr("Unknown")))
             pill.add_css_class("status-pill-checking")
             header.append(pill)
 
@@ -172,7 +173,7 @@ class RotationView(Adw.NavigationPage):
             angle_section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             card.append(angle_section)
 
-            lbl_angle = Gtk.Label(label="Target Orientation", xalign=0)
+            lbl_angle = Gtk.Label(label=tr("Target Orientation"), xalign=0)
             lbl_angle.add_css_class("dim-label")
             angle_section.append(lbl_angle)
 
@@ -181,10 +182,10 @@ class RotationView(Adw.NavigationPage):
             angle_section.append(btn_box)
 
             options = [
-                (0, "0° Normal"),
-                (1, "90° Right"),
-                (2, "180° Inverted"),
-                (3, "270° Left")
+                (0, tr("0° Normal")),
+                (1, tr("90° Right")),
+                (2, tr("180° Inverted")),
+                (3, tr("270° Left"))
             ]
 
             angle_buttons = []
@@ -219,13 +220,13 @@ class RotationView(Adw.NavigationPage):
             touch_icon.set_pixel_size(22)
             touch_box.append(touch_icon)
 
-            touch_lbl = Gtk.Label(label="Assigned Touchscreen", xalign=0)
+            touch_lbl = Gtk.Label(label=tr("Assigned Touchscreen"), xalign=0)
             touch_lbl.add_css_class("body")
             touch_lbl.set_hexpand(True)
             touch_box.append(touch_lbl)
 
             touch_options = ["None"] + touchscreens
-            touch_dd = Gtk.DropDown.new_from_strings(touch_options)
+            touch_dd = Gtk.DropDown.new_from_strings([tr("None")] + touchscreens)
             touch_dd.set_valign(Gtk.Align.CENTER)
             touch_dd.set_size_request(240, 42)
 
@@ -263,7 +264,7 @@ class RotationView(Adw.NavigationPage):
             apply_icon = Gtk.Image.new_from_icon_name("emblem-ok-symbolic")
             apply_icon.set_pixel_size(20)
             apply_content.append(apply_icon)
-            apply_lbl = Gtk.Label(label="Apply Changes")
+            apply_lbl = Gtk.Label(label=tr("Apply Changes"))
             apply_content.append(apply_lbl)
             btn_apply.set_child(apply_content)
 
@@ -301,11 +302,11 @@ class RotationView(Adw.NavigationPage):
 
         self._remaining_seconds = 15
         self._confirm_dialog = Adw.AlertDialog(
-            heading="Keep Display Settings?",
-            body=f"Reverting to previous settings in {self._remaining_seconds} seconds."
+            heading=tr("Keep Display Settings?"),
+            body=tr("Reverting to previous settings in {seconds} seconds.").format(seconds=self._remaining_seconds)
         )
-        self._confirm_dialog.add_response("revert", "Revert")
-        self._confirm_dialog.add_response("keep", "Keep Changes")
+        self._confirm_dialog.add_response("revert", tr("Revert"))
+        self._confirm_dialog.add_response("keep", tr("Keep Changes"))
         self._confirm_dialog.set_response_appearance("keep", Adw.ResponseAppearance.SUGGESTED)
         self._confirm_dialog.set_response_appearance("revert", Adw.ResponseAppearance.DESTRUCTIVE)
         self._confirm_dialog.set_default_response("keep")
@@ -314,7 +315,7 @@ class RotationView(Adw.NavigationPage):
         def _revert_action():
             self._cleanup_timer()
             self._confirm_dialog = None
-            self.window.show_toast(f"Reverting display orientation for {connector}...")
+            self.window.show_toast(tr("Reverting display orientation for {connector}...").format(connector=connector))
 
             def revert_worker():
                 kwargs = {"persist": True}
@@ -329,7 +330,7 @@ class RotationView(Adw.NavigationPage):
                 self.staged_touch[connector] = prev_touch
                 self.live_rotations[connector] = prev_rot
                 self.live_touch[connector] = prev_touch
-                self.window.show_toast("Reverted to previous display settings.")
+                self.window.show_toast(tr("Reverted to previous display settings."))
                 self.refresh()
 
             run_async(revert_worker, on_done=on_revert_done)
@@ -344,7 +345,7 @@ class RotationView(Adw.NavigationPage):
             def on_keep_done(ok):
                 self.live_rotations[connector] = target_rot
                 self.live_touch[connector] = target_touch
-                self.window.show_toast("Display settings confirmed.")
+                self.window.show_toast(tr("Display settings confirmed."))
                 self.refresh()
 
             run_async(keep_worker, on_done=on_keep_done)
@@ -372,7 +373,7 @@ class RotationView(Adw.NavigationPage):
 
             if getattr(self, "_confirm_dialog", None) is not None:
                 self._confirm_dialog.set_body(
-                    f"Reverting to previous settings in {self._remaining_seconds} seconds."
+                    tr("Reverting to previous settings in {seconds} seconds.").format(seconds=self._remaining_seconds)
                 )
             return GLib.SOURCE_CONTINUE
 
@@ -395,7 +396,7 @@ class RotationView(Adw.NavigationPage):
 
         # If settings didn't change from currently confirmed state, persist directly
         if target_rot == prev_rot and target_touch == prev_touch:
-            self.window.show_toast(f"Saving display settings for {connector}...")
+            self.window.show_toast(tr("Saving display settings for {connector}...").format(connector=connector))
 
             def worker():
                 return DisplayService.apply_display_and_touch(
@@ -404,15 +405,15 @@ class RotationView(Adw.NavigationPage):
 
             def on_done(ok):
                 if ok:
-                    self.window.show_toast("Display settings saved.")
+                    self.window.show_toast(tr("Display settings saved."))
                 else:
-                    self.window.show_toast("Failed saving display settings.")
+                    self.window.show_toast(tr("Failed saving display settings."))
                 self.refresh()
 
             run_async(worker, on_done=on_done)
             return
 
-        self.window.show_toast(f"Applying orientation and touch settings to {connector}...")
+        self.window.show_toast(tr("Applying orientation and touch settings to {connector}...").format(connector=connector))
 
         def worker():
             # Apply with persist=False so unexpected power loss / reboot restores previous settings
@@ -429,13 +430,13 @@ class RotationView(Adw.NavigationPage):
                     connector, target_rot, target_touch, prev_rot, prev_touch
                 )
             else:
-                self.window.show_toast("Failed applying display orientation.")
+                self.window.show_toast(tr("Failed applying display orientation."))
                 self.refresh()
 
         run_async(worker, on_done=on_done)
 
     def _on_clear_config_clicked(self, btn):
-        self.window.show_toast("Clearing rotation overrides...")
+        self.window.show_toast(tr("Clearing rotation overrides..."))
 
         def worker():
             return DisplayService.clear_config()
@@ -446,9 +447,9 @@ class RotationView(Adw.NavigationPage):
             self.live_rotations.clear()
             self.live_touch.clear()
             if ok:
-                self.window.show_toast("Cleared rotation overrides and autostart.")
+                self.window.show_toast(tr("Cleared rotation overrides and autostart."))
             else:
-                self.window.show_toast("Failed clearing configuration.")
+                self.window.show_toast(tr("Failed clearing configuration."))
             self.refresh()
 
         run_async(worker, on_done=on_done)

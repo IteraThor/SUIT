@@ -8,6 +8,7 @@ from modules_gtk.async_utils import run_async, open_browser_url
 from modules_gtk.dialogs.community_dialog import DISCORD_URL
 
 from modules_gtk.ui_helpers import build_page_shell, create_button_with_icon
+from core.i18n import tr
 
 logger = get_logger("autoglow_view")
 
@@ -15,14 +16,14 @@ PILL_CLASSES = ("status-pill-running", "status-pill-stopped", "status-pill-pendi
 
 
 def _set_pill(label: Gtk.Label, text: str, css: str):
-    label.set_label(text)
+    label.set_label(tr(text))
     for c in PILL_CLASSES:
         label.remove_css_class(c)
     label.add_css_class(css)
 
 
 def _compact_button(label: str, css: str) -> Gtk.Button:
-    btn = Gtk.Button(label=label)
+    btn = Gtk.Button(label=tr(label))
     btn.set_valign(Gtk.Align.CENTER)
     for c in (css, "compact-btn"):
         btn.add_css_class(c)
@@ -31,7 +32,7 @@ def _compact_button(label: str, css: str) -> Gtk.Button:
 
 class AutoGlowView(Adw.NavigationPage):
     def __init__(self, window):
-        super().__init__(title="AutoGlow 2 Manager", tag="autoglow")
+        super().__init__(title=tr("AutoGlow 2 Manager"), tag="autoglow")
         self.window = window
         self._status = {}
         self._busy = False
@@ -52,27 +53,27 @@ class AutoGlowView(Adw.NavigationPage):
         beta_icon.set_valign(Gtk.Align.CENTER)
         beta_card.append(beta_icon)
 
-        beta_lbl = Gtk.Label(label="AutoGlow 2 is in beta and experimental. Stay updated on Discord.", xalign=0, wrap=True)
+        beta_lbl = Gtk.Label(label=tr("AutoGlow 2 is in beta and experimental. Stay updated on Discord."), xalign=0, wrap=True)
         beta_lbl.add_css_class("warning-text")
         beta_lbl.set_hexpand(True)
         beta_lbl.set_valign(Gtk.Align.CENTER)
         beta_card.append(beta_lbl)
 
         btn_discord = _compact_button("Discord", "secondary-btn")
-        btn_discord.set_tooltip_text("Open the IteraThor Discord")
+        btn_discord.set_tooltip_text(tr("Open the IteraThor Discord"))
         btn_discord.connect("clicked", lambda b: open_browser_url(self.window, DISCORD_URL))
         beta_card.append(btn_discord)
 
         # AutoGlow: state, web interface and service in one group
-        grp_main = Adw.PreferencesGroup(title="AutoGlow 2")
+        grp_main = Adw.PreferencesGroup(title=tr("AutoGlow 2"))
         main_box.append(grp_main)
 
-        self.row_status = Adw.ActionRow(title="Status", subtitle="Checking...")
+        self.row_status = Adw.ActionRow(title=tr("Status"), subtitle=tr("Checking..."))
         box_status = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         box_status.set_valign(Gtk.Align.CENTER)
         self.spinner = Gtk.Spinner()
         box_status.append(self.spinner)
-        self.lbl_pill = Gtk.Label(label="Checking...")
+        self.lbl_pill = Gtk.Label(label=tr("Checking..."))
         self.lbl_pill.add_css_class("status-pill-checking")
         self.lbl_pill.set_valign(Gtk.Align.CENTER)
         box_status.append(self.lbl_pill)
@@ -85,14 +86,14 @@ class AutoGlowView(Adw.NavigationPage):
         grp_main.add(self.row_status)
 
         self.row_install = Adw.ActionRow(
-            title="Install AutoGlow 2",
-            subtitle="WLED lighting driven by your live games, with the AutoGlow Bridge browser extension.")
+            title=tr("Install AutoGlow 2"),
+            subtitle=tr("WLED lighting driven by your live games, with the AutoGlow Bridge browser extension."))
         self.btn_install = _compact_button("Install", "suggested-action")
         self.btn_install.connect("clicked", self._on_install_clicked)
         self.row_install.add_suffix(self.btn_install)
         grp_main.add(self.row_install)
 
-        self.row_service = Adw.ActionRow(title="Service")
+        self.row_service = Adw.ActionRow(title=tr("Service"))
         box_service = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         box_service.set_valign(Gtk.Align.CENTER)
         self.btn_start_stop = _compact_button("Stop", "secondary-btn")
@@ -105,29 +106,29 @@ class AutoGlowView(Adw.NavigationPage):
         self.row_service.add_suffix(box_service)
         grp_main.add(self.row_service)
 
-        self.row_autostart = Adw.SwitchRow(title="Start on Boot")
+        self.row_autostart = Adw.SwitchRow(title=tr("Start on Boot"))
         self.row_autostart.connect("notify::active", self._on_autostart_toggled)
         grp_main.add(self.row_autostart)
 
         # Software: updates, repair and removal
-        self.grp_software = Adw.PreferencesGroup(title="Software")
+        self.grp_software = Adw.PreferencesGroup(title=tr("Software"))
         main_box.append(self.grp_software)
 
-        self.row_update = Adw.ActionRow(title="Updates", subtitle="Not checked yet.")
+        self.row_update = Adw.ActionRow(title=tr("Updates"), subtitle=tr("Not checked yet."))
         self.btn_update = _compact_button("Check", "secondary-btn")
         self.btn_update.connect("clicked", self._on_update_clicked)
         self.row_update.add_suffix(self.btn_update)
         self.grp_software.add(self.row_update)
 
-        self.row_maintenance = Adw.ActionRow(title="Maintenance")
+        self.row_maintenance = Adw.ActionRow(title=tr("Maintenance"))
         box_maint = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         box_maint.set_valign(Gtk.Align.CENTER)
         self.btn_repair = _compact_button("Repair", "secondary-btn")
-        self.btn_repair.set_tooltip_text("Reinstall packages, the browser extension and the service. Settings are kept.")
+        self.btn_repair.set_tooltip_text(tr("Reinstall packages, the browser extension and the service. Settings are kept."))
         self.btn_repair.connect("clicked", self._on_repair_clicked)
         box_maint.append(self.btn_repair)
         self.btn_uninstall = _compact_button("Uninstall", "secondary-btn-destructive")
-        self.btn_uninstall.set_tooltip_text("Remove the service and the browser extension")
+        self.btn_uninstall.set_tooltip_text(tr("Remove the service and the browser extension"))
         self.btn_uninstall.connect("clicked", self._on_uninstall_clicked)
         box_maint.append(self.btn_uninstall)
         self.row_maintenance.add_suffix(box_maint)
@@ -153,8 +154,8 @@ class AutoGlowView(Adw.NavigationPage):
         if not installed:
             _set_pill(self.lbl_pill, "Not Installed", "status-pill-checking")
             self.row_status.set_subtitle(
-                "An AutoGlow 1 service was found. Installing replaces it." if s.get("legacy")
-                else f"Installs into {self._short_path(DEFAULT_DIR)}.")
+                tr("An AutoGlow 1 service was found. Installing replaces it.") if s.get("legacy")
+                else tr("Installs into {path}.").format(path=self._short_path(DEFAULT_DIR)))
         elif not s.get("service_present"):
             _set_pill(self.lbl_pill, "No Service", "status-pill-pending")
         elif s.get("running"):
@@ -167,21 +168,22 @@ class AutoGlowView(Adw.NavigationPage):
         running = s.get("running", False)
         if installed:
             version = s.get("version")
-            parts = [f"Version {version}" if version else "", self._short_path(s["install_dir"])]
+            parts = [tr("Version {version}").format(version=version) if version else "", self._short_path(s["install_dir"])]
             self.row_status.set_subtitle(" · ".join(p for p in parts if p))
 
         self.row_install.set_visible(not installed)
         self.btn_open.set_visible(installed)
         self.btn_open.set_sensitive(running and not self._busy)
         self.btn_open.set_tooltip_text(
-            f"Open the web interface ({WEB_URL})" if running else "Start the AutoGlow service to open it")
+            tr("Open the web interface ({url})").format(url=WEB_URL) if running
+            else tr("Start the AutoGlow service to open it"))
         has_service = installed and s.get("service_present", False)
         self.row_service.set_visible(has_service)
         self.row_autostart.set_visible(has_service)
         self.grp_software.set_visible(installed)
         self.row_update.set_visible(s.get("is_git", False))
 
-        self.btn_start_stop.set_label("Stop" if s.get("running") else "Start")
+        self.btn_start_stop.set_label(tr("Stop") if s.get("running") else tr("Start"))
         self.btn_restart.set_sensitive(s.get("running", False))
         self._loading = True
         try:
@@ -219,24 +221,24 @@ class AutoGlowView(Adw.NavigationPage):
             self.refresh()
 
         def on_error(e):
-            on_done((False, f"AutoGlow action failed: {e}"))
+            on_done((False, tr("AutoGlow action failed: {error}").format(error=e)))
 
         run_async(worker, on_done=on_done, on_error=on_error)
 
     # ------------------------------------------------------------- actions
 
     def _on_install_clicked(self, btn):
-        self.window.show_toast("Installing AutoGlow 2. This takes a few minutes...")
+        self.window.show_toast(tr("Installing AutoGlow 2. This takes a few minutes..."))
         self._run_task(AutoGlowService.install, "Installing...", on_success=self._show_browser_hint)
 
     def _show_browser_hint(self):
         dialog = Adw.AlertDialog(
-            heading="AutoGlow 2 Installed",
-            body="AutoGlow gets your live games from the AutoGlow Bridge extension, which installs itself in "
+            heading=tr("AutoGlow 2 Installed"),
+            body=tr("AutoGlow gets your live games from the AutoGlow Bridge extension, which installs itself in "
                  "Chrome and Chromium.\n\nRestart the browser, play on play.autodarts.com and set up your "
-                 "WLED lights in the AutoGlow web interface.")
-        dialog.add_response("close", "Later")
-        dialog.add_response("open", "Open AutoGlow")
+                 "WLED lights in the AutoGlow web interface."))
+        dialog.add_response("close", tr("Later"))
+        dialog.add_response("open", tr("Open AutoGlow"))
         dialog.set_response_appearance("open", Adw.ResponseAppearance.SUGGESTED)
         dialog.connect("response", lambda d, r: r == "open" and open_browser_url(self.window, WEB_URL))
         dialog.present(self.window)
@@ -250,15 +252,15 @@ class AutoGlowView(Adw.NavigationPage):
         def worker():
             ok = AutoGlowService.stop() if running else AutoGlowService.start()
             if not ok:
-                return False, "Failed changing the AutoGlow service state."
-            return True, "AutoGlow stopped." if running else "AutoGlow started."
+                return False, tr("Failed changing the AutoGlow service state.")
+            return True, tr("AutoGlow stopped.") if running else tr("AutoGlow started.")
 
         self._run_task(worker, "Stopping..." if running else "Starting...")
 
     def _on_restart_clicked(self, btn):
         def worker():
             ok = AutoGlowService.restart()
-            return ok, "AutoGlow restarted." if ok else "Failed restarting AutoGlow."
+            return ok, tr("AutoGlow restarted.") if ok else tr("Failed restarting AutoGlow.")
 
         self._run_task(worker, "Restarting...")
 
@@ -269,22 +271,22 @@ class AutoGlowView(Adw.NavigationPage):
 
         def on_done(ok):
             if ok:
-                self.window.show_toast("AutoGlow starts on boot." if enabled else "AutoGlow no longer starts on boot.")
+                self.window.show_toast(tr("AutoGlow starts on boot.") if enabled else tr("AutoGlow no longer starts on boot."))
             else:
-                self.window.show_toast("Failed changing AutoGlow autostart.")
+                self.window.show_toast(tr("Failed changing AutoGlow autostart."))
             self.refresh()
 
         run_async(lambda: AutoGlowService.set_enabled(enabled), on_done=on_done)
 
     def _check_updates(self, quiet: bool = False):
-        self.row_update.set_subtitle("Checking for updates...")
+        self.row_update.set_subtitle(tr("Checking for updates..."))
         self.btn_update.set_sensitive(False)
 
         def on_done(info):
             self.btn_update.set_sensitive(True)
             self._update_info = info
             if info.get("error"):
-                self.row_update.set_subtitle(info["error"])
+                self.row_update.set_subtitle(tr(info["error"]))
                 self._set_update_button(False)
                 if not quiet:
                     self.window.show_toast(info["error"])
@@ -292,18 +294,20 @@ class AutoGlowView(Adw.NavigationPage):
             if info.get("has_update"):
                 count = info.get("commits_behind", 1)
                 latest = info.get("latest_message", "")
-                text = f"{count} update{'s' if count != 1 else ''} available."
-                self.row_update.set_subtitle(f"{text} Latest: {latest}" if latest else text)
+                text = tr("1 update available.") if count == 1 else tr("{count} updates available.").format(count=count)
+                if latest:
+                    text += " " + tr("Latest: {msg}").format(msg=latest)
+                self.row_update.set_subtitle(text)
             else:
-                self.row_update.set_subtitle("AutoGlow 2 is up to date.")
+                self.row_update.set_subtitle(tr("AutoGlow 2 is up to date."))
                 if not quiet:
-                    self.window.show_toast("AutoGlow 2 is up to date.")
+                    self.window.show_toast(tr("AutoGlow 2 is up to date."))
             self._set_update_button(info.get("has_update", False))
 
         run_async(AutoGlowService.check_update, on_done=on_done)
 
     def _set_update_button(self, has_update: bool):
-        self.btn_update.set_label("Update" if has_update else "Check")
+        self.btn_update.set_label(tr("Update") if has_update else tr("Check"))
         if has_update:
             self.btn_update.remove_css_class("secondary-btn")
             self.btn_update.add_css_class("suggested-action")
@@ -319,25 +323,26 @@ class AutoGlowView(Adw.NavigationPage):
         def on_success():
             self._update_info = None
             self._set_update_button(False)
-            self.row_update.set_subtitle("AutoGlow 2 is up to date.")
+            self.row_update.set_subtitle(tr("AutoGlow 2 is up to date."))
 
-        self.window.show_toast("Updating AutoGlow 2. Settings, flows and profiles are kept...")
+        self.window.show_toast(tr("Updating AutoGlow 2. Settings, flows and profiles are kept..."))
         self._run_task(AutoGlowService.update, "Updating...", on_success=on_success)
 
     def _on_uninstall_clicked(self, btn):
         own_folder = self._status.get("install_dir") == DEFAULT_DIR
-        body = "This stops AutoGlow and removes its service and the AutoGlow Bridge browser extension."
+        body = tr("This stops AutoGlow and removes its service and the AutoGlow Bridge browser extension.")
         if own_folder:
-            body += f"\n\nDelete the AutoGlow folder ({self._short_path(DEFAULT_DIR)}) as well? " \
-                    "This also deletes your AutoGlow settings, flows and profiles."
-        dialog = Adw.AlertDialog(heading="Uninstall AutoGlow 2?", body=body)
-        dialog.add_response("cancel", "Cancel")
+            body += "\n\n" + tr("Delete the AutoGlow folder ({path}) as well? "
+                                 "This also deletes your AutoGlow settings, flows and profiles.").format(
+                path=self._short_path(DEFAULT_DIR))
+        dialog = Adw.AlertDialog(heading=tr("Uninstall AutoGlow 2?"), body=body)
+        dialog.add_response("cancel", tr("Cancel"))
         if own_folder:
-            dialog.add_response("keep", "Keep Settings")
-            dialog.add_response("delete", "Delete Everything")
+            dialog.add_response("keep", tr("Keep Settings"))
+            dialog.add_response("delete", tr("Delete Everything"))
             dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
         else:
-            dialog.add_response("keep", "Uninstall")
+            dialog.add_response("keep", tr("Uninstall"))
             dialog.set_response_appearance("keep", Adw.ResponseAppearance.DESTRUCTIVE)
         dialog.set_default_response("cancel")
         dialog.set_close_response("cancel")

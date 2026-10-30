@@ -16,6 +16,7 @@ from core.autodarts_service import (
 )
 from modules_gtk.async_utils import run_async
 from modules_gtk.ui_helpers import create_button_with_icon
+from core.i18n import tr
 
 logger = get_logger("autodarts_view")
 
@@ -73,7 +74,7 @@ class FitTerminal(Vte.Terminal):
 
 class AutodartsView(Adw.NavigationPage):
     def __init__(self, window):
-        super().__init__(title="Autodarts", tag="autodarts")
+        super().__init__(title=tr("Autodarts"), tag="autodarts")
         self.window = window
         self.poll_source_id = None
         self.is_busy = False
@@ -116,11 +117,11 @@ class AutodartsView(Adw.NavigationPage):
         self.box_overlay_banner.set_halign(Gtk.Align.CENTER)
         self.box_overlay_banner.set_valign(Gtk.Align.CENTER)
 
-        self.lbl_overlay_msg = Gtk.Label(label="Console is not running.")
+        self.lbl_overlay_msg = Gtk.Label(label=tr("Console is not running."))
         self.lbl_overlay_msg.add_css_class("title-3")
         self.box_overlay_banner.append(self.lbl_overlay_msg)
 
-        self.btn_overlay_start = Gtk.Button(label="Start Console")
+        self.btn_overlay_start = Gtk.Button(label=tr("Start Console"))
         self.btn_overlay_start.add_css_class("suggested-action")
         self.btn_overlay_start.connect("clicked", lambda b: self._spawn_console(force=True))
         self.box_overlay_banner.append(self.btn_overlay_start)
@@ -133,22 +134,22 @@ class AutodartsView(Adw.NavigationPage):
         # -------------------------------------------------------------
         # 2. Collapsible Maintenance & Tools (Bottom Expander)
         # -------------------------------------------------------------
-        self.exp_tools = Adw.ExpanderRow(title="Tools and Maintenance")
+        self.exp_tools = Adw.ExpanderRow(title=tr("Tools and Maintenance"))
         self.exp_tools.set_expanded(False)
 
         # Terminal Console Restart Action
         row_console = Adw.ActionRow(
-            title="Terminal Console",
-            subtitle="Restart the embedded Autodarts session"
+            title=tr("Terminal Console"),
+            subtitle=tr("Restart the embedded Autodarts session")
         )
         self.btn_restart_console = create_button_with_icon("utilities-terminal-symbolic", "Restart", "secondary-btn", height=36, touch_btn=True)
-        self.btn_restart_console.set_tooltip_text("Restart the embedded Autodarts terminal console")
+        self.btn_restart_console.set_tooltip_text(tr("Restart the embedded Autodarts terminal console"))
         self.btn_restart_console.connect("clicked", lambda b: self._spawn_console(force=True))
         row_console.add_suffix(self.btn_restart_console)
         self.exp_tools.add_row(row_console)
 
         # Install / Reinstall & Uninstall Actions
-        row_install = Adw.ActionRow(title="Software Management")
+        row_install = Adw.ActionRow(title=tr("Software Management"))
         box_install_btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         box_install_btns.set_valign(Gtk.Align.CENTER)
 
@@ -173,7 +174,7 @@ class AutodartsView(Adw.NavigationPage):
         main_box.append(self.list_tools)
 
         # Footer version label
-        self.lbl_footer_ver = Gtk.Label(label="Autodarts Console Wrapper", xalign=0)
+        self.lbl_footer_ver = Gtk.Label(label=tr("Autodarts Console Wrapper"), xalign=0)
         self.lbl_footer_ver.add_css_class("dim-label")
         self.lbl_footer_ver.set_margin_start(4)
         main_box.append(self.lbl_footer_ver)
@@ -260,7 +261,7 @@ class AutodartsView(Adw.NavigationPage):
 
         if not installed:
             self.box_overlay_banner.set_visible(True)
-            self.lbl_overlay_msg.set_text("Autodarts is not installed.")
+            self.lbl_overlay_msg.set_text(tr("Autodarts is not installed."))
             self.btn_overlay_start.set_visible(False)
             if hasattr(self, "btn_restart_console"):
                 self.btn_restart_console.set_sensitive(False)
@@ -273,7 +274,7 @@ class AutodartsView(Adw.NavigationPage):
         if not binary:
             logger.warning("No autodarts binary found to spawn")
             self.box_overlay_banner.set_visible(True)
-            self.lbl_overlay_msg.set_text("Autodarts binary not found.")
+            self.lbl_overlay_msg.set_text(tr("Autodarts binary not found."))
             self.btn_overlay_start.set_visible(False)
             return
 
@@ -315,7 +316,7 @@ class AutodartsView(Adw.NavigationPage):
             self._spawn_pending = False
             logger.exception("Failed to spawn Autodarts terminal: %s", e)
             self.box_overlay_banner.set_visible(True)
-            self.lbl_overlay_msg.set_text(f"Spawn failed: {e}")
+            self.lbl_overlay_msg.set_text(tr("Spawn failed: {e}").format(e=e))
             self.btn_overlay_start.set_visible(True)
 
     def _on_spawn_cb(self, terminal, pid, error, user_data):
@@ -341,7 +342,7 @@ class AutodartsView(Adw.NavigationPage):
             self._console_active = False
             self._child_pid = None
             self.box_overlay_banner.set_visible(True)
-            self.lbl_overlay_msg.set_text("Console launch failed.")
+            self.lbl_overlay_msg.set_text(tr("Console launch failed."))
             self.btn_overlay_start.set_visible(True)
         else:
             logger.info("VTE spawned Autodarts console (PID %s)", pid)
@@ -357,7 +358,7 @@ class AutodartsView(Adw.NavigationPage):
         self._child_pid = None
         self._console_active = False
         self.box_overlay_banner.set_visible(True)
-        self.lbl_overlay_msg.set_text("Console exited.")
+        self.lbl_overlay_msg.set_text(tr("Console exited."))
         self.btn_overlay_start.set_visible(True)
 
     def _do_service_action(self, action):
@@ -379,12 +380,12 @@ class AutodartsView(Adw.NavigationPage):
             self.is_busy = False
             self.spinner.stop()
             if ok:
-                self.window.show_toast(f"Service {action}ed.")
+                self.window.show_toast({"start": tr("Service started."), "stop": tr("Service stopped."), "restart": tr("Service restarted.")}[action])
                 self.refresh()
                 # If started or restarted, also reconnect/restart console
                 GLib.timeout_add(1000, lambda: self._spawn_console(force=True) or False)
             else:
-                self.window.show_toast(f"Failed to {action} service.")
+                self.window.show_toast({"start": tr("Failed to start service."), "stop": tr("Failed to stop service."), "restart": tr("Failed to restart service.")}[action])
 
         run_async(worker, on_done=on_done)
 
@@ -393,7 +394,7 @@ class AutodartsView(Adw.NavigationPage):
             return
         self.is_busy = True
         self.spinner.start()
-        self.window.show_toast("Installing Autodarts...")
+        self.window.show_toast(tr("Installing Autodarts..."))
 
         def worker():
             return install_autodarts()
@@ -414,7 +415,7 @@ class AutodartsView(Adw.NavigationPage):
             return
         self.is_busy = True
         self.spinner.start()
-        self.window.show_toast("Uninstalling Autodarts...")
+        self.window.show_toast(tr("Uninstalling Autodarts..."))
 
         def worker():
             return uninstall_autodarts()

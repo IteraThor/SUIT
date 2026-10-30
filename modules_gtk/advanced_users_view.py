@@ -17,12 +17,13 @@ __all__ = ["AdvancedUsersView"]
 
 
 from modules_gtk.ui_helpers import build_page_shell
+from core.i18n import tr
 
 class AdvancedUsersView(Adw.NavigationPage):
     """Submenu for advanced utilities: Desktop Sharing, Tailscale VPN, and Darts Scorer via Waydroid."""
 
     def __init__(self, window):
-        super().__init__(title="Advanced Users", tag="advanced_users")
+        super().__init__(title=tr("Advanced Users"), tag="advanced_users")
         self.window = window
         self._updating = False
         self._updating_rdp = False
@@ -35,27 +36,27 @@ class AdvancedUsersView(Adw.NavigationPage):
         # Group 1: Desktop Sharing & Remote Control
         # =========================================================================
         self.grp_remote = Adw.PreferencesGroup(
-            title="Desktop Sharing"
+            title=tr("Desktop Sharing")
         )
         main_box.append(self.grp_remote)
 
         self.row_sharing = Adw.SwitchRow(
-            title="Desktop Sharing",
-            subtitle="Allow connecting to this display from another device."
+            title=tr("Desktop Sharing"),
+            subtitle=tr("Allow connecting to this display from another device.")
         )
         self.row_sharing.connect("notify::active", self._on_sharing_toggled)
         self.grp_remote.add(self.row_sharing)
 
         self.row_control = Adw.SwitchRow(
-            title="Remote Control",
-            subtitle="Allow remote keyboard, mouse, and touch control."
+            title=tr("Remote Control"),
+            subtitle=tr("Allow remote keyboard, mouse, and touch control.")
         )
         self.row_control.connect("notify::active", self._on_control_toggled)
         self.grp_remote.add(self.row_control)
 
         self.row_rdp_info = Adw.ActionRow(
-            title="Connection Details",
-            subtitle="Checking connection details..."
+            title=tr("Connection Details"),
+            subtitle=tr("Checking connection details...")
         )
         self.box_rdp_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.box_rdp_actions.set_valign(Gtk.Align.CENTER)
@@ -75,17 +76,17 @@ class AdvancedUsersView(Adw.NavigationPage):
         # Group 2: Remote Access (Tailscale VPN)
         # =========================================================================
         self.grp_tailscale = Adw.PreferencesGroup(
-            title="Tailscale VPN"
+            title=tr("Tailscale VPN")
         )
         main_box.append(self.grp_tailscale)
 
         self.row_tailscale = Adw.ActionRow(
-            title="Tailscale VPN",
-            subtitle="Remote network access for board management."
+            title=tr("Tailscale VPN"),
+            subtitle=tr("Remote network access for board management.")
         )
         self.box_tailscale = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.box_tailscale.set_valign(Gtk.Align.CENTER)
-        self.lbl_tailscale_badge = Gtk.Label(label="Checking...")
+        self.lbl_tailscale_badge = Gtk.Label(label=tr("Checking..."))
         self.lbl_tailscale_badge.add_css_class("status-pill-checking")
         self.btn_tailscale = create_button_with_icon(
             "network-vpn-symbolic",
@@ -102,18 +103,18 @@ class AdvancedUsersView(Adw.NavigationPage):
         # Group 3: Android Darts Scorer (Waydroid)
         # =========================================================================
         self.grp_waydroid = Adw.PreferencesGroup(
-            title="Darts Scorer"
+            title=tr("Darts Scorer")
         )
         main_box.append(self.grp_waydroid)
 
         # Primary Darts Scorer Row
         self.row_scorer = Adw.ActionRow(
-            title="Darts Scorer App",
-            subtitle="Android scoreboard app for local score tracking."
+            title=tr("Darts Scorer App"),
+            subtitle=tr("Android scoreboard app for local score tracking.")
         )
         self.box_scorer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.box_scorer.set_valign(Gtk.Align.CENTER)
-        self.lbl_scorer_badge = Gtk.Label(label="Checking...")
+        self.lbl_scorer_badge = Gtk.Label(label=tr("Checking..."))
         self.lbl_scorer_badge.add_css_class("status-pill-checking")
         self.btn_scorer_action = create_button_with_icon(
             "media-playback-start-symbolic",
@@ -128,15 +129,15 @@ class AdvancedUsersView(Adw.NavigationPage):
 
         # Expander for advanced sub-tools
         self.expander_waydroid = Adw.ExpanderRow(
-            title="Advanced Waydroid Options",
-            subtitle="Diagnostics, debloat, and Android container settings."
+            title=tr("Advanced Waydroid Options"),
+            subtitle=tr("Diagnostics, debloat, and Android container settings.")
         )
         self.grp_waydroid.add(self.expander_waydroid)
 
         # Sub-row 1: Waydroid Debloat
         self.row_sub_debloat = Adw.ActionRow(
-            title="Waydroid Debloat",
-            subtitle="Clean unused LineageOS apps to save memory and CPU."
+            title=tr("Waydroid Debloat"),
+            subtitle=tr("Clean unused LineageOS apps to save memory and CPU.")
         )
         btn_sub_debloat = create_button_with_icon("view-refresh-symbolic", "Run Debloat", "secondary-btn compact-btn", height=38)
         btn_sub_debloat.connect("clicked", self._on_sub_debloat_clicked)
@@ -145,8 +146,8 @@ class AdvancedUsersView(Adw.NavigationPage):
 
         # Sub-row 2: Android Settings
         self.row_sub_settings = Adw.ActionRow(
-            title="Android Settings",
-            subtitle="Open native Android container settings."
+            title=tr("Android Settings"),
+            subtitle=tr("Open native Android container settings.")
         )
         btn_sub_settings = create_button_with_icon("emblem-system-symbolic", "Open Settings", "secondary-btn compact-btn", height=38)
         btn_sub_settings.connect("clicked", self._on_sub_settings_clicked)
@@ -155,8 +156,8 @@ class AdvancedUsersView(Adw.NavigationPage):
 
         # Sub-row 3: Aurora Store
         self.row_sub_aurora = Adw.ActionRow(
-            title="Aurora Store",
-            subtitle="Download and update Android apps without a Google account."
+            title=tr("Aurora Store"),
+            subtitle=tr("Download and update Android apps without a Google account.")
         )
         btn_sub_aurora = create_button_with_icon("software-update-available-symbolic", "Open Store", "secondary-btn compact-btn", height=38)
         btn_sub_aurora.connect("clicked", self._on_sub_aurora_clicked)
@@ -182,7 +183,7 @@ class AdvancedUsersView(Adw.NavigationPage):
                 user = rdp.get("username") or "autodarts"
                 pw = rdp.get("password") or "autodarts"
                 self.row_rdp_info.set_visible(True)
-                self.row_rdp_info.set_subtitle(f"Connect to {ip}:{port} (User: {user} / Pass: {pw})")
+                self.row_rdp_info.set_subtitle(tr("Connect to {ip}:{port} (User: {user} / Password: {pw})").format(ip=ip, port=port, user=user, pw=pw))
                 self._current_rdp_info = f"Host: {ip}:{port}\nUsername: {user}\nPassword: {pw}"
             else:
                 self.row_rdp_info.set_visible(False)
@@ -211,9 +212,9 @@ class AdvancedUsersView(Adw.NavigationPage):
             tbox.set_valign(Gtk.Align.CENTER)
 
             if not is_tail:
-                self.row_tailscale.set_subtitle("Remote network access for board management away from home.")
+                self.row_tailscale.set_subtitle(tr("Remote network access for board management away from home."))
                 tbox.append(Gtk.Image.new_from_icon_name("software-update-available-symbolic"))
-                tbox.append(Gtk.Label(label="Install Tailscale"))
+                tbox.append(Gtk.Label(label=tr("Install Tailscale")))
                 self.btn_tailscale.set_child(tbox)
                 self.btn_tailscale.remove_css_class("secondary-btn")
                 self.btn_tailscale.add_css_class("suggested-action")
@@ -221,26 +222,26 @@ class AdvancedUsersView(Adw.NavigationPage):
                 self.box_tailscale.append(self.btn_tailscale)
             elif is_running and tail_ips:
                 ip_str = tail_ips[0]
-                self.lbl_tailscale_badge.set_label(f"Connected: {ip_str}")
+                self.lbl_tailscale_badge.set_label(tr("Connected: {ip}").format(ip=ip_str))
                 self.lbl_tailscale_badge.remove_css_class("status-pill-checking")
                 self.lbl_tailscale_badge.remove_css_class("status-pill-pending")
                 self.lbl_tailscale_badge.remove_css_class("status-pill-stopped")
                 self.lbl_tailscale_badge.add_css_class("status-pill-running")
-                self.row_tailscale.set_subtitle(f"Connected as {tail_host}.")
+                self.row_tailscale.set_subtitle(tr("Connected as {host}.").format(host=tail_host))
                 self.box_tailscale.append(self.lbl_tailscale_badge)
             elif tail_state == "Stopped":
-                self.row_tailscale.set_subtitle("Installed but disconnected.")
+                self.row_tailscale.set_subtitle(tr("Installed but disconnected."))
                 tbox.append(Gtk.Image.new_from_icon_name("network-vpn-symbolic"))
-                tbox.append(Gtk.Label(label="Connect"))
+                tbox.append(Gtk.Label(label=tr("Connect")))
                 self.btn_tailscale.set_child(tbox)
                 self.btn_tailscale.remove_css_class("secondary-btn")
                 self.btn_tailscale.add_css_class("suggested-action")
                 self.btn_tailscale.set_sensitive(True)
                 self.box_tailscale.append(self.btn_tailscale)
             else:
-                self.row_tailscale.set_subtitle("Authentication required to connect.")
+                self.row_tailscale.set_subtitle(tr("Authentication required to connect."))
                 tbox.append(Gtk.Image.new_from_icon_name("network-vpn-symbolic"))
-                tbox.append(Gtk.Label(label="Sign In"))
+                tbox.append(Gtk.Label(label=tr("Sign In")))
                 self.btn_tailscale.set_child(tbox)
                 self.btn_tailscale.remove_css_class("secondary-btn")
                 self.btn_tailscale.add_css_class("suggested-action")
@@ -266,15 +267,15 @@ class AdvancedUsersView(Adw.NavigationPage):
 
             if not has_private_installer and not is_installed:
                 self.row_scorer.set_visible(False)
-                self.grp_waydroid.set_title("Android Container (Waydroid)")
+                self.grp_waydroid.set_title(tr("Android Container (Waydroid)"))
             else:
                 self.row_scorer.set_visible(True)
-                self.grp_waydroid.set_title("Darts Scorer")
+                self.grp_waydroid.set_title(tr("Darts Scorer"))
 
             if is_installed:
-                self.row_scorer.set_subtitle("Android scoreboard app running via Waydroid.")
+                self.row_scorer.set_subtitle(tr("Android scoreboard app running via Waydroid."))
                 sbox.append(Gtk.Image.new_from_icon_name("media-playback-start-symbolic"))
-                sbox.append(Gtk.Label(label="Launch Scorer"))
+                sbox.append(Gtk.Label(label=tr("Launch Scorer")))
                 self.btn_scorer_action.set_child(sbox)
                 self.btn_scorer_action.remove_css_class("suggested-action")
                 self.btn_scorer_action.add_css_class("secondary-btn")
@@ -282,9 +283,9 @@ class AdvancedUsersView(Adw.NavigationPage):
                 self.btn_scorer_action._is_installed = True
                 self.box_scorer.append(self.btn_scorer_action)
             elif has_private_installer:
-                self.row_scorer.set_subtitle("Android scoreboard app for local score tracking.")
+                self.row_scorer.set_subtitle(tr("Android scoreboard app for local score tracking."))
                 sbox.append(Gtk.Image.new_from_icon_name("software-update-available-symbolic"))
-                sbox.append(Gtk.Label(label="1-Click Install"))
+                sbox.append(Gtk.Label(label=tr("1-Click Install")))
                 self.btn_scorer_action.set_child(sbox)
                 self.btn_scorer_action.remove_css_class("secondary-btn")
                 self.btn_scorer_action.add_css_class("suggested-action")
@@ -306,7 +307,7 @@ class AdvancedUsersView(Adw.NavigationPage):
         SystemService.set_desktop_sharing(active)
         if active and self.row_control.get_active():
             SystemService.set_remote_control(True)
-        msg = "Desktop sharing enabled." if active else "Desktop sharing disabled."
+        msg = tr("Desktop sharing enabled.") if active else tr("Desktop sharing disabled.")
         self.window.show_toast(msg)
         self.refresh()
 
@@ -315,7 +316,7 @@ class AdvancedUsersView(Adw.NavigationPage):
             return
         active = row.get_active()
         SystemService.set_remote_control(active)
-        msg = "Remote control enabled." if active else "Remote control disabled (view-only)."
+        msg = tr("Remote control enabled.") if active else tr("Remote control disabled (view-only).")
         self.window.show_toast(msg)
         self.refresh()
 
@@ -323,12 +324,12 @@ class AdvancedUsersView(Adw.NavigationPage):
         info = getattr(self, "_current_rdp_info", "")
         if info:
             copy_to_clipboard(info)
-            self.window.show_toast("Connection details copied to clipboard.")
+            self.window.show_toast(tr("Connection details copied to clipboard."))
 
     def _on_tailscale_clicked(self, btn):
         tail_status = SystemService.get_tailscale_status()
         if not tail_status.get("installed"):
-            self.window.show_toast("Installing Tailscale in background...")
+            self.window.show_toast(tr("Installing Tailscale in background..."))
             btn.set_sensitive(False)
 
             def worker():
@@ -367,7 +368,7 @@ class AdvancedUsersView(Adw.NavigationPage):
     def _on_scorer_action_clicked(self, btn):
         if getattr(btn, "_is_installed", False) or SystemService.is_darts_scorer_installed():
             SystemService.launch_darts_scorer()
-            self.window.show_toast("Opening Darts Scorer...")
+            self.window.show_toast(tr("Opening Darts Scorer..."))
             return
 
         if DartsScorerInstallDialog is not None:
@@ -378,10 +379,10 @@ class AdvancedUsersView(Adw.NavigationPage):
             dialog = DartsScorerInstallDialog(self.window, on_finished)
             dialog.present()
         else:
-            self.window.show_toast("Darts Scorer installer is not available.")
+            self.window.show_toast(tr("Darts Scorer installer is not available."))
 
     def _on_sub_debloat_clicked(self, btn):
-        self.window.show_toast("Running Waydroid debloat and seamless multi-window setup...")
+        self.window.show_toast(tr("Running Waydroid debloat and seamless multi-window setup..."))
 
         def worker():
             return SystemService.waydroid_debloat_and_seamless()
@@ -395,14 +396,14 @@ class AdvancedUsersView(Adw.NavigationPage):
 
     def _on_sub_settings_clicked(self, btn):
         subprocess.Popen(["waydroid", "app", "launch", "com.android.settings"])
-        self.window.show_toast("Opening Android Settings...")
+        self.window.show_toast(tr("Opening Android Settings..."))
 
     def _on_sub_aurora_clicked(self, btn):
         if SystemService.is_aurora_store_installed():
             subprocess.Popen(["waydroid", "app", "launch", "com.aurora.store"])
-            self.window.show_toast("Opening Aurora Store...")
+            self.window.show_toast(tr("Opening Aurora Store..."))
             return
-        self.window.show_toast("Downloading and installing Aurora Store APK...")
+        self.window.show_toast(tr("Downloading and installing Aurora Store APK..."))
 
         def worker():
             return SystemService.install_aurora_store()

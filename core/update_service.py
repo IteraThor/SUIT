@@ -3,6 +3,7 @@ import subprocess
 import sys
 import os
 from core.logger import get_logger
+from core.i18n import tr
 
 logger = get_logger("update")
 
@@ -124,7 +125,7 @@ class UpdateService:
                 "remote_commit": "",
                 "commits_behind": 0,
                 "latest_message": "",
-                "error": f"Failed checking updates: {str(e)}",
+                "error": tr("Failed checking updates: {error}").format(error=str(e)),
             }
 
     @classmethod
@@ -141,7 +142,7 @@ class UpdateService:
             )
             if fetch_res.returncode != 0:
                 err = fetch_res.stderr.strip() or "Network error"
-                return False, f"Failed fetching updates: {err}"
+                return False, tr("Failed fetching updates: {error}").format(error=err)
 
             # 2. Fast-forward pull with hard reset fallback for rewritten history
             pull_res = subprocess.run(
@@ -163,7 +164,7 @@ class UpdateService:
                 if reset_res.returncode != 0:
                     err = reset_res.stderr.strip()
                     logger.warning("Hard reset failed: %s", err)
-                    return False, f"Unable to update: {err}"
+                    return False, tr("Unable to update: {error}").format(error=err)
 
             logger.info("Successfully updated SUIT from origin main")
             cls.ensure_dependencies()
@@ -175,7 +176,7 @@ class UpdateService:
             return False, "Update timed out. Please check internet connection."
         except Exception as e:
             logger.exception("Update execution failed")
-            return False, f"Update failed: {str(e)}"
+            return False, tr("Update failed: {error}").format(error=str(e))
 
     @classmethod
     def ensure_camera_keeper(cls) -> None:
@@ -271,12 +272,12 @@ class UpdateService:
             else:
                 err = res.stderr.strip() or "Installation failed."
                 logger.error("Failed installing requirements: %s", err)
-                return False, f"Installation failed: {err}"
+                return False, tr("Installation failed: {error}").format(error=err)
         except subprocess.TimeoutExpired:
             return False, "Installation timed out."
         except Exception as e:
             logger.exception("Error installing requirements")
-            return False, f"Installation failed: {e}"
+            return False, tr("Installation failed: {error}").format(error=e)
 
     @classmethod
     def ensure_dependencies(cls) -> None:

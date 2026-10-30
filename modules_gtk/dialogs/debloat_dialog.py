@@ -8,6 +8,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw, GLib
 from core.system_service import SystemService
 from modules_gtk.async_utils import run_async
+from core.i18n import tr
 
 
 class DebloatReviewDialog(Adw.Window):
@@ -19,7 +20,7 @@ class DebloatReviewDialog(Adw.Window):
         super().__init__()
         self.set_transient_for(parent_window)
         self.set_modal(True)
-        self.set_title("Debloat Fedora System")
+        self.set_title(tr("Debloat Fedora System"))
         self.set_default_size(560, 580)
         self.on_finished = on_finished_callback
         self.app_details = app_details
@@ -58,7 +59,7 @@ class DebloatReviewDialog(Adw.Window):
 
         if installed_items:
             lbl_subtitle = Gtk.Label(
-                label="Select applications to remove. Deselect any app you want to keep on your system.",
+                label=tr("Select applications to remove. Deselect any app you want to keep on your system."),
                 wrap=True,
                 xalign=0
             )
@@ -67,12 +68,12 @@ class DebloatReviewDialog(Adw.Window):
 
             # Selection controls toolbar
             top_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            self.btn_select_all = Gtk.Button(label="Select All")
+            self.btn_select_all = Gtk.Button(label=tr("Select All"))
             self.btn_select_all.add_css_class("flat")
             self.btn_select_all.connect("clicked", lambda b: self._set_all_selected(True))
             top_bar.append(self.btn_select_all)
 
-            self.btn_deselect_all = Gtk.Button(label="Deselect All")
+            self.btn_deselect_all = Gtk.Button(label=tr("Deselect All"))
             self.btn_deselect_all.add_css_class("flat")
             self.btn_deselect_all.connect("clicked", lambda b: self._set_all_selected(False))
             top_bar.append(self.btn_deselect_all)
@@ -84,14 +85,14 @@ class DebloatReviewDialog(Adw.Window):
             content_box.append(top_bar)
 
             pref_group = Adw.PreferencesGroup()
-            pref_group.set_title(f"Installed Default Applications ({len(installed_items)})")
-            pref_group.set_description("Checked applications will be uninstalled. Uncheck any app to keep it.")
+            pref_group.set_title(tr("Installed Default Applications ({count})").format(count=len(installed_items)))
+            pref_group.set_description(tr("Checked applications will be uninstalled. Uncheck any app to keep it."))
             inner_box.append(pref_group)
 
             for item in installed_items:
                 row = Adw.ActionRow(
-                    title=item["title"],
-                    subtitle=item["description"]
+                    title=tr(item["title"]),
+                    subtitle=tr(item["description"])
                 )
                 icon_name = item.get("icon", "application-x-executable-symbolic")
                 icon_img = Gtk.Image.new_from_icon_name(icon_name)
@@ -110,27 +111,27 @@ class DebloatReviewDialog(Adw.Window):
         else:
             status_page = Adw.StatusPage()
             status_page.set_icon_name("emblem-ok-symbolic")
-            status_page.set_title("System is Clean")
-            status_page.set_description("0 bloatware packages found. All default bloatware apps have been removed from this system.")
+            status_page.set_title(tr("System is Clean"))
+            status_page.set_description(tr("0 bloatware packages found. All default bloatware apps have been removed from this system."))
             inner_box.append(status_page)
 
         if uninstalled_items:
             clean_group = Adw.PreferencesGroup()
             expander = Adw.ExpanderRow(
-                title=f"Already Removed / Clean ({len(uninstalled_items)})",
-                subtitle="Applications not installed on this system"
+                title=tr("Already Removed / Clean ({count})").format(count=len(uninstalled_items)),
+                subtitle=tr("Applications not installed on this system")
             )
             expander.set_expanded(not installed_items)
             for item in uninstalled_items:
                 sub_row = Adw.ActionRow(
-                    title=item["title"],
-                    subtitle=item["description"]
+                    title=tr(item["title"]),
+                    subtitle=tr(item["description"])
                 )
                 sub_icon = Gtk.Image.new_from_icon_name(item.get("icon", "application-x-executable-symbolic"))
                 sub_icon.set_pixel_size(20)
                 sub_row.add_prefix(sub_icon)
 
-                pill = Gtk.Label(label="Clean")
+                pill = Gtk.Label(label=tr("Clean"))
                 pill.add_css_class("status-pill-running")
                 pill.set_valign(Gtk.Align.CENTER)
                 sub_row.add_suffix(pill)
@@ -146,7 +147,7 @@ class DebloatReviewDialog(Adw.Window):
         self.progress_box.set_visible(False)
         content_box.append(self.progress_box)
 
-        self.lbl_progress_status = Gtk.Label(label="Starting package removal...", xalign=0)
+        self.lbl_progress_status = Gtk.Label(label=tr("Starting package removal..."), xalign=0)
         self.lbl_progress_status.add_css_class("caption")
         self.progress_box.append(self.lbl_progress_status)
 
@@ -160,12 +161,12 @@ class DebloatReviewDialog(Adw.Window):
         content_box.append(bottom_bar)
 
         if installed_items:
-            self.btn_cancel = Gtk.Button(label="Cancel")
+            self.btn_cancel = Gtk.Button(label=tr("Cancel"))
             self.btn_cancel.set_size_request(80, 38)
             self.btn_cancel.connect("clicked", lambda b: self.close())
             bottom_bar.append(self.btn_cancel)
 
-            self.btn_confirm = Gtk.Button(label="Remove Selected")
+            self.btn_confirm = Gtk.Button(label=tr("Remove Selected"))
             self.btn_confirm.add_css_class("destructive-action")
             self.btn_confirm.set_size_request(160, 38)
             self.btn_confirm.connect("clicked", self._on_confirm_clicked)
@@ -173,13 +174,13 @@ class DebloatReviewDialog(Adw.Window):
 
             self._update_count()
         else:
-            self.btn_clean_dash = Gtk.Button(label="Clean Dash Favorites")
+            self.btn_clean_dash = Gtk.Button(label=tr("Clean Dash Favorites"))
             self.btn_clean_dash.add_css_class("secondary-btn")
             self.btn_clean_dash.set_size_request(160, 38)
             self.btn_clean_dash.connect("clicked", self._on_clean_dash_clicked)
             bottom_bar.append(self.btn_clean_dash)
 
-            self.btn_close = Gtk.Button(label="Close")
+            self.btn_close = Gtk.Button(label=tr("Close"))
             self.btn_close.set_size_request(80, 38)
             self.btn_close.connect("clicked", lambda b: self.close())
             bottom_bar.append(self.btn_close)
@@ -198,9 +199,9 @@ class DebloatReviewDialog(Adw.Window):
     def _update_count(self):
         selected = sum(1 for chk, _ in self.check_buttons if chk.get_active())
         total = len(self.check_buttons)
-        self.lbl_selected_count.set_label(f"{selected} of {total} selected")
+        self.lbl_selected_count.set_label(tr("{selected} of {total} selected").format(selected=selected, total=total))
         self.btn_confirm.set_sensitive(selected > 0)
-        self.btn_confirm.set_label(f"Remove Selected ({selected})")
+        self.btn_confirm.set_label(tr("Remove Selected ({selected})").format(selected=selected))
 
     def _on_clean_dash_clicked(self, btn):
         btn.set_sensitive(False)

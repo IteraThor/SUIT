@@ -11,6 +11,7 @@ from gi.repository import Gtk, Adw
 from modules_gtk.async_utils import open_browser_url
 from modules_gtk.ui_helpers import create_button_with_icon, copy_to_clipboard, generate_qr_texture
 from core.logger import get_logger
+from core.i18n import tr
 
 logger = get_logger("community_dialog")
 
@@ -28,7 +29,7 @@ class CommunityDialog(Adw.Window):
         super().__init__()
         self.set_transient_for(parent_window)
         self.set_modal(True)
-        self.set_title("IteraThor Community & 3D Models")
+        self.set_title(tr("IteraThor Community & 3D Models"))
         self.set_default_size(680, 370)
         self.parent_window = parent_window
 
@@ -60,7 +61,7 @@ class CommunityDialog(Adw.Window):
 
         # Card 1: Discord Community
         card_discord = self._build_item_card(
-            title="Discord Community",
+            title=tr("Discord Community"),
             url=DISCORD_URL,
             display_url="discord.gg/3ryuF4CXra",
         )
@@ -68,7 +69,7 @@ class CommunityDialog(Adw.Window):
 
         # Card 2: 3D Print Models
         card_models = self._build_item_card(
-            title="3D Print Models",
+            title=tr("3D Print Models"),
             url=MAKERWORLD_URL,
             display_url="makerworld.com/@HipsThor",
         )
@@ -121,7 +122,7 @@ class CommunityDialog(Adw.Window):
             height=38,
             touch_btn=True,
         )
-        btn_open.set_tooltip_text(f"Open {url} in browser")
+        btn_open.set_tooltip_text(tr("Open {url} in browser").format(url=url))
         btn_open.connect("clicked", lambda b, target_url=url: self._open_url(target_url))
         btn_box.append(btn_open)
 
@@ -132,7 +133,7 @@ class CommunityDialog(Adw.Window):
             height=38,
             touch_btn=True,
         )
-        btn_copy.set_tooltip_text(f"Copy {url} to clipboard")
+        btn_copy.set_tooltip_text(tr("Copy {url} to clipboard").format(url=url))
         btn_copy.connect("clicked", lambda b, target_url=url: self._copy_url(target_url))
         btn_box.append(btn_copy)
 
@@ -147,4 +148,4 @@ class CommunityDialog(Adw.Window):
     def _copy_url(self, url: str):
         if copy_to_clipboard(url):
             if hasattr(self.parent_window, "show_toast"):
-                self.parent_window.show_toast("Link copied to clipboard!")
+                self.parent_window.show_toast(tr("Link copied to clipboard!"))

@@ -9,6 +9,7 @@ from gi.repository import Gtk, Adw, Vte, Pango, Gdk, GLib
 
 from core.logger import get_logger
 from core.autodarts_service import get_autodarts_cli_binary
+from core.i18n import tr
 
 logger = get_logger("board_setup_dialog")
 
@@ -16,7 +17,7 @@ logger = get_logger("board_setup_dialog")
 class BoardSetupDialog(Adw.Window):
     """Console dialog embedding the official Autodarts terminal UI ('ad')."""
     def __init__(self, parent_window=None, on_saved_cb=None):
-        super().__init__(modal=True, title="Autodarts Console")
+        super().__init__(modal=True, title=tr("Autodarts Console"))
         if isinstance(parent_window, Gtk.Window):
             self.set_transient_for(parent_window)
         self.set_default_size(740, 520)
@@ -31,7 +32,7 @@ class BoardSetupDialog(Adw.Window):
         header.set_show_end_title_buttons(True)
 
         btn_restart = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
-        btn_restart.set_tooltip_text("Restart Console")
+        btn_restart.set_tooltip_text(tr("Restart Console"))
         btn_restart.connect("clicked", lambda b: self._spawn(force=True))
         header.pack_end(btn_restart)
 

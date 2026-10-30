@@ -5,6 +5,7 @@ from pathlib import Path
 from core.logger import get_logger
 from core.systemd_service import SystemdService
 from core.update_service import UpdateService
+from core.i18n import tr
 
 logger = get_logger("autoglow")
 
@@ -88,20 +89,20 @@ class AutoGlowService:
             if res.returncode != 0:
                 tail = (res.stderr.strip() or res.stdout.strip()).splitlines()[-1:] or ["unknown error"]
                 logger.warning("AutoGlow setup.sh failed: %s\n%s", res.stderr, res.stdout[-2000:])
-                return False, f"AutoGlow setup failed: {tail[0]}"
+                return False, tr("AutoGlow setup failed: {error}").format(error=tail[0])
             return True, "AutoGlow 2 is installed and running."
         except subprocess.TimeoutExpired:
             return False, "AutoGlow setup timed out."
         except Exception as e:
             logger.exception("Failed running AutoGlow setup.sh")
-            return False, f"AutoGlow setup failed: {e}"
+            return False, tr("AutoGlow setup failed: {error}").format(error=e)
 
     @classmethod
     def install(cls) -> tuple[bool, str]:
         install_dir = cls.get_install_dir()
         if install_dir is None:
             if DEFAULT_DIR.exists() and any(DEFAULT_DIR.iterdir()):
-                return False, f"{DEFAULT_DIR} already exists and is not an AutoGlow 2 folder."
+                return False, tr("{path} already exists and is not an AutoGlow 2 folder.").format(path=DEFAULT_DIR)
             try:
                 res = subprocess.run(
                     ["git", "clone", "--depth", "1", REPO_URL, str(DEFAULT_DIR)],
@@ -112,7 +113,7 @@ class AutoGlowService:
                     return False, "Download failed. Check internet connection."
             except Exception as e:
                 logger.exception("Failed cloning AutoGlow")
-                return False, f"Download failed: {e}"
+                return False, tr("Download failed: {error}").format(error=e)
             install_dir = DEFAULT_DIR
         return cls._run_setup(install_dir)
 
@@ -149,10 +150,13 @@ class AutoGlowService:
                 return False, "Update download failed. Local changes in the AutoGlow folder may block it."
         except Exception as e:
             logger.exception("Failed updating AutoGlow")
-            return False, f"Update failed: {e}"
+            return False, tr("Update failed: {error}").format(error=e)
 
         ok, msg = cls._run_setup(install_dir)
-        return ok, ("AutoGlow 2 updated to " + (cls.get_version(install_dir) or "the latest version") + ".") if ok else msg
+        if not ok:
+            return ok, msg
+        version = cls.get_version(install_dir)
+        return ok, tr("AutoGlow 2 updated to {version}.").format(version=version) if version else tr("AutoGlow 2 updated to the latest version.")
 
     @staticmethod
     def start() -> bool:
@@ -203,4 +207,4 @@ class AutoGlowService:
             return True, "AutoGlow 2 service removed, its folder was kept."
         except Exception as e:
             logger.exception("Failed uninstalling AutoGlow")
-            return False, f"Uninstall failed: {e}"
+            return False, tr("Uninstall failed: {error}").format(error=e)

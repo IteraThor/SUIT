@@ -6,6 +6,7 @@ import ast
 import shutil
 from pathlib import Path
 from core.logger import get_logger
+from core.i18n import tr
 
 logger = get_logger("desktop")
 
@@ -260,7 +261,7 @@ class DesktopService:
 
         except Exception as e:
             logger.exception("Failed configuring touchscreen scaling")
-            return False, f"Failed updating touch scaling: {e}"
+            return False, tr("Failed updating touch scaling: {error}").format(error=e)
 
     @staticmethod
     def _get_enabled_extensions() -> list[str]:
@@ -413,7 +414,7 @@ class DesktopService:
             return True, "Hardware overlay installed. Log out and back in once to show it."
         except Exception as e:
             logger.exception("Failed configuring hardware overlay")
-            return False, f"Failed updating hardware overlay: {e}"
+            return False, tr("Failed updating hardware overlay: {error}").format(error=e)
 
     @classmethod
     def install_minimal_desktop_files(cls, source_dir: Path | None = None, target_dir: Path | None = None) -> bool:
@@ -457,7 +458,7 @@ class DesktopService:
             return True, "Minimal desktop installed. Log out and back in once to apply it."
         except Exception as e:
             logger.exception("Failed configuring minimal desktop")
-            return False, f"Failed updating minimal desktop: {e}"
+            return False, tr("Failed updating minimal desktop: {error}").format(error=e)
 
     @staticmethod
     def _normalize_hw_overlay_config(raw) -> dict:
@@ -583,5 +584,5 @@ class DesktopService:
             return True, "Desktop visuals and App Grid organized successfully."
         except Exception as e:
             logger.exception("Failed setting desktop visuals")
-            return False, f"Failed applying visuals: {e}"
+            return False, tr("Failed applying visuals: {error}").format(error=e)
 

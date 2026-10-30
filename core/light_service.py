@@ -3,6 +3,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 from core.logger import get_logger
+from core.i18n import tr
 
 logger = get_logger("light")
 
@@ -363,17 +364,17 @@ class LightService:
                     if led_count:
                         extra += f", {led_count} LEDs"
                     extra += ")"
-                    return True, f"Connected to WLED successfully{extra}"
+                    return True, tr("Connected to WLED successfully{extra}").format(extra=extra)
             except urllib.error.URLError as e:
-                return False, f"Connection failed: {e.reason}"
+                return False, tr("Connection failed: {reason}").format(reason=e.reason)
             except Exception as e:
-                return False, f"Connection failed: {e}"
+                return False, tr("Connection failed: {error}").format(error=e)
         elif device_type in ("tasmota", "smart_plug"):
             return cls._test_tasmota(clean_ip, port, timeout=timeout)
         elif device_type == "shelly":
             return cls._test_shelly(clean_ip, port, timeout=timeout)
         else:
-            return False, f"Unsupported device type: {device_type}"
+            return False, tr("Unsupported device type: {device_type}").format(device_type=device_type)
 
     @classmethod
     def _test_tasmota(cls, ip: str, port: int, timeout: float = 1.2) -> tuple[bool, str]:
@@ -384,7 +385,7 @@ class LightService:
                 data = json.loads(resp.read().decode("utf-8"))
                 fw_ver = data.get("StatusFWR", {}).get("Version", "")
                 ver_str = f" (v{fw_ver})" if fw_ver else ""
-                return True, f"Connected to Tasmota Smart Plug{ver_str}"
+                return True, tr("Connected to Tasmota Smart Plug{ver_str}").format(ver_str=ver_str)
         except Exception:
             try:
                 url_basic = f"http://{ip}:{port}/cm?cmnd=Status"
@@ -392,9 +393,9 @@ class LightService:
                 with urllib.request.urlopen(req_basic, timeout=timeout) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                     dev_name = data.get("Status", {}).get("DeviceName", "Tasmota")
-                    return True, f"Connected to {dev_name} Smart Plug"
+                    return True, tr("Connected to {dev_name} Smart Plug").format(dev_name=dev_name)
             except Exception as e:
-                return False, f"Connection failed: {e}"
+                return False, tr("Connection failed: {error}").format(error=e)
 
     @classmethod
     def _test_shelly(cls, ip: str, port: int, timeout: float = 1.2) -> tuple[bool, str]:
@@ -404,7 +405,7 @@ class LightService:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 model = data.get("type", "Shelly")
-                return True, f"Connected to {model} Smart Plug"
+                return True, tr("Connected to {model} Smart Plug").format(model=model)
         except Exception as e:
-            return False, f"Connection failed: {e}"
+            return False, tr("Connection failed: {error}").format(error=e)
 
