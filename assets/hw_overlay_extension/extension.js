@@ -18,6 +18,8 @@ const VIRTUAL_IFACES = /^(lo|docker|veth|virbr|br-|waydroid|lxc|podman|cni|flann
 const UPDATE_CHECK_S = 6 * 60 * 60;
 // A second tap within this long confirms an update, which restarts Autodarts
 const UPDATE_CONFIRM_MS = 4000;
+// Camera tiles shown even when Autodarts reports fewer (or none): the setup has three
+const MIN_CAM_TILES = 3;
 const AUTODARTS_CONFIG = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'autodarts', 'config.toml']);
 const CONFIG_DIR = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'suit']);
 const CONFIG_NAME = 'hw_overlay.json';
@@ -450,9 +452,9 @@ export default class HwOverlayExtension extends Extension {
         if (m.ad_cams) {
             ad.cams = new St.BoxLayout({ style_class: 'suit-hwmon-cams', x_expand: true });
             ad.cams.layout_manager.homogeneous = true;
-            ad.cams.visible = false;
             ad.camLabels = [];
             this._box.add_child(ad.cams);
+            this._setCams([], null, false);
         }
 
         if (m.ad_proc)
@@ -919,7 +921,7 @@ export default class HwOverlayExtension extends Extension {
         const target = data?.config?.cam?.fps ?? 30;
         const fps = (data?.camStats ?? []).map(c => Number(c.fps) || 0);
         if (ad.cams)
-            this._setCams(fps, running ? target : null);
+            this._setCams(fps, running ? target : null, Boolean(data?.camState?.isOpened));
 
         if (fps.length && running) {
             const avg = fps.reduce((a, b) => a + b, 0) / fps.length;
@@ -964,25 +966,29 @@ export default class HwOverlayExtension extends Extension {
         ad.fpsNote.visible = !live;
     }
 
-    _setCams(fps, target) {
+    // Always at least MIN_CAM_TILES tiles. A tile shows a dash unless its camera is really delivering
+    // frames: Autodarts lists a 0 fps entry for a slot with nothing connected.
+    _setCams(fps, target, opened) {
         const ad = this._ad;
-        if (ad.camLabels.length !== fps.length) {
+        const count = Math.max(MIN_CAM_TILES, fps.length);
+        if (ad.camLabels.length !== count) {
             ad.cams.destroy_all_children();
-            ad.camLabels = fps.map((_, i) => {
+            ad.camLabels = Array.from({ length: count }, (_, i) => {
                 const tile = vbox('suit-hwmon-cam');
                 tile.x_expand = true;
-                const lbl = new St.Label({ style_class: 'suit-hwmon-cam-fps', x_align: Clutter.ActorAlign.CENTER });
+                const lbl = new St.Label({ text: '—', style_class: 'suit-hwmon-cam-fps', x_align: Clutter.ActorAlign.CENTER });
                 tile.add_child(lbl);
                 tile.add_child(new St.Label({ text: `CAM ${i + 1}`, style_class: 'suit-hwmon-cam-name', x_align: Clutter.ActorAlign.CENTER }));
                 ad.cams.add_child(tile);
                 return lbl;
             });
         }
-        ad.cams.visible = fps.length > 0;
-        fps.forEach((v, i) => {
-            const lbl = ad.camLabels[i];
-            lbl.text = target === null ? '—' : String(Math.round(v));
-            setLevel(lbl, target === null ? 'suit-hwmon-dim' : fpsLevel(v, target));
+        ad.cams.visible = true;
+        ad.camLabels.forEach((lbl, i) => {
+            const v = fps[i];
+            const live = target !== null && v !== undefined && (opened || v > 0);
+            lbl.text = live ? String(Math.round(v)) : '—';
+            setLevel(lbl, live ? fpsLevel(v, target) : 'suit-hwmon-dim');
         });
     }
 }
