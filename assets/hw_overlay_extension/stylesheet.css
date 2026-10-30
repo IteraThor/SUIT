@@ -112,3 +112,18 @@
 
 .suit-hwmon-fill.suit-hwmon-warn { background-color: #ebcb8b; }
 .suit-hwmon-fill.suit-hwmon-bad { background-color: #bf616a; }
+
+.suit-hwmon-buttons { spacing: 0.45em; margin-top: 0.2em; }
+
+.suit-hwmon-btn {
+  font-size: 0.85em;
+  font-weight: bold;
+  padding: 0.5em 0.6em;
+  border-radius: 0.7em;
+  text-align: center;
+  color: #eceff4;
+  background-color: rgba(255, 255, 255, 0.09);
+}
+.suit-hwmon-btn:hover { background-color: rgba(255, 255, 255, 0.18); }
+.suit-hwmon-btn:active { background-color: rgba(255, 255, 255, 0.26); }
+.suit-hwmon-btn.suit-hwmon-dim { color: rgba(236, 239, 244, 0.35); }

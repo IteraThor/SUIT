@@ -27,6 +27,12 @@ AUTODARTS_METRICS = [
     ("ad_cams", "Per-Camera FPS", ""),
     ("ad_proc", "Autodarts Process Usage", ""),
 ]
+# Clickable controls the overlay can show, same actions as the buttons on Autodarts' own page
+AUTODARTS_BUTTONS = [
+    ("ad_toggle", "Start / Stop Button"),
+    ("ad_reset", "Reset Button"),
+    ("ad_dump", "Debug Snapshot Button (saves to Downloads)"),
+]
 POSITION_LABELS = {
     "top-left": "Top Left", "top-right": "Top Right",
     "bottom-left": "Bottom Left", "bottom-right": "Bottom Right",
@@ -124,14 +130,23 @@ class HwOverlayView(Adw.NavigationPage):
 
         # Metrics: one tab per source
         self.metric_rows = {}
-        for box, metrics in ((sys_box, SYSTEM_METRICS), (ad_box, AUTODARTS_METRICS)):
-            grp = Adw.PreferencesGroup()
+        for box, title, metrics in ((sys_box, "Show", SYSTEM_METRICS), (ad_box, "Show", AUTODARTS_METRICS)):
+            grp = Adw.PreferencesGroup(title=title)
             box.append(grp)
             for key, name, hint in metrics:
                 self.metric_rows[key] = self._add_switch(
                     grp, name, hint,
                     lambda k=key: self.config["metrics"][k],
                     lambda v, k=key: self._set_metric(k, v))
+
+        grp_buttons = Adw.PreferencesGroup(title="Buttons")
+        ad_box.append(grp_buttons)
+        self.button_rows = {}
+        for key, name in AUTODARTS_BUTTONS:
+            self.button_rows[key] = self._add_switch(
+                grp_buttons, name, "",
+                lambda k=key: self.config["buttons"][k],
+                lambda v, k=key: self._set_button(k, v))
 
         self._sync_sensitivity()
 
@@ -184,6 +199,8 @@ class HwOverlayView(Adw.NavigationPage):
             self.row_headings.set_active(cfg["headings"])
             for key, row in self.metric_rows.items():
                 row.set_active(cfg["metrics"][key])
+            for key, row in self.button_rows.items():
+                row.set_active(cfg["buttons"][key])
         finally:
             self._updating = False
         self._sync_sensitivity()
@@ -200,6 +217,10 @@ class HwOverlayView(Adw.NavigationPage):
 
     def _set_metric(self, key, value):
         self.config["metrics"][key] = value
+        self._save()
+
+    def _set_button(self, key, value):
+        self.config["buttons"][key] = value
         self._save()
 
     def _save(self):

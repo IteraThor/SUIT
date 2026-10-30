@@ -19,6 +19,8 @@ HW_OVERLAY_USER_DIR = Path.home() / ".local" / "share" / "gnome-shell" / "extens
 HW_OVERLAY_CONFIG_PATH = Path.home() / ".config" / "suit" / "hw_overlay.json"
 HW_OVERLAY_METRICS = ("cpu", "temp", "ram", "gpu", "disk", "net", "load", "uptime",
                       "ad_state", "ad_fps", "ad_cams", "ad_proc")
+# Clickable Autodarts controls the overlay can show (all opt-in): start/stop, reset, debug snapshot
+HW_OVERLAY_BUTTONS = ("ad_toggle", "ad_reset", "ad_dump")
 HW_OVERLAY_DEFAULTS = {
     "style": "card",
     "position": "top-right",
@@ -29,6 +31,7 @@ HW_OVERLAY_DEFAULTS = {
     "headings": True,
     "interval": 2,
     "metrics": {m: m not in ("net", "load", "ad_proc") for m in HW_OVERLAY_METRICS},
+    "buttons": {b: False for b in HW_OVERLAY_BUTTONS},
 }
 HW_OVERLAY_CHOICES = {
     "style": ("card", "minimal"),
@@ -73,6 +76,7 @@ class DesktopService:
     HW_OVERLAY_USER_DIR = HW_OVERLAY_USER_DIR
     HW_OVERLAY_CONFIG_PATH = HW_OVERLAY_CONFIG_PATH
     HW_OVERLAY_METRICS = HW_OVERLAY_METRICS
+    HW_OVERLAY_BUTTONS = HW_OVERLAY_BUTTONS
     HW_OVERLAY_DEFAULTS = HW_OVERLAY_DEFAULTS
     GTK4_CSS_PATH = GTK4_CSS_PATH
     GTK3_CSS_PATH = GTK3_CSS_PATH
@@ -424,6 +428,11 @@ class DesktopService:
             for m in HW_OVERLAY_METRICS:
                 if isinstance(metrics.get(m), bool):
                     cfg["metrics"][m] = metrics[m]
+        buttons = raw.get("buttons")
+        if isinstance(buttons, dict):
+            for b in HW_OVERLAY_BUTTONS:
+                if isinstance(buttons.get(b), bool):
+                    cfg["buttons"][b] = buttons[b]
         return cfg
 
     @classmethod

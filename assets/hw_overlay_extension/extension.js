@@ -8,6 +8,8 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 const FPS_LOW_WINDOW_MS = 60 * 1000;
 const MARGIN = 24;
+// Autodarts' own debug dump (what the Debug button on its web page saves) can take a while to build
+const DUMP_TIMEOUT_S = 60;
 const AUTODARTS_CONFIG = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'autodarts', 'config.toml']);
 const CONFIG_DIR = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'suit']);
 const CONFIG_NAME = 'hw_overlay.json';
@@ -26,6 +28,8 @@ const DEFAULTS = {
         cpu: true, temp: true, ram: true, gpu: true, disk: true, net: false, load: false, uptime: true,
         ad_state: true, ad_fps: true, ad_cams: true, ad_proc: false,
     },
+    // Clickable Autodarts controls, off until chosen
+    buttons: { ad_toggle: false, ad_reset: false, ad_dump: false },
 };
 const CHOICES = {
     style: ['card', 'minimal'],
@@ -153,7 +157,7 @@ function loadConfig() {
     } catch {
         // Half-written or hand-edited file: fall back to the defaults
     }
-    const cfg = { ...DEFAULTS, metrics: { ...DEFAULTS.metrics } };
+    const cfg = { ...DEFAULTS, metrics: { ...DEFAULTS.metrics }, buttons: { ...DEFAULTS.buttons } };
     for (const [key, choices] of Object.entries(CHOICES)) {
         if (choices.includes(raw[key]))
             cfg[key] = raw[key];
@@ -167,6 +171,10 @@ function loadConfig() {
     for (const key of Object.keys(cfg.metrics)) {
         if (typeof raw.metrics?.[key] === 'boolean')
             cfg.metrics[key] = raw.metrics[key];
+    }
+    for (const key of Object.keys(cfg.buttons)) {
+        if (typeof raw.buttons?.[key] === 'boolean')
+            cfg.buttons[key] = raw.buttons[key];
     }
     return cfg;
 }
@@ -235,6 +243,8 @@ export default class HwOverlayExtension extends Extension {
         this._adBusy = false;
         this._adFailures = 0;
         this._session = new Soup.Session({ timeout: 2 });
+        this._dumpSession = new Soup.Session({ timeout: DUMP_TIMEOUT_S });
+        this._dumpBusy = false;
         this._cancellable = new Gio.Cancellable();
         this._config = loadConfig();
         this._lastAd = undefined;
@@ -263,6 +273,7 @@ export default class HwOverlayExtension extends Extension {
         }
         this._cancellable?.cancel();
         this._session?.abort();
+        this._dumpSession?.abort();
         if (this._monitorsId) {
             Main.layoutManager.disconnect(this._monitorsId);
             this._monitorsId = 0;
@@ -270,6 +281,7 @@ export default class HwOverlayExtension extends Extension {
         this._box?.destroy();
         this._box = null;
         this._session = null;
+        this._dumpSession = null;
         this._cancellable = null;
         this._sensors = null;
         this._rows = null;
@@ -336,7 +348,8 @@ export default class HwOverlayExtension extends Extension {
 
         const hasGpu = Boolean(this._sensors.gpuBusy || this._sensors.gpuTemp);
         const system = Object.keys(SYSTEM_ROWS).filter(k => m[k] && (k !== 'gpu' || hasGpu));
-        const autodarts = ['ad_state', 'ad_fps', 'ad_cams', 'ad_proc'].some(k => m[k]);
+        const autodarts = ['ad_state', 'ad_fps', 'ad_cams', 'ad_proc'].some(k => m[k])
+            || Object.values(cfg.buttons).some(Boolean);
 
         if (system.length) {
             if (cfg.headings)
@@ -406,6 +419,107 @@ export default class HwOverlayExtension extends Extension {
 
         if (m.ad_proc)
             this._addRow('proc', 'PROCESS', false);
+
+        if (Object.values(cfg.buttons).some(Boolean))
+            this._buildButtons();
+    }
+
+    // The same actions as the buttons on Autodarts' own page (localhost:3180)
+    _buildButtons() {
+        const b = this._config.buttons;
+        const ad = this._ad;
+        const row = new St.BoxLayout({ style_class: 'suit-hwmon-buttons', x_expand: true });
+        row.layout_manager.homogeneous = true;
+        const add = (label, handler) => {
+            const btn = new St.Button({
+                label, style_class: 'suit-hwmon-btn', reactive: true, can_focus: false,
+                track_hover: true, x_expand: true,
+            });
+            btn.connect('clicked', handler);
+            row.add_child(btn);
+            return btn;
+        };
+        if (b.ad_toggle)
+            ad.toggle = add('Start', () => this._onToggle());
+        if (b.ad_reset)
+            ad.reset = add('Reset', () => this._onReset());
+        if (b.ad_dump)
+            ad.dump = add('Debug', () => this._onDump());
+        this._box.add_child(row);
+    }
+
+    _adPort() {
+        return this._ports[this._portIdx % this._ports.length];
+    }
+
+    // Fire-and-forget request to the local Autodarts API; done(status, bytes, msg) runs on the main loop.
+    _adRequest(method, path, done, session = this._session) {
+        if (!session)
+            return;
+        const msg = Soup.Message.new(method, `http://127.0.0.1:${this._adPort()}${path}`);
+        session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, this._cancellable, (sess, res) => {
+            let bytes = null;
+            try {
+                bytes = sess.send_and_read_finish(res);
+            } catch (e) {
+                if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                    return;
+            }
+            done(bytes ? msg.get_status() : 0, bytes, msg);
+        });
+    }
+
+    _notify(text) {
+        Main.notify('SUIT', text);
+    }
+
+    _onToggle() {
+        const running = this._lastAd?.camState?.isRunning ?? true;
+        this._adRequest('PUT', running ? '/api/stop' : '/api/start', status => {
+            if (status === Soup.Status.OK)
+                this._pollAutodarts();
+            else
+                this._notify(`Could not ${running ? 'stop' : 'start'} Autodarts.`);
+        });
+    }
+
+    _onReset() {
+        this._adRequest('POST', '/api/reset', status => {
+            if (status === Soup.Status.OK) {
+                this._notify('Autodarts was reset.');
+                this._pollAutodarts();
+            } else {
+                this._notify('Could not reset Autodarts.');
+            }
+        });
+    }
+
+    // Saves the same zip as the Debug button on the Autodarts page, into the Downloads folder.
+    _onDump() {
+        if (this._dumpBusy)
+            return;
+        this._dumpBusy = true;
+        this._notify('Saving the Autodarts debug snapshot…');
+        this._adRequest('POST', '/api/debug/dump', (status, bytes) => {
+            this._dumpBusy = false;
+            if (status !== Soup.Status.OK || !bytes) {
+                this._notify(status === Soup.Status.SERVICE_UNAVAILABLE
+                    ? 'Autodarts is not ready for a debug snapshot yet.'
+                    : 'Could not get a debug snapshot from Autodarts.');
+                return;
+            }
+            const dir = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOWNLOAD)
+                ?? GLib.build_filenamev([GLib.get_home_dir(), 'Downloads']);
+            const stamp = GLib.DateTime.new_now_local().format('%Y%m%d-%H%M%S');
+            const path = GLib.build_filenamev([dir, `autodarts-dump-${stamp}.zip`]);
+            try {
+                GLib.mkdir_with_parents(dir, 0o755);
+                GLib.file_set_contents(path, bytes.get_data());
+                this._notify(`Debug snapshot saved to Downloads (autodarts-dump-${stamp}.zip).`);
+            } catch (e) {
+                this._notify(`Could not save the snapshot: ${e.message}`);
+            }
+        }, this._dumpSession);
     }
 
     _addRow(id, key, withMeter) {
@@ -639,6 +753,18 @@ export default class HwOverlayExtension extends Extension {
             setLevel(ad.pill, cls);
             const version = data?.status?.version ?? data?.version ?? '';
             ad.version.text = version ? `v${String(version).replace(/^v/, '')}` : '';
+        }
+
+        if (ad.toggle) {
+            ad.toggle.label = data && !running ? 'Start' : 'Stop';
+            ad.toggle.reactive = Boolean(data);
+            setLevel(ad.toggle, data ? null : 'suit-hwmon-dim');
+        }
+        for (const btn of [ad.reset, ad.dump]) {
+            if (btn) {
+                btn.reactive = Boolean(data);
+                setLevel(btn, data ? null : 'suit-hwmon-dim');
+            }
         }
 
         const target = data?.config?.cam?.fps ?? 30;
