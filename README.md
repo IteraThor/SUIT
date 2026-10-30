@@ -48,14 +48,14 @@ Modern Libadwaita touch menu providing rapid access to all system tools and live
   <img src="docs/assets/screenshots/01-main-dashboard.png" alt="SUIT Main Dashboard" width="700">
 </div>
 
-* Large 48px+ touch targets optimized for touchscreens.
+* Large 44px+ touch targets optimized for touchscreens.
 * Quick access to community resources, Discord, and 3D print models.
 * Integrated one-click update checker.
 
 ---
 
 ### 2. System Utilities & Touchscreen Tweaks
-One-click performance, display, and desktop optimizations for dartboard machines.
+One-click performance, display, and desktop optimizations for dartboard machines. The **Essentials** tab holds everything *Apply All* sets up; the **Extras** tab has the optional tweaks (touchscreen tweaks, Fast Boot, hardware overlay, advanced tools).
 
 <div align="center">
   <img src="docs/assets/screenshots/02-system-tweaks.png" alt="System Utilities and Touchscreen Tweaks" width="700">
@@ -130,7 +130,7 @@ Wayland display orientation and touch coordinate matrix calibration.
 Run Autodarts as a dedicated full-screen appliance with customized browser controls.
 
 <div align="center">
-  <img src="docs/assets/screenshots/06-kiosk-controls.png" alt="Fullscreen Kiosk Mode with In-Page Controls" width="420">
+  <img src="docs/assets/screenshots/06-kiosk-controls.png" alt="Fullscreen Kiosk Mode with In-Page Controls" width="560">
 </div>
 
 * Boots Chromium directly into fullscreen mode without desktop distractions.
