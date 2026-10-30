@@ -5,25 +5,27 @@ from gi.repository import Gtk, Adw, GLib
 from core.system_service import SystemService
 from modules_gtk.async_utils import run_async
 from modules_gtk.camera_widgets import segmented
-from modules_gtk.ui_helpers import create_button_with_icon
+from modules_gtk.ui_helpers import (
+    PAGE_MAX_WIDTH, PAGE_TIGHTEN_AT, build_page_shell, create_button_with_icon,
+)
 
 __all__ = ["HwOverlayView", "summarize_hw_overlay"]
 
 SYSTEM_METRICS = [
-    ("cpu", "CPU Usage", "Load and clock speed."),
-    ("temp", "CPU Temperature", "Package temperature."),
-    ("ram", "Memory", "Used and total RAM."),
-    ("gpu", "Graphics", "Load and temperature (AMD GPUs only)."),
-    ("disk", "Disk Space", "Used share of the system disk."),
-    ("net", "Network", "Download and upload speed."),
-    ("load", "Load Average", "1, 5 and 15 minute averages."),
-    ("uptime", "Uptime", "Time since the last boot."),
+    ("cpu", "CPU Usage and Clock", ""),
+    ("temp", "CPU Temperature", ""),
+    ("ram", "Memory", ""),
+    ("gpu", "Graphics (AMD GPUs only)", ""),
+    ("disk", "Disk Space", ""),
+    ("net", "Network Speed", ""),
+    ("load", "Load Average", ""),
+    ("uptime", "Uptime", ""),
 ]
 AUTODARTS_METRICS = [
-    ("ad_state", "Engine State", "Running, standby or offline, and the version."),
-    ("ad_fps", "Average FPS", "Large readout with the 1-minute low and resolution."),
-    ("ad_cams", "Per-Camera FPS", "One tile per camera."),
-    ("ad_proc", "Process Usage", "CPU and memory of the Autodarts process."),
+    ("ad_state", "Engine State and Version", ""),
+    ("ad_fps", "Average FPS", ""),
+    ("ad_cams", "Per-Camera FPS", ""),
+    ("ad_proc", "Autodarts Process Usage", ""),
 ]
 POSITION_LABELS = {
     "top-left": "Top Left", "top-right": "Top Right",
@@ -39,7 +41,6 @@ def summarize_hw_overlay(enabled: bool, cfg: dict) -> str:
     return f"On · {count} metric{'s' if count != 1 else ''} · {POSITION_LABELS[cfg['position']]}"
 
 
-from modules_gtk.ui_helpers import build_page_shell
 
 class HwOverlayView(Adw.NavigationPage):
     """Submenu for the desktop Hardware Overlay: on/off, its look, and which metrics it shows.
@@ -56,38 +57,55 @@ class HwOverlayView(Adw.NavigationPage):
         self._save_id = 0
         self.config = SystemService.get_hw_overlay_config()
 
-        scrolled, main_box = build_page_shell()
-        self.set_child(scrolled)
-
-        # =========================================================================
-        # Group 1: On / Off
-        # =========================================================================
-        grp_overlay = Adw.PreferencesGroup(
-            title="Overlay",
-            description="Live system and camera stats drawn on the desktop wallpaper. Changes show up instantly."
-        )
-        main_box.append(grp_overlay)
+        # On/off and Reset stay pinned above three tabs, so every tab fits one screen
+        grp_overlay = Adw.PreferencesGroup(title="Overlay")
+        btn_reset = create_button_with_icon("edit-undo-symbolic", "Reset", "secondary-btn compact-btn", height=36)
+        btn_reset.set_tooltip_text("Reset every overlay setting to its default")
+        btn_reset.connect("clicked", self._on_reset_clicked)
+        grp_overlay.set_header_suffix(btn_reset)
 
         self.row_enabled = Adw.SwitchRow(title="Show on Desktop", subtitle="Checking...")
         self.row_enabled.connect("notify::active", self._on_enabled_toggled)
         grp_overlay.add(self.row_enabled)
 
-        # =========================================================================
-        # Group 2: Appearance
-        # =========================================================================
-        grp_look = Adw.PreferencesGroup(title="Appearance")
-        main_box.append(grp_look)
+        top = Adw.Clamp(maximum_size=PAGE_MAX_WIDTH, tightening_threshold=PAGE_TIGHTEN_AT)
+        top.set_margin_top(12)
+        top.set_margin_start(16)
+        top.set_margin_end(16)
+        top.set_child(grp_overlay)
 
-        self.seg_style = self._add_choice(grp_look, "Style", "Card with a background, or text only.", "style",
-                                          [("card", "Card"), ("minimal", "Text Only")])
-        self.seg_position = self._add_choice(grp_look, "Position", None, "position", list(POSITION_LABELS.items()))
-        self.seg_size = self._add_choice(grp_look, "Size", None, "size",
+        scrolled_look, look_box = build_page_shell()
+        scrolled_sys, sys_box = build_page_shell()
+        scrolled_ad, ad_box = build_page_shell()
+        self.stack = Adw.ViewStack(vexpand=True)
+        self.stack.add_titled(scrolled_look, "look", "Look")
+        self.stack.add_titled(scrolled_sys, "system", "System")
+        self.stack.add_titled(scrolled_ad, "autodarts", "Autodarts")
+
+        switcher = Adw.InlineViewSwitcher(stack=self.stack, display_mode=Adw.InlineViewSwitcherDisplayMode.LABELS)
+        switcher.set_halign(Gtk.Align.CENTER)
+        switcher.set_margin_top(4)
+
+        page_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        page_box.append(top)
+        page_box.append(switcher)
+        page_box.append(self.stack)
+        self.set_child(page_box)
+
+        # Look: one group, every row a single line
+        grp_look = Adw.PreferencesGroup()
+        look_box.append(grp_look)
+        self.seg_style = self._add_choice(grp_look, "Style", "style", [("card", "Card"), ("minimal", "Text Only")])
+        self.seg_position = self._add_choice(grp_look, "Position", "position", list(POSITION_LABELS.items()))
+        self.seg_size = self._add_choice(grp_look, "Size", "size",
                                          [("small", "Small"), ("medium", "Medium"), ("large", "Large")])
-        self.seg_accent = self._add_choice(grp_look, "Meter Color", "Warnings always show amber or red.", "accent",
+        self.seg_accent = self._add_choice(grp_look, "Meter Color", "accent",
                                            [("blue", "Blue"), ("teal", "Teal"), ("green", "Green"),
                                             ("purple", "Purple"), ("white", "White")])
+        self.seg_interval = self._add_choice(grp_look, "Refresh Every", "interval",
+                                             [(1, "1 s"), (2, "2 s"), (5, "5 s")])
 
-        self.row_opacity = Adw.ActionRow(title="Background Opacity", subtitle="Card style only.")
+        self.row_opacity = Adw.ActionRow(title="Card Opacity")
         self.scale_opacity = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 5)
         self.scale_opacity.set_size_request(240, -1)
         self.scale_opacity.set_valign(Gtk.Align.CENTER)
@@ -99,38 +117,28 @@ class HwOverlayView(Adw.NavigationPage):
         self.row_opacity.add_suffix(self.scale_opacity)
         grp_look.add(self.row_opacity)
 
-        self.row_meters = self._add_switch(grp_look, "Usage Meters", "Thin bars under CPU, temperature, RAM, GPU and disk.",
+        self.row_meters = self._add_switch(grp_look, "Usage Meters", "",
                                            lambda: self.config["meters"], lambda v: self._set("meters", v))
-        self.row_headings = self._add_switch(grp_look, "Section Titles", "Show the SYSTEM and AUTODARTS titles.",
+        self.row_headings = self._add_switch(grp_look, "Section Titles", "",
                                              lambda: self.config["headings"], lambda v: self._set("headings", v))
-        self.seg_interval = self._add_choice(grp_look, "Refresh", None, "interval",
-                                             [(1, "1 s"), (2, "2 s"), (5, "5 s")])
 
-        # =========================================================================
-        # Group 3 + 4: Metrics
-        # =========================================================================
+        # Metrics: one tab per source
         self.metric_rows = {}
-        for title, metrics in (("System Metrics", SYSTEM_METRICS), ("Autodarts", AUTODARTS_METRICS)):
-            grp = Adw.PreferencesGroup(title=title)
-            main_box.append(grp)
+        for box, metrics in ((sys_box, SYSTEM_METRICS), (ad_box, AUTODARTS_METRICS)):
+            grp = Adw.PreferencesGroup()
+            box.append(grp)
             for key, name, hint in metrics:
                 self.metric_rows[key] = self._add_switch(
                     grp, name, hint,
                     lambda k=key: self.config["metrics"][k],
                     lambda v, k=key: self._set_metric(k, v))
 
-        btn_reset = create_button_with_icon("edit-undo-symbolic", "Reset to Defaults", "secondary-btn", height=38)
-        btn_reset.set_halign(Gtk.Align.CENTER)
-        btn_reset.set_margin_top(6)
-        btn_reset.connect("clicked", self._on_reset_clicked)
-        main_box.append(btn_reset)
-
         self._sync_sensitivity()
 
     # ------------------------------------------------------------------ builders
 
-    def _add_choice(self, group, title, subtitle, key, options):
-        row = Adw.ActionRow(title=title, subtitle=subtitle or "")
+    def _add_choice(self, group, title, key, options):
+        row = Adw.ActionRow(title=title)
         seg = segmented(options, self.config[key], lambda v, k=key: self._set(k, v))
         row.add_suffix(seg)
         group.add(row)
