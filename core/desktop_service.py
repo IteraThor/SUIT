@@ -54,15 +54,15 @@ TOUCH_CSS_BLOCK = f"""{SUIT_TOUCH_MARKER_START}
 windowcontrols button,
 headerbar button.titlebutton,
 .titlebutton {{
-  min-width: 48px;
-  min-height: 48px;
-  padding: 8px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 4px;
 }}
 
 windowcontrols button image,
 headerbar button.titlebutton image,
 .titlebutton image {{
-  -gtk-icon-size: 20px;
+  -gtk-icon-size: 16px;
 }}
 {SUIT_TOUCH_MARKER_END}
 """

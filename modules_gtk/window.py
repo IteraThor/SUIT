@@ -81,7 +81,7 @@ class SuitWindow(Adw.ApplicationWindow):
         self.btn_back = Gtk.Button.new_from_icon_name("go-previous-symbolic")
         self.btn_back.add_css_class("flat")
         self.btn_back.set_tooltip_text("Back to Menu")
-        self.btn_back.set_size_request(46, 44)
+        self.btn_back.set_size_request(36, 34)
         self.btn_back.set_visible(False)
         self.btn_back.connect("clicked", lambda b: self._on_back_clicked())
         self.header_bar.pack_start(self.btn_back)

@@ -33,7 +33,7 @@ class MainMenuView(Adw.NavigationPage):
         logo_path = self.window.project_dir / "assets" / "icons" / "suit-icon.png"
         if logo_path.exists():
             logo_img = Gtk.Image.new_from_file(str(logo_path))
-            logo_img.set_pixel_size(36)
+            logo_img.set_pixel_size(52)
             logo_img.set_valign(Gtk.Align.CENTER)
             banner_inner.append(logo_img)
 
