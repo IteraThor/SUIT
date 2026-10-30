@@ -84,7 +84,7 @@ class SuitWindow(Adw.ApplicationWindow):
         self.btn_back = Gtk.Button.new_from_icon_name("go-previous-symbolic")
         self.btn_back.add_css_class("flat")
         self.btn_back.set_tooltip_text("Back to Menu")
-        self.btn_back.set_size_request(36, 34)
+        self.btn_back.set_size_request(30, 28)
         self.btn_back.set_visible(False)
         self.btn_back.connect("clicked", lambda b: self._on_back_clicked())
         self.header_bar.pack_start(self.btn_back)
@@ -108,6 +108,7 @@ class SuitWindow(Adw.ApplicationWindow):
         self.rotation_page = None
         self.kiosk_page = None
         self.system_page = None
+        self.autoglow_page = None
 
         # Push Main Menu
         self.menu_page = MainMenuView(self)
@@ -458,6 +459,12 @@ class SuitWindow(Adw.ApplicationWindow):
         self.nav_view.push(self.kiosk_page)
         if hasattr(self.kiosk_page, "refresh"):
             self.kiosk_page.refresh()
+
+    def open_autoglow_page(self):
+        if not self.autoglow_page:
+            from modules_gtk.autoglow_view import AutoGlowView
+            self.autoglow_page = AutoGlowView(self)
+        self.nav_view.push(self.autoglow_page)
 
     def open_system_page(self):
         if not self.system_page:

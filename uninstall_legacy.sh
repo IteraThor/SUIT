@@ -7,6 +7,14 @@ echo "========================================="
 
 echo "[1/4] Stopping and removing legacy systemd background services..."
 for svc in suit-killswitch.service autoglow.service; do
+    # AutoGlow 2 reuses the unit name; only AutoGlow 1 (no core/version.py) is legacy
+    if [ "$svc" = "autoglow.service" ]; then
+        AG_DIR=$(sed -n 's/^WorkingDirectory=//p' "/etc/systemd/system/$svc" 2>/dev/null)
+        if [ -n "$AG_DIR" ] && [ -f "$AG_DIR/core/version.py" ]; then
+            echo "  - Keeping AutoGlow 2 service"
+            continue
+        fi
+    fi
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         echo "  - Stopping $svc"
         sudo systemctl stop "$svc" || true

@@ -90,8 +90,9 @@ class MainMenuView(Adw.NavigationPage):
             ("btn_camera_tools", "camera-photo-symbolic", "Camera Tools", "Focus calibration, camera controls, and the camera optimizer.", self._open_camera_tools, True),
             ("btn_touch", "screen-touch-symbolic", "Screen & Touch Manager", "Display rotation and touch calibration.", self._open_rotation, True),
             ("btn_kiosk", "view-fullscreen-symbolic", "Kiosk Mode", "Fullscreen browser autostart and controls.", self._open_kiosk, True),
-            ("btn_autoglow", "display-brightness-symbolic", "AutoGlow 2 Manager", "WLED dartboard automation and lighting effects.", None, False),
+            ("btn_autoglow", "display-brightness-symbolic", "AutoGlow 2 Manager", "WLED dartboard automation and lighting effects.", self._open_autoglow, True),
         ]
+        new_items = {"btn_autoglow"}
 
         for item in items:
             key, icon_name, title_str, subtitle_str = item[0], item[1], item[2], item[3]
@@ -112,6 +113,11 @@ class MainMenuView(Adw.NavigationPage):
             if is_enabled:
                 row.set_activatable(True)
                 row.connect("activated", lambda r, cb=callback: cb())
+                if key in new_items:
+                    lbl_new = Gtk.Label(label="NEW")
+                    lbl_new.add_css_class("status-pill-new")
+                    lbl_new.set_valign(Gtk.Align.CENTER)
+                    row.add_suffix(lbl_new)
                 chevron = Gtk.Image.new_from_icon_name("go-next-symbolic")
                 chevron.set_opacity(0.5)
                 chevron.set_valign(Gtk.Align.CENTER)
@@ -176,6 +182,10 @@ class MainMenuView(Adw.NavigationPage):
     def _open_kiosk(self):
         logger.debug("Navigating to Kiosk view")
         self.window.open_kiosk_page()
+
+    def _open_autoglow(self):
+        logger.debug("Navigating to AutoGlow 2 Manager view")
+        self.window.open_autoglow_page()
 
     def _open_system(self):
         logger.debug("Navigating to System Utilities view")
