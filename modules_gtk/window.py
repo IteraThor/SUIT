@@ -282,7 +282,7 @@ class SuitWindow(Adw.ApplicationWindow):
             "kiosk": (780, 680),
             "system": (800, 700),
             "advanced_users": (800, 720),
-            "hw_overlay": (800, 800),
+            "hw_overlay": (800, 880),
         }
 
         ideal_w, ideal_h = target_map.get(tag, (780, 680))

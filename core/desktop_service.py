@@ -17,10 +17,11 @@ HW_OVERLAY_SOURCE_DIR = Path(__file__).resolve().parent.parent / "assets" / "hw_
 HW_OVERLAY_USER_DIR = Path.home() / ".local" / "share" / "gnome-shell" / "extensions" / HW_OVERLAY_UUID
 # Watched by the extension, which redraws live on every save (see loadConfig in extension.js)
 HW_OVERLAY_CONFIG_PATH = Path.home() / ".config" / "suit" / "hw_overlay.json"
-HW_OVERLAY_METRICS = ("cpu", "temp", "ram", "gpu", "disk", "net", "load", "uptime",
+HW_OVERLAY_METRICS = ("cpu", "temp", "ram", "gpu", "disk", "net", "ip_local", "ip_tailscale", "load", "uptime",
                       "ad_state", "ad_fps", "ad_cams", "ad_proc")
-# Clickable Autodarts controls the overlay can show (all opt-in): start/stop, reset, debug snapshot
-HW_OVERLAY_BUTTONS = ("ad_toggle", "ad_reset", "ad_dump")
+# Clickable Autodarts controls: start/stop, reset, debug snapshot (opt-in) and the update button,
+# which only shows while Autodarts reports a newer release (on by default)
+HW_OVERLAY_BUTTONS = ("ad_toggle", "ad_reset", "ad_dump", "ad_update")
 HW_OVERLAY_DEFAULTS = {
     "style": "card",
     "position": "top-right",
@@ -30,8 +31,8 @@ HW_OVERLAY_DEFAULTS = {
     "meters": True,
     "headings": True,
     "interval": 2,
-    "metrics": {m: m not in ("net", "load", "ad_proc") for m in HW_OVERLAY_METRICS},
-    "buttons": {b: False for b in HW_OVERLAY_BUTTONS},
+    "metrics": {m: m not in ("net", "ip_local", "ip_tailscale", "load", "ad_proc") for m in HW_OVERLAY_METRICS},
+    "buttons": {b: b == "ad_update" for b in HW_OVERLAY_BUTTONS},
 }
 HW_OVERLAY_CHOICES = {
     "style": ("card", "minimal"),

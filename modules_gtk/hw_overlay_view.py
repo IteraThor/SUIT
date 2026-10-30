@@ -17,9 +17,13 @@ SYSTEM_METRICS = [
     ("ram", "Memory", ""),
     ("gpu", "Graphics (AMD GPUs only)", ""),
     ("disk", "Disk Space", ""),
-    ("net", "Network Speed", ""),
     ("load", "Load Average", ""),
     ("uptime", "Uptime", ""),
+]
+NETWORK_METRICS = [
+    ("net", "Network Speed", ""),
+    ("ip_local", "Local Network IP", ""),
+    ("ip_tailscale", "Tailscale IP", ""),
 ]
 AUTODARTS_METRICS = [
     ("ad_state", "Engine State and Version", ""),
@@ -32,6 +36,7 @@ AUTODARTS_BUTTONS = [
     ("ad_toggle", "Start / Stop Button"),
     ("ad_reset", "Reset Button"),
     ("ad_dump", "Debug Snapshot Button (saves to Downloads)"),
+    ("ad_update", "Update Button (when an update is available)"),
 ]
 POSITION_LABELS = {
     "top-left": "Top Left", "top-right": "Top Right",
@@ -82,10 +87,12 @@ class HwOverlayView(Adw.NavigationPage):
 
         scrolled_look, look_box = build_page_shell()
         scrolled_sys, sys_box = build_page_shell()
+        scrolled_net, net_box = build_page_shell()
         scrolled_ad, ad_box = build_page_shell()
         self.stack = Adw.ViewStack(vexpand=True)
         self.stack.add_titled(scrolled_look, "look", "Look")
         self.stack.add_titled(scrolled_sys, "system", "System")
+        self.stack.add_titled(scrolled_net, "network", "Network")
         self.stack.add_titled(scrolled_ad, "autodarts", "Autodarts")
 
         switcher = Adw.InlineViewSwitcher(stack=self.stack, display_mode=Adw.InlineViewSwitcherDisplayMode.LABELS)
@@ -130,8 +137,8 @@ class HwOverlayView(Adw.NavigationPage):
 
         # Metrics: one tab per source
         self.metric_rows = {}
-        for box, title, metrics in ((sys_box, "Show", SYSTEM_METRICS), (ad_box, "Show", AUTODARTS_METRICS)):
-            grp = Adw.PreferencesGroup(title=title)
+        for box, metrics in ((sys_box, SYSTEM_METRICS), (net_box, NETWORK_METRICS), (ad_box, AUTODARTS_METRICS)):
+            grp = Adw.PreferencesGroup(title="Show")
             box.append(grp)
             for key, name, hint in metrics:
                 self.metric_rows[key] = self._add_switch(

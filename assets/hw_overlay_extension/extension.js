@@ -10,6 +10,14 @@ const FPS_LOW_WINDOW_MS = 60 * 1000;
 const MARGIN = 24;
 // Autodarts' own debug dump (what the Debug button on its web page saves) can take a while to build
 const DUMP_TIMEOUT_S = 60;
+// How long a reading of the network addresses is trusted before `ip` is asked again
+const ADDRESS_MAX_AGE_US = 10 * 1000 * 1000;
+// Interfaces that are not the machine's own LAN: containers, VMs, tunnels
+const VIRTUAL_IFACES = /^(lo|docker|veth|virbr|br-|waydroid|lxc|podman|cni|flannel|tun|tailscale)/;
+// Autodarts is asked to look for a new release this often (it also checks on its own)
+const UPDATE_CHECK_S = 6 * 60 * 60;
+// A second tap within this long confirms an update, which restarts Autodarts
+const UPDATE_CONFIRM_MS = 4000;
 const AUTODARTS_CONFIG = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'autodarts', 'config.toml']);
 const CONFIG_DIR = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'suit']);
 const CONFIG_NAME = 'hw_overlay.json';
@@ -25,11 +33,12 @@ const DEFAULTS = {
     headings: true,
     interval: 2,
     metrics: {
-        cpu: true, temp: true, ram: true, gpu: true, disk: true, net: false, load: false, uptime: true,
+        cpu: true, temp: true, ram: true, gpu: true, disk: true, net: false, ip_local: false, ip_tailscale: false,
+        load: false, uptime: true,
         ad_state: true, ad_fps: true, ad_cams: true, ad_proc: false,
     },
-    // Clickable Autodarts controls, off until chosen
-    buttons: { ad_toggle: false, ad_reset: false, ad_dump: false },
+    // Clickable Autodarts controls. The update button only appears while an update is waiting.
+    buttons: { ad_toggle: false, ad_reset: false, ad_dump: false, ad_update: true },
 };
 const CHOICES = {
     style: ['card', 'minimal'],
@@ -48,6 +57,8 @@ const SYSTEM_ROWS = {
     gpu: ['GPU', true],
     disk: ['DISK', true],
     net: ['NET', false],
+    ip_local: ['LAN IP', false],
+    ip_tailscale: ['TAILSCALE', false],
     load: ['LOAD', false],
     uptime: ['UPTIME', false],
 };
@@ -179,6 +190,22 @@ function loadConfig() {
     return cfg;
 }
 
+// `ip -4 -o addr show scope global` -> { local: {iface, ip} | null, tailscale: {iface, ip} | null }
+function parseAddresses(text) {
+    const found = { local: null, tailscale: null };
+    for (const line of text.split('\n')) {
+        const m = line.match(/^\d+:\s+(\S+)\s+inet\s+(\d+\.\d+\.\d+\.\d+)\//);
+        if (!m)
+            continue;
+        const [, iface, ip] = m;
+        if (iface.startsWith('tailscale'))
+            found.tailscale ??= { iface, ip };
+        else if (!VIRTUAL_IFACES.test(iface))
+            found.local ??= { iface, ip };
+    }
+    return found;
+}
+
 function formatBytes(bytes) {
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
     let i = 0;
@@ -245,6 +272,10 @@ export default class HwOverlayExtension extends Extension {
         this._session = new Soup.Session({ timeout: 2 });
         this._dumpSession = new Soup.Session({ timeout: DUMP_TIMEOUT_S });
         this._dumpBusy = false;
+        this._addrs = null;
+        this._addrsAt = 0;
+        this._addrsBusy = false;
+        this._updateArmed = false;
         this._cancellable = new Gio.Cancellable();
         this._config = loadConfig();
         this._lastAd = undefined;
@@ -256,6 +287,7 @@ export default class HwOverlayExtension extends Extension {
 
         this._tick();
         this._startTimer();
+        this._startUpdateChecks();
     }
 
     disable() {
@@ -266,6 +298,12 @@ export default class HwOverlayExtension extends Extension {
         if (this._reloadId) {
             GLib.source_remove(this._reloadId);
             this._reloadId = 0;
+        }
+        for (const id of ['_checkFirstId', '_checkId', '_armId']) {
+            if (this[id]) {
+                GLib.source_remove(this[id]);
+                this[id] = 0;
+            }
         }
         if (this._configMonitor) {
             this._configMonitor.cancel();
@@ -428,6 +466,18 @@ export default class HwOverlayExtension extends Extension {
     _buildButtons() {
         const b = this._config.buttons;
         const ad = this._ad;
+        if (b.ad_update) {
+            // Shown by _renderAutodarts only while Autodarts reports a newer release
+            ad.update = new St.Button({
+                label: '', style_class: 'suit-hwmon-btn suit-hwmon-btn-update', reactive: true,
+                can_focus: false, track_hover: true, x_expand: true,
+            });
+            ad.update.visible = false;
+            ad.update.connect('clicked', () => this._onUpdate());
+            this._box.add_child(ad.update);
+        }
+        if (!(b.ad_toggle || b.ad_reset || b.ad_dump))
+            return;
         const row = new St.BoxLayout({ style_class: 'suit-hwmon-buttons', x_expand: true });
         row.layout_manager.homogeneous = true;
         const add = (label, handler) => {
@@ -471,6 +521,55 @@ export default class HwOverlayExtension extends Extension {
 
     _notify(text) {
         Main.notify('SUIT', text);
+    }
+
+    // Ask Autodarts to look for a release now and then; the answer shows up in /api/system
+    _startUpdateChecks() {
+        const check = () => {
+            if (this._config.buttons.ad_update)
+                this._adRequest('POST', '/api/update/check', () => this._pollAutodarts(), this._dumpSession);
+        };
+        this._checkFirstId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 8, () => {
+            this._checkFirstId = 0;
+            check();
+            return GLib.SOURCE_REMOVE;
+        });
+        this._checkId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, UPDATE_CHECK_S, () => {
+            check();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    // Updating restarts Autodarts, so the first tap only arms the button
+    _onUpdate() {
+        const btn = this._ad.update;
+        if (!btn)
+            return;
+        if (!this._updateArmed) {
+            this._updateArmed = true;
+            btn.label = 'Tap again to install';
+            this._armId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, UPDATE_CONFIRM_MS, () => {
+                this._armId = 0;
+                this._updateArmed = false;
+                this._renderAutodarts(this._lastAd);
+                return GLib.SOURCE_REMOVE;
+            });
+            return;
+        }
+        if (this._armId) {
+            GLib.source_remove(this._armId);
+            this._armId = 0;
+        }
+        this._updateArmed = false;
+        btn.label = 'Updating…';
+        this._adRequest('POST', '/api/update/apply', status => {
+            if (status === Soup.Status.OK || status === Soup.Status.ACCEPTED) {
+                this._notify('Autodarts is installing its update and will restart.');
+            } else {
+                this._notify('Could not start the Autodarts update.');
+                this._renderAutodarts(this._lastAd);
+            }
+        }, this._dumpSession);
     }
 
     _onToggle() {
@@ -598,6 +697,8 @@ export default class HwOverlayExtension extends Extension {
             this._updateDisk();
         if (this._rows.load || this._rows.uptime)
             this._updateLoad();
+        if (this._rows.ip_local || this._rows.ip_tailscale)
+            this._updateAddresses();
         if (this._ad.pill || this._ad.fps || this._ad.cams || this._rows.proc)
             this._pollAutodarts();
     }
@@ -693,6 +794,48 @@ export default class HwOverlayExtension extends Extension {
         this._prevNet = { rx, tx, time: now };
     }
 
+    // `ip` is asked at most every ADDRESS_MAX_AGE_US; between readings the last answer is redrawn.
+    _updateAddresses() {
+        this._renderAddresses();
+        if (this._addrsBusy || GLib.get_monotonic_time() - this._addrsAt < ADDRESS_MAX_AGE_US)
+            return;
+        this._addrsBusy = true;
+        try {
+            const proc = Gio.Subprocess.new(['ip', '-4', '-o', 'addr', 'show', 'scope', 'global'],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
+            proc.communicate_utf8_async(null, this._cancellable, (p, res) => {
+                this._addrsBusy = false;
+                try {
+                    const [, out] = p.communicate_utf8_finish(res);
+                    this._addrs = parseAddresses(out ?? '');
+                } catch (e) {
+                    if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                        return;
+                    this._addrs = { local: null, tailscale: null };
+                }
+                this._addrsAt = GLib.get_monotonic_time();
+                this._renderAddresses();
+            });
+        } catch {
+            // `ip` is not installed
+            this._addrsBusy = false;
+            this._addrs = { local: null, tailscale: null };
+            this._addrsAt = GLib.get_monotonic_time();
+            this._renderAddresses();
+        }
+    }
+
+    _renderAddresses() {
+        if (!this._rows || !this._addrs)
+            return;
+        const show = (id, entry) => {
+            if (this._rows[id])
+                this._set(id, entry ? entry.ip : '—', entry ? entry.iface : 'not connected', entry ? null : 'suit-hwmon-dim');
+        };
+        show('ip_local', this._addrs.local);
+        show('ip_tailscale', this._addrs.tailscale);
+    }
+
     _updateLoad() {
         const load = (readText('/proc/loadavg') || '').trim().split(/\s+/).slice(0, 3);
         if (load.length === 3)
@@ -765,6 +908,12 @@ export default class HwOverlayExtension extends Extension {
                 btn.reactive = Boolean(data);
                 setLevel(btn, data ? null : 'suit-hwmon-dim');
             }
+        }
+
+        if (ad.update && !this._updateArmed) {
+            const version = String(data?.status?.updateAvailable ?? '').trim().replace(/^v/, '');
+            ad.update.visible = version !== '';
+            ad.update.label = `Update to v${version}`;
         }
 
         const target = data?.config?.cam?.fps ?? 30;

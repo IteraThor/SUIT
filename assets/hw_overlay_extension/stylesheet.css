@@ -127,3 +127,11 @@
 .suit-hwmon-btn:hover { background-color: rgba(255, 255, 255, 0.18); }
 .suit-hwmon-btn:active { background-color: rgba(255, 255, 255, 0.26); }
 .suit-hwmon-btn.suit-hwmon-dim { color: rgba(236, 239, 244, 0.35); }
+
+/* Appears only while Autodarts reports a newer release */
+.suit-hwmon-btn-update {
+  color: #2e3440;
+  background-color: #ebcb8b;
+}
+.suit-hwmon-btn-update:hover { background-color: #f1d9a4; }
+.suit-hwmon-btn-update:active { background-color: #e3bf78; }
