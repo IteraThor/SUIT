@@ -134,6 +134,9 @@ class HwOverlayView(Adw.NavigationPage):
                                            lambda: self.config["meters"], lambda v: self._set("meters", v))
         self.row_headings = self._add_switch(grp_look, "Section Titles", "",
                                              lambda: self.config["headings"], lambda v: self._set("headings", v))
+        self.row_button_colors = self._add_switch(
+            grp_look, "Color Action Buttons", "Start green, Stop red, Reset yellow, Debug blue",
+            lambda: self.config["button_colors"], lambda v: self._set("button_colors", v))
 
         # Metrics: one tab per source
         self.metric_rows = {}
@@ -204,6 +207,7 @@ class HwOverlayView(Adw.NavigationPage):
             self.scale_opacity.set_value(cfg["opacity"])
             self.row_meters.set_active(cfg["meters"])
             self.row_headings.set_active(cfg["headings"])
+            self.row_button_colors.set_active(cfg["button_colors"])
             for key, row in self.metric_rows.items():
                 row.set_active(cfg["metrics"][key])
             for key, row in self.button_rows.items():

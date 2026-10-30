@@ -30,6 +30,7 @@ HW_OVERLAY_DEFAULTS = {
     "opacity": 70,
     "meters": True,
     "headings": True,
+    "button_colors": False,
     "interval": 2,
     "metrics": {m: m not in ("net", "ip_local", "ip_tailscale", "load", "ad_proc") for m in HW_OVERLAY_METRICS},
     "buttons": {b: b == "ad_update" for b in HW_OVERLAY_BUTTONS},
@@ -418,7 +419,7 @@ class DesktopService:
             val = raw.get(key)
             if not isinstance(val, bool) and val in choices:
                 cfg[key] = val
-        for key in ("meters", "headings"):
+        for key in ("meters", "headings", "button_colors"):
             if isinstance(raw.get(key), bool):
                 cfg[key] = raw[key]
         opacity = raw.get("opacity")

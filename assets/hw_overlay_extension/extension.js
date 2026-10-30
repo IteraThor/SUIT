@@ -33,6 +33,8 @@ const DEFAULTS = {
     opacity: 70,
     meters: true,
     headings: true,
+    // Start green, Stop red, Reset yellow, Debug blue instead of plain grey
+    button_colors: false,
     interval: 2,
     metrics: {
         cpu: true, temp: true, ram: true, gpu: true, disk: true, net: false, ip_local: false, ip_tailscale: false,
@@ -175,7 +177,7 @@ function loadConfig() {
         if (choices.includes(raw[key]))
             cfg[key] = raw[key];
     }
-    for (const key of ['meters', 'headings']) {
+    for (const key of ['meters', 'headings', 'button_colors']) {
         if (typeof raw[key] === 'boolean')
             cfg[key] = raw[key];
     }
@@ -242,6 +244,15 @@ const LEVEL_CLASSES = ['suit-hwmon-ok', 'suit-hwmon-warn', 'suit-hwmon-bad', 'su
 
 function setLevel(actor, cls) {
     for (const c of LEVEL_CLASSES)
+        actor.remove_style_class_name(c);
+    if (cls)
+        actor.add_style_class_name(cls);
+}
+
+const BUTTON_COLOR_CLASSES = ['suit-hwmon-btn-start', 'suit-hwmon-btn-stop', 'suit-hwmon-btn-reset', 'suit-hwmon-btn-debug'];
+
+function setButtonColor(actor, cls) {
+    for (const c of BUTTON_COLOR_CLASSES)
         actor.remove_style_class_name(c);
     if (cls)
         actor.add_style_class_name(cls);
@@ -900,15 +911,20 @@ export default class HwOverlayExtension extends Extension {
             ad.version.text = version ? `v${String(version).replace(/^v/, '')}` : '';
         }
 
+        // Colors only while Autodarts answers; unreachable buttons stay dim grey
+        const colored = this._config.button_colors && Boolean(data);
         if (ad.toggle) {
-            ad.toggle.label = data && !running ? 'Start' : 'Stop';
+            const start = data && !running;
+            ad.toggle.label = start ? 'Start' : 'Stop';
             ad.toggle.reactive = Boolean(data);
             setLevel(ad.toggle, data ? null : 'suit-hwmon-dim');
+            setButtonColor(ad.toggle, colored ? (start ? 'suit-hwmon-btn-start' : 'suit-hwmon-btn-stop') : null);
         }
-        for (const btn of [ad.reset, ad.dump]) {
+        for (const [btn, color] of [[ad.reset, 'suit-hwmon-btn-reset'], [ad.dump, 'suit-hwmon-btn-debug']]) {
             if (btn) {
                 btn.reactive = Boolean(data);
                 setLevel(btn, data ? null : 'suit-hwmon-dim');
+                setButtonColor(btn, colored ? color : null);
             }
         }
 

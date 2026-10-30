@@ -128,6 +128,20 @@
 .suit-hwmon-btn:active { background-color: rgba(255, 255, 255, 0.26); }
 .suit-hwmon-btn.suit-hwmon-dim { color: rgba(236, 239, 244, 0.35); }
 
+/* "Color Action Buttons" in the Look tab */
+.suit-hwmon-btn-start { color: #2e3440; background-color: #a3be8c; }
+.suit-hwmon-btn-start:hover { background-color: #b4cb9f; }
+.suit-hwmon-btn-start:active { background-color: #93ae7c; }
+.suit-hwmon-btn-stop { color: #eceff4; background-color: #bf616a; }
+.suit-hwmon-btn-stop:hover { background-color: #cb767e; }
+.suit-hwmon-btn-stop:active { background-color: #ad525b; }
+.suit-hwmon-btn-reset { color: #2e3440; background-color: #ebcb8b; }
+.suit-hwmon-btn-reset:hover { background-color: #f1d9a4; }
+.suit-hwmon-btn-reset:active { background-color: #e3bf78; }
+.suit-hwmon-btn-debug { color: #eceff4; background-color: #5e81ac; }
+.suit-hwmon-btn-debug:hover { background-color: #7192bb; }
+.suit-hwmon-btn-debug:active { background-color: #4f729c; }
+
 /* Appears only while Autodarts reports a newer release */
 .suit-hwmon-btn-update {
   color: #2e3440;
