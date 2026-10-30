@@ -32,9 +32,13 @@ button.compact-btn,
 .angle-touch-btn { min-height: 44px; min-width: 68px; font-size: 14px; font-weight: 700; }
 
 /* Enlarge HeaderBar navigation back button for easy thumb reaches */
-headerbar button.image-button {
-    min-width: 34px;
+headerbar {
     min-height: 34px;
+}
+
+headerbar button.image-button {
+    min-width: 28px;
+    min-height: 28px;
     border-radius: 8px;
 }
 
@@ -74,7 +78,8 @@ switch {
 .status-pill-stopped,
 .status-pill-checking,
 .status-pill-pending,
-.status-pill-coming-soon {
+.status-pill-coming-soon,
+.status-pill-new {
     border-radius: 9999px;
     padding: 3px 12px;
     font-size: 12.5px;
@@ -89,6 +94,8 @@ switch {
 
 .status-pill-checking,
 .status-pill-coming-soon { background-color: alpha(@window_fg_color, 0.09); color: alpha(@window_fg_color, 0.7); }
+
+.status-pill-new { background-color: alpha(@accent_bg_color, 0.2); color: @accent_color; }
 
 .tile-card:disabled {
     opacity: 0.45;
@@ -120,6 +127,13 @@ switch {
     border-radius: 14px;
     padding: 14px 18px;
 }
+
+.warning-card-compact {
+    border-radius: 12px;
+    padding: 6px 8px 6px 14px;
+}
+
+.warning-card-compact .warning-text { font-size: 13px; }
 
 .warning-card image {
     color: #ff9800;
