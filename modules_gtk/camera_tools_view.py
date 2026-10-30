@@ -4,6 +4,8 @@ gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw, GLib
 from core.logger import get_logger
 
+from modules_gtk.ui_helpers import build_page_shell
+
 logger = get_logger("camera_tools_view")
 
 
@@ -13,21 +15,8 @@ class CameraToolsView(Adw.NavigationPage):
         self.window = window
 
         # Scrolled container with kinetic touch scrolling
-        scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        scrolled.set_kinetic_scrolling(True)
-        scrolled.set_overlay_scrolling(True)
+        scrolled, main_box = build_page_shell()
         self.set_child(scrolled)
-
-        # Responsive clamp
-        clamp = Adw.Clamp(maximum_size=820, tightening_threshold=640)
-        clamp.set_margin_top(6)
-        clamp.set_margin_bottom(8)
-        clamp.set_margin_start(10)
-        clamp.set_margin_end(10)
-        scrolled.set_child(clamp)
-
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        clamp.set_child(main_box)
 
         # Header description card
         header_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)

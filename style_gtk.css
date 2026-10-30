@@ -10,33 +10,17 @@ list.boxed-list > row {
     padding-right: 12px;
 }
 
-/* Touch-friendly primary action buttons */
-.touch-btn {
-    min-height: 40px;
-    font-size: 14px;
+/* Buttons: two sizes (touch 44px for standalone actions, compact 36px inside rows), one radius.
+   .secondary-btn / .secondary-btn-destructive only add colour, so they combine with either size. */
+.touch-btn, .compact-btn, .angle-touch-btn, .service-touch-btn, .secondary-btn, .secondary-btn-destructive {
+    border-radius: 10px;
     font-weight: 600;
-    border-radius: 10px;
-    padding-left: 14px;
-    padding-right: 14px;
 }
-
-/* Big touch tiles for rotation angle toggles (0°, 90°, 180°, 270°) */
-.angle-touch-btn {
-    min-height: 44px;
-    min-width: 68px;
-    font-size: 14px;
-    font-weight: 700;
-    border-radius: 10px;
-}
-
-/* Big buttons for service actions (Start / Stop / Restart) */
-.service-touch-btn {
-    min-height: 44px;
-    min-width: 96px;
-    font-size: 13px;
-    font-weight: 600;
-    border-radius: 10px;
-}
+.secondary-btn, .secondary-btn-destructive { min-height: 40px; font-size: 14px; }
+.touch-btn { min-height: 44px; font-size: 14px; padding-left: 16px; padding-right: 16px; }
+button.compact-btn, .compact-btn { min-height: 36px; font-size: 13px; padding-left: 12px; padding-right: 12px; }
+.angle-touch-btn { min-height: 44px; min-width: 68px; font-size: 14px; font-weight: 700; }
+.service-touch-btn { min-height: 44px; min-width: 96px; font-size: 13px; }
 
 /* Enlarge HeaderBar navigation back button for easy thumb reaches */
 headerbar button.image-button {
@@ -80,87 +64,21 @@ switch {
     padding: 10px 14px;
 }
 
-button.compact-btn,
-.compact-btn {
-    min-height: 38px;
-    font-size: 13px;
-    font-weight: 600;
-    border-radius: 8px;
-    padding-left: 12px;
-    padding-right: 12px;
-}
-
-
-.status-pill-running {
-    background-color: alpha(#2ec27e, 0.15);
-    color: #57e389;
-    border: 1px solid alpha(#2ec27e, 0.35);
-    border-radius: 20px;
-    padding: 6px 14px;
+/* Status pills: one shape for every state, colour is the only difference.
+   (.status-chip and the camera-tool .pill-* / .status-pill-ok/warn/bad further down share this geometry.) */
+.status-pill-running, .status-pill-stopped, .status-pill-fault, .status-pill-checking,
+.status-pill-pending, .status-pill-coming-soon, .status-pill-experimental {
+    border-radius: 9999px;
+    padding: 3px 12px;
+    font-size: 12.5px;
     font-weight: 700;
-    font-size: 14px;
 }
-
-.status-pill-stopped {
-    background-color: alpha(#e01b24, 0.15);
-    color: #ff7b63;
-    border: 1px solid alpha(#e01b24, 0.35);
-    border-radius: 20px;
-    padding: 6px 14px;
-    font-weight: 700;
-    font-size: 14px;
-}
-
-.status-pill-fault {
-    background-color: alpha(#e5a50a, 0.18);
-    color: #f8e45c;
-    border: 1px solid alpha(#e5a50a, 0.4);
-    border-radius: 20px;
-    padding: 6px 14px;
-    font-weight: 700;
-    font-size: 14px;
-}
-
-.status-pill-checking {
-    background-color: alpha(@window_fg_color, 0.08);
-    color: @window_fg_color;
-    border: 1px solid alpha(@window_fg_color, 0.15);
-    border-radius: 20px;
-    padding: 6px 14px;
-    font-weight: 600;
-    font-size: 14px;
-}
-
-.status-pill-pending {
-    background-color: alpha(#e5a50a, 0.15);
-    color: #f8e45c;
-    border: 1px solid alpha(#e5a50a, 0.35);
-    border-radius: 20px;
-    padding: 6px 14px;
-    font-weight: 700;
-    font-size: 14px;
-}
-
-.status-pill-coming-soon {
-    background-color: alpha(@window_fg_color, 0.08);
-    color: alpha(@window_fg_color, 0.65);
-    border: 1px solid alpha(@window_fg_color, 0.16);
-    border-radius: 20px;
-    padding: 6px 14px;
-    font-weight: 700;
-    font-size: 13px;
-    letter-spacing: 0.3px;
-}
-
-.status-pill-experimental {
-    background-color: alpha(#e5a50a, 0.16);
-    color: #f6d32d;
-    border: 1px solid alpha(#e5a50a, 0.35);
-    border-radius: 20px;
-    padding: 4px 12px;
-    font-weight: 700;
-    font-size: 12px;
-}
+.status-pill-running  { background-color: alpha(#2ec27e, 0.18); color: #57e389; }
+.status-pill-stopped  { background-color: alpha(#e01b24, 0.18); color: #ff7b63; }
+.status-pill-fault, .status-pill-pending, .status-pill-experimental
+                      { background-color: alpha(#e5a50a, 0.18); color: #f8e45c; }
+.status-pill-checking, .status-pill-coming-soon
+                      { background-color: alpha(@window_fg_color, 0.09); color: alpha(@window_fg_color, 0.7); }
 
 
 /* Detection Engine Status Row Themes */
@@ -195,10 +113,6 @@ button.compact-btn,
 .secondary-btn {
     background-color: alpha(@window_fg_color, 0.08);
     border: 1px solid alpha(@window_fg_color, 0.12);
-    border-radius: 12px;
-    font-weight: 600;
-    font-size: 14px;
-    min-height: 44px;
 }
 
 .secondary-btn:hover {
@@ -209,10 +123,6 @@ button.compact-btn,
     background-color: alpha(#e01b24, 0.12);
     border: 1px solid alpha(#e01b24, 0.25);
     color: #ff7b63;
-    border-radius: 12px;
-    font-weight: 600;
-    font-size: 14px;
-    min-height: 44px;
 }
 
 .secondary-btn-destructive:hover {
@@ -224,7 +134,7 @@ button.compact-btn,
     background-color: alpha(#e5a50a, 0.18);
     color: #f8e45c;
     border: 1px solid alpha(#e5a50a, 0.45);
-    border-radius: 12px;
+    border-radius: 10px;
     font-weight: 700;
     font-size: 14px;
     min-height: 44px;
@@ -239,7 +149,7 @@ button.compact-btn,
     background-color: alpha(#2ec27e, 0.15);
     color: #57e389;
     border: 1px solid alpha(#2ec27e, 0.4);
-    border-radius: 12px;
+    border-radius: 10px;
     font-weight: 700;
     font-size: 14px;
     min-height: 44px;
@@ -390,12 +300,6 @@ button.compact-btn,
     padding: 3px 10px;
     font-size: 12px;
     font-weight: 500;
-}
-
-.usb-stat-large {
-    font-size: 22px;
-    font-weight: 800;
-    font-feature-settings: "tnum";
 }
 
 .qr-card {

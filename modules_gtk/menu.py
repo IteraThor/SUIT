@@ -6,6 +6,8 @@ from core.logger import get_logger
 from core.update_service import UpdateService
 from modules_gtk.async_utils import run_async
 
+from modules_gtk.ui_helpers import build_page_shell
+
 logger = get_logger("menu")
 
 class MainMenuView(Adw.NavigationPage):
@@ -14,21 +16,8 @@ class MainMenuView(Adw.NavigationPage):
         self.window = window
         
         # Scrolled container with kinetic touch scrolling
-        scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        scrolled.set_kinetic_scrolling(True)
-        scrolled.set_overlay_scrolling(True)
+        scrolled, main_box = build_page_shell()
         self.set_child(scrolled)
-        
-        # Clamp to center and constrain width
-        clamp = Adw.Clamp(maximum_size=820, tightening_threshold=640)
-        clamp.set_margin_top(6)
-        clamp.set_margin_bottom(8)
-        clamp.set_margin_start(10)
-        clamp.set_margin_end(10)
-        scrolled.set_child(clamp)
-
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        clamp.set_child(main_box)
 
         # Header Banner Card with Logo
         banner_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -147,7 +136,6 @@ class MainMenuView(Adw.NavigationPage):
         self.btn_update = Gtk.Button()
         self.btn_update.add_css_class("suggested-action")
         self.btn_update.add_css_class("touch-btn")
-        self.btn_update.set_size_request(-1, 38)
         self.btn_update.set_margin_top(0)
 
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -192,10 +180,6 @@ class MainMenuView(Adw.NavigationPage):
     def _open_system(self):
         logger.debug("Navigating to System Utilities view")
         self.window.open_system_page()
-
-    def _open_usb(self):
-        logger.debug("Navigating to USB Bandwidth view")
-        self.window.open_usb_page()
 
     def _set_update_button_loading(self, loading: bool, text: str = "Checking for Updates..."):
         self.btn_update.set_sensitive(not loading)

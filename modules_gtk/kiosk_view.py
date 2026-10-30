@@ -9,6 +9,8 @@ from core.light_service import LightService
 from core.system_service import SystemService
 from modules_gtk.async_utils import run_async
 
+from modules_gtk.ui_helpers import build_page_shell
+
 logger = get_logger("kiosk_view")
 
 class KioskView(Adw.NavigationPage):
@@ -16,24 +18,12 @@ class KioskView(Adw.NavigationPage):
         super().__init__(title="Kiosk Mode", tag="kiosk")
         self.window = window
 
-        scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        scrolled.set_kinetic_scrolling(True)
+        scrolled, main_box = build_page_shell()
         self.set_child(scrolled)
-
-        clamp = Adw.Clamp(maximum_size=940, tightening_threshold=760)
-        clamp.set_margin_top(8)
-        clamp.set_margin_bottom(12)
-        clamp.set_margin_start(10)
-        clamp.set_margin_end(10)
-        scrolled.set_child(clamp)
-
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        clamp.set_child(main_box)
 
         # 1. Fullscreen Kiosk Group
         grp_kiosk = Adw.PreferencesGroup(
-            title="Fullscreen Kiosk",
-            description="Opens Autodarts in full-screen mode without desktop distractions."
+            title="Fullscreen Kiosk"
         )
         main_box.append(grp_kiosk)
 
@@ -62,9 +52,8 @@ class KioskView(Adw.NavigationPage):
         self.btn_launch.add_css_class("suggested-action")
         self.btn_launch.add_css_class("touch-btn")
         self.btn_launch.set_size_request(-1, 44)
-        self.btn_launch.set_margin_top(6)
         self.btn_launch.connect("clicked", self._launch_kiosk)
-        grp_kiosk.add(self.btn_launch)
+        main_box.append(self.btn_launch)
 
         # 2. Browser Integration Group with Lock Overlay
         self.overlay_browser = Gtk.Overlay()
@@ -90,7 +79,7 @@ class KioskView(Adw.NavigationPage):
 
         self.btn_ext_toggle = Gtk.Button(label="Install to Chromium")
         self.btn_ext_toggle.set_valign(Gtk.Align.CENTER)
-        self.btn_ext_toggle.set_size_request(160, 38)
+        self.btn_ext_toggle.add_css_class("compact-btn")
         self.btn_ext_toggle.add_css_class("suggested-action")
         self.btn_ext_toggle.connect("clicked", self._on_ext_toggle_clicked)
         self.row_ext.add_suffix(self.btn_ext_toggle)
@@ -132,14 +121,14 @@ class KioskView(Adw.NavigationPage):
 
         self.btn_light_on = Gtk.Button(label="Turn ON")
         self.btn_light_on.add_css_class("suggested-action")
-        self.btn_light_on.set_size_request(80, 36)
+        self.btn_light_on.add_css_class("compact-btn")
         self.btn_light_on.set_valign(Gtk.Align.CENTER)
         self.btn_light_on.connect("clicked", lambda b: self._test_light_power(True))
         box_test_btns.append(self.btn_light_on)
 
         self.btn_light_off = Gtk.Button(label="Turn OFF")
         self.btn_light_off.add_css_class("secondary-btn")
-        self.btn_light_off.set_size_request(80, 36)
+        self.btn_light_off.add_css_class("compact-btn")
         self.btn_light_off.set_valign(Gtk.Align.CENTER)
         self.btn_light_off.connect("clicked", lambda b: self._test_light_power(False))
         box_test_btns.append(self.btn_light_off)

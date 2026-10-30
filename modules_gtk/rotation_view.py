@@ -6,6 +6,8 @@ from core.logger import get_logger
 from core.display_service import DisplayService, normalize_rotation
 from modules_gtk.async_utils import run_async
 
+from modules_gtk.ui_helpers import build_page_shell
+
 logger = get_logger("rotation_view")
 
 class RotationView(Adw.NavigationPage):
@@ -22,45 +24,8 @@ class RotationView(Adw.NavigationPage):
         self._confirm_timer_id = None
         self._remaining_seconds = 15
 
-        scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        scrolled.set_kinetic_scrolling(True)
+        scrolled, self.main_box = build_page_shell()
         self.set_child(scrolled)
-
-        clamp = Adw.Clamp(maximum_size=880, tightening_threshold=660)
-        clamp.set_margin_top(10)
-        clamp.set_margin_bottom(12)
-        clamp.set_margin_start(12)
-        clamp.set_margin_end(12)
-        scrolled.set_child(clamp)
-
-        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        clamp.set_child(self.main_box)
-
-        # Header Info Card
-        info_card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
-        info_card.add_css_class("tile-card")
-        self.main_box.append(info_card)
-
-        icon_img = Gtk.Image.new_from_icon_name("video-display-symbolic")
-        icon_img.set_pixel_size(36)
-        icon_img.set_valign(Gtk.Align.CENTER)
-        info_card.append(icon_img)
-
-        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        text_box.set_hexpand(True)
-        info_card.append(text_box)
-
-        lbl_h = Gtk.Label(label="Display & Touch", xalign=0)
-        lbl_h.add_css_class("title-3")
-        text_box.append(lbl_h)
-
-        lbl_desc = Gtk.Label(
-            label="Rotate connected Wayland monitors and calibrate touchscreen alignment.",
-            xalign=0,
-            wrap=True
-        )
-        lbl_desc.add_css_class("dim-label")
-        text_box.append(lbl_desc)
 
         # Warning Notice Banner
         warning_card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
@@ -87,6 +52,7 @@ class RotationView(Adw.NavigationPage):
 
         self.btn_clear_config = Gtk.Button()
         self.btn_clear_config.add_css_class("secondary-btn")
+        self.btn_clear_config.add_css_class("compact-btn")
         self.btn_clear_config.set_valign(Gtk.Align.CENTER)
         self.btn_clear_config.set_tooltip_text("Clear SUIT rotation overrides and remove boot autostart")
         clear_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -98,6 +64,7 @@ class RotationView(Adw.NavigationPage):
 
         self.btn_default_settings = Gtk.Button()
         self.btn_default_settings.add_css_class("secondary-btn")
+        self.btn_default_settings.add_css_class("compact-btn")
         self.btn_default_settings.set_valign(Gtk.Align.CENTER)
         self.btn_default_settings.set_tooltip_text("Open GNOME Display Settings")
 

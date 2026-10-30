@@ -9,6 +9,7 @@ from modules_gtk.ui_helpers import (
     copy_to_clipboard,
     generate_qr_texture,
     create_button_with_icon,
+    build_page_shell,
 )
 from modules_gtk.dialogs.debloat_dialog import DebloatReviewDialog
 from modules_gtk.dialogs.tailscale_dialog import TailscaleAuthDialog
@@ -39,19 +40,22 @@ class SystemView(Adw.NavigationPage):
         self.root_overlay = Gtk.Overlay()
         self.set_child(self.root_overlay)
 
-        scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        scrolled.set_kinetic_scrolling(True)
-        self.root_overlay.set_child(scrolled)
+        # Two tabs so each fits one screen: Essentials (what Apply All covers) and optional Extras
+        scrolled_ess, main_box = build_page_shell()
+        scrolled_extra, extra_box = build_page_shell()
+        self.stack = Adw.ViewStack()
+        self.stack.add_titled(scrolled_ess, "essentials", "Essentials")
+        self.stack.add_titled(scrolled_extra, "extras", "Extras")
+        self.stack.set_vexpand(True)
 
-        clamp = Adw.Clamp(maximum_size=940, tightening_threshold=760)
-        clamp.set_margin_top(8)
-        clamp.set_margin_bottom(12)
-        clamp.set_margin_start(10)
-        clamp.set_margin_end(10)
-        scrolled.set_child(clamp)
+        switcher = Adw.InlineViewSwitcher(stack=self.stack, display_mode=Adw.InlineViewSwitcherDisplayMode.LABELS)
+        switcher.set_halign(Gtk.Align.CENTER)
+        switcher.set_margin_top(8)
 
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        clamp.set_child(main_box)
+        page_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        page_box.append(switcher)
+        page_box.append(self.stack)
+        self.root_overlay.set_child(page_box)
 
         # Build Apply All progress overlay widget
         self.apply_overlay_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -109,18 +113,20 @@ class SystemView(Adw.NavigationPage):
         # Group 1: System Optimization
         # =========================================================================
         self.grp_system = Adw.PreferencesGroup(
-            title="System Optimization",
-            description="Performance profile, unattended auto-login, and display power settings."
+            title="Essentials"
         )
         self.btn_optimize_all = create_button_with_icon(
             "system-run-symbolic",
             "Apply All",
             "suggested-action compact-btn",
-            height=34
+            height=36
         )
         self.btn_optimize_all.connect("clicked", self._on_apply_all_clicked)
         self.grp_system.set_header_suffix(self.btn_optimize_all)
         main_box.append(self.grp_system)
+
+        self.grp_extras = Adw.PreferencesGroup(title="Extras")
+        extra_box.append(self.grp_extras)
 
         # 1. Power Profile Status
         self.row_profile = Adw.ActionRow(
@@ -161,7 +167,7 @@ class SystemView(Adw.NavigationPage):
             "dialog-password-symbolic",
             "Remove Password",
             "suggested-action compact-btn",
-            height=34
+            height=36
         )
         self.btn_keyring_action.connect("clicked", self._on_keyring_action_clicked)
         self.box_keyring.append(self.lbl_keyring_badge)
@@ -181,7 +187,7 @@ class SystemView(Adw.NavigationPage):
             "preferences-desktop-wallpaper-symbolic",
             "Apply Theme",
             "suggested-action compact-btn",
-            height=34
+            height=36
         )
         self.btn_visuals_action.connect("clicked", self._on_visuals_action_clicked)
         self.box_visuals.append(self.lbl_visuals_badge)
@@ -194,15 +200,15 @@ class SystemView(Adw.NavigationPage):
             subtitle="Enlarge top bar, controls, and keyboard."
         )
         self.row_touch.connect("notify::active", self._on_touch_scaling_toggled)
-        self.grp_system.add(self.row_touch)
+        self.grp_extras.add(self.row_touch)
 
         # 7. Fast Boot Switch (experimental, not part of Apply All)
         self.row_fast_boot = Adw.SwitchRow(
-            title='Fast Boot  <span foreground="#ff9800" weight="bold" size="small">Experimental</span>',
+            title="Fast Boot",
             subtitle="Skip network wait and unused services at boot."
         )
         self.row_fast_boot.connect("notify::active", self._on_fast_boot_toggled)
-        self.grp_system.add(self.row_fast_boot)
+        self.grp_extras.add(self.row_fast_boot)
 
         # 8. Hardware Overlay submenu (not part of Apply All)
         self.row_hw_overlay = Adw.ActionRow(
@@ -212,17 +218,11 @@ class SystemView(Adw.NavigationPage):
         )
         self.row_hw_overlay.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
         self.row_hw_overlay.connect("activated", self._on_hw_overlay_clicked)
-        self.grp_system.add(self.row_hw_overlay)
+        self.grp_extras.add(self.row_hw_overlay)
 
         # =========================================================================
-        # Group 2: Apps and Maintenance
+        # (Apps and maintenance rows live in the Essentials group above)
         # =========================================================================
-        self.grp_apps = Adw.PreferencesGroup(
-            title="Apps and Maintenance",
-            description="Manage essential dartboard software and clean unused default packages."
-        )
-        main_box.append(self.grp_apps)
-
         # 1. Bloatware Removal
         self.row_debloat = Adw.ActionRow(
             title="Remove Unused Apps",
@@ -236,12 +236,12 @@ class SystemView(Adw.NavigationPage):
             "user-trash-symbolic",
             "Review & Clean",
             "suggested-action compact-btn",
-            height=38
+            height=36
         )
         self.btn_debloat_action.connect("clicked", self._on_debloat_action_clicked)
         self.box_debloat.append(self.lbl_debloat_badge)
         self.row_debloat.add_suffix(self.box_debloat)
-        self.grp_apps.add(self.row_debloat)
+        self.grp_system.add(self.row_debloat)
 
         # 2. Chromium Browser
         self.row_chromium = Adw.ActionRow(
@@ -256,12 +256,12 @@ class SystemView(Adw.NavigationPage):
             "software-update-available-symbolic",
             "Install Chromium",
             "suggested-action compact-btn",
-            height=38
+            height=36
         )
         self.btn_chromium.connect("clicked", self._on_install_chromium_clicked)
         self.box_chromium.append(self.lbl_chromium_badge)
         self.row_chromium.add_suffix(self.box_chromium)
-        self.grp_apps.add(self.row_chromium)
+        self.grp_system.add(self.row_chromium)
 
         # 3. Advanced Users Submenu Row
         self.row_advanced = Adw.ActionRow(
@@ -271,7 +271,7 @@ class SystemView(Adw.NavigationPage):
         self.row_advanced.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
         self.row_advanced.set_activatable(True)
         self.row_advanced.connect("activated", self._on_advanced_clicked)
-        self.grp_apps.add(self.row_advanced)
+        self.grp_extras.add(self.row_advanced)
 
         self._refreshing = False
         self._pending_refresh = False
@@ -403,7 +403,7 @@ class SystemView(Adw.NavigationPage):
                 # 4b. Fast Boot Switch
                 fast_boot, boot_time = data["fast_boot"]
                 self.row_fast_boot.set_active(fast_boot)
-                hint = "Skip network wait and unused services at boot."
+                hint = "Experimental. Skip network wait and unused services at boot."
                 if boot_time:
                     hint += f" Last boot: {boot_time:.1f} s."
                 self.row_fast_boot.set_subtitle(hint)

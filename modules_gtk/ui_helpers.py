@@ -4,7 +4,7 @@ Reusable UI helper functions for GTK4 / Libadwaita views in SUIT.
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, GLib, Gdk
+from gi.repository import Gtk, Adw, GLib, Gdk
 from core.logger import get_logger
 
 logger = get_logger("ui_helpers")
@@ -44,6 +44,35 @@ def generate_qr_texture(url: str) -> Gdk.Texture | None:
     except Exception as e:
         logger.debug("Failed generating QR code: %s", e)
         return None
+
+
+# One content width, margin and rhythm for every page, so pages line up when navigating
+PAGE_MAX_WIDTH = 760
+PAGE_TIGHTEN_AT = 600
+PAGE_SPACING = 18
+
+
+def build_page_shell(max_width: int = PAGE_MAX_WIDTH) -> tuple[Gtk.ScrolledWindow, Gtk.Box]:
+    """Scrolling, width-clamped page body shared by all pages.
+
+    Returns (root, content): set `root` as the page child (or inside an overlay) and append
+    groups to `content`.
+    """
+    scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+    scrolled.set_kinetic_scrolling(True)
+    scrolled.set_overlay_scrolling(True)
+    scrolled.set_vexpand(True)
+
+    clamp = Adw.Clamp(maximum_size=max_width, tightening_threshold=PAGE_TIGHTEN_AT)
+    clamp.set_margin_top(12)
+    clamp.set_margin_bottom(16)
+    clamp.set_margin_start(16)
+    clamp.set_margin_end(16)
+    scrolled.set_child(clamp)
+
+    content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=PAGE_SPACING)
+    clamp.set_child(content)
+    return scrolled, content
 
 
 def create_button_with_icon(

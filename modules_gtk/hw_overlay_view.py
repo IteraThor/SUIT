@@ -39,6 +39,8 @@ def summarize_hw_overlay(enabled: bool, cfg: dict) -> str:
     return f"On · {count} metric{'s' if count != 1 else ''} · {POSITION_LABELS[cfg['position']]}"
 
 
+from modules_gtk.ui_helpers import build_page_shell
+
 class HwOverlayView(Adw.NavigationPage):
     """Submenu for the desktop Hardware Overlay: on/off, its look, and which metrics it shows.
 
@@ -54,19 +56,8 @@ class HwOverlayView(Adw.NavigationPage):
         self._save_id = 0
         self.config = SystemService.get_hw_overlay_config()
 
-        scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        scrolled.set_kinetic_scrolling(True)
+        scrolled, main_box = build_page_shell()
         self.set_child(scrolled)
-
-        clamp = Adw.Clamp(maximum_size=940, tightening_threshold=760)
-        clamp.set_margin_top(8)
-        clamp.set_margin_bottom(12)
-        clamp.set_margin_start(10)
-        clamp.set_margin_end(10)
-        scrolled.set_child(clamp)
-
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        clamp.set_child(main_box)
 
         # =========================================================================
         # Group 1: On / Off

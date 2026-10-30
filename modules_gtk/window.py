@@ -105,7 +105,6 @@ class SuitWindow(Adw.ApplicationWindow):
         self.rotation_page = None
         self.kiosk_page = None
         self.system_page = None
-        self.usb_page = None
 
         # Push Main Menu
         self.menu_page = MainMenuView(self)
@@ -281,8 +280,7 @@ class SuitWindow(Adw.ApplicationWindow):
             "autodarts": (840, 680),
             "rotation": (780, 680),
             "kiosk": (780, 680),
-            "system": (800, 780),
-            "usb": (780, 560),
+            "system": (800, 700),
             "advanced_users": (800, 720),
         }
 
@@ -439,11 +437,3 @@ class SuitWindow(Adw.ApplicationWindow):
         self.nav_view.push(self.system_page)
         if hasattr(self.system_page, "refresh"):
             self.system_page.refresh()
-
-    def open_usb_page(self):
-        if not self.usb_page:
-            from modules_gtk.usb_view import UsbView
-            self.usb_page = UsbView(self)
-        self.nav_view.push(self.usb_page)
-        if hasattr(self.usb_page, "refresh"):
-            self.usb_page.refresh()

@@ -16,6 +16,8 @@ except ImportError:
 __all__ = ["AdvancedUsersView"]
 
 
+from modules_gtk.ui_helpers import build_page_shell
+
 class AdvancedUsersView(Adw.NavigationPage):
     """Submenu for advanced utilities: Desktop Sharing, Tailscale VPN, and Darts Scorer via Waydroid."""
 
@@ -26,26 +28,14 @@ class AdvancedUsersView(Adw.NavigationPage):
         self._updating_rdp = False
         self._current_rdp_info = ""
 
-        scrolled = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        scrolled.set_kinetic_scrolling(True)
+        scrolled, main_box = build_page_shell()
         self.set_child(scrolled)
-
-        clamp = Adw.Clamp(maximum_size=940, tightening_threshold=760)
-        clamp.set_margin_top(8)
-        clamp.set_margin_bottom(12)
-        clamp.set_margin_start(10)
-        clamp.set_margin_end(10)
-        scrolled.set_child(clamp)
-
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        clamp.set_child(main_box)
 
         # =========================================================================
         # Group 1: Desktop Sharing & Remote Control
         # =========================================================================
         self.grp_remote = Adw.PreferencesGroup(
-            title="Desktop Sharing",
-            description="Share desktop screen and enable remote control via RDP."
+            title="Desktop Sharing"
         )
         main_box.append(self.grp_remote)
 
@@ -85,8 +75,7 @@ class AdvancedUsersView(Adw.NavigationPage):
         # Group 2: Remote Access (Tailscale VPN)
         # =========================================================================
         self.grp_tailscale = Adw.PreferencesGroup(
-            title="Tailscale VPN",
-            description="Secure mesh VPN for connecting to your dartboard."
+            title="Tailscale VPN"
         )
         main_box.append(self.grp_tailscale)
 
@@ -113,8 +102,7 @@ class AdvancedUsersView(Adw.NavigationPage):
         # Group 3: Android Darts Scorer (Waydroid)
         # =========================================================================
         self.grp_waydroid = Adw.PreferencesGroup(
-            title="Darts Scorer",
-            description="Android scoreboard companion app."
+            title="Darts Scorer"
         )
         main_box.append(self.grp_waydroid)
 
@@ -279,11 +267,9 @@ class AdvancedUsersView(Adw.NavigationPage):
             if not has_private_installer and not is_installed:
                 self.row_scorer.set_visible(False)
                 self.grp_waydroid.set_title("Android Container (Waydroid)")
-                self.grp_waydroid.set_description("Android container utilities, settings, and apps.")
             else:
                 self.row_scorer.set_visible(True)
                 self.grp_waydroid.set_title("Darts Scorer")
-                self.grp_waydroid.set_description("Android companion app for live scores, stats, and scoreboard.")
 
             if is_installed:
                 self.row_scorer.set_subtitle("Android scoreboard app running via Waydroid.")
