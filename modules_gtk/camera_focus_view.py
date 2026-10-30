@@ -63,6 +63,9 @@ class CameraFocusView(Adw.NavigationPage):
         self._current_analysis: FocusAnalysis | None = None
         self._lock = threading.Lock()
         self._is_switching_camera = False
+        # Camera stays closed until the user picks a target (or "Pick on Video")
+        self._camera_open = False
+        self._pending_target = None
 
         self._preview_bgra: np.ndarray | None = None
         self._zoom_bgra: np.ndarray | None = None
@@ -233,7 +236,7 @@ class CameraFocusView(Adw.NavigationPage):
         self.target_prompt_card.append(prompt_title)
 
         prompt_sub = Gtk.Label(
-            label="Choose a target to auto-align, or click anywhere directly on the video feed:",
+            label="Choose where to focus. The camera only starts after you pick:",
             xalign=0.5,
             justify=Gtk.Justification.CENTER,
             wrap=True,
@@ -260,6 +263,13 @@ class CameraFocusView(Adw.NavigationPage):
         self.btn_target_t20.set_size_request(-1, 42)
         self.btn_target_t20.connect("clicked", lambda b: self._select_target_mode(TargetMode.T20))
         target_btn_row.append(self.btn_target_t20)
+
+        self.btn_target_pick = Gtk.Button(label="Pick Point on Video")
+        self.btn_target_pick.add_css_class("secondary-btn")
+        self.btn_target_pick.add_css_class("touch-btn")
+        self.btn_target_pick.set_size_request(-1, 42)
+        self.btn_target_pick.connect("clicked", lambda b: self._select_pick_mode())
+        self.target_prompt_card.append(self.btn_target_pick)
 
         tip_lbl = Gtk.Label(
             label="Tip: Insert a dart into the target segment for maximum edge contrast.",
@@ -415,6 +425,10 @@ class CameraFocusView(Adw.NavigationPage):
 
     def _select_target_mode(self, mode: TargetMode, custom_point: tuple[int, int] | None = None):
         """Transition into active focus mode with the chosen target."""
+        if not self._camera_open:
+            self._open_camera_then(("target", mode, custom_point))
+            return
+
         with self._lock:
             frame = self._current_frame
             f_shape = frame.shape[:2] if frame is not None else (960, 1280)
@@ -425,9 +439,86 @@ class CameraFocusView(Adw.NavigationPage):
         self.active_banner.set_visible(True)
         self.osc_card.set_visible(True)
 
+        self.active_banner_title.set_label("Rotate focus ring slowly. Look for highest peak.")
         self.target_pill.set_label(f"Target: {self.focus_service.target_name}")
         self.drawing_area.queue_draw()
         self.osc_drawing_area.queue_draw()
+
+    def _select_pick_mode(self):
+        """Start the preview so the user can click the focus point on the video."""
+        if not self._camera_open:
+            self._open_camera_then(("pick",))
+            return
+        self._enter_pick_ui()
+
+    def _enter_pick_ui(self):
+        self.focus_service.set_target_mode(TargetMode.NONE)
+        self.target_prompt_card.set_visible(False)
+        self.active_banner.set_visible(True)
+        self.osc_card.set_visible(False)
+        self.active_banner_title.set_label("Click on the video where you want to focus.")
+        self.target_pill.set_label("Target: not set")
+        self.drawing_area.queue_draw()
+
+    def _open_camera_then(self, pending):
+        """Stop Autodarts and open the current camera, then apply the pending selection."""
+        if self._is_switching_camera:
+            return
+        self._is_switching_camera = True
+        self._pending_target = pending
+        idx = self.current_step
+        cam_name = CAMERA_NAMES[idx]
+        self.target_prompt_card.set_visible(False)
+        self.loading_lbl.set_label(f"Stopping Autodarts & Opening {cam_name}...")
+        self.loading_box.set_visible(True)
+        self.loading_spinner.start()
+
+        def _bg_open():
+            if not SystemdManager._autodarts_paused_by_suit and not self.was_autodarts_active:
+                try:
+                    self.was_autodarts_active = SystemdManager.pause_autodarts()
+                    if self.was_autodarts_active:
+                        time.sleep(0.4)
+                except Exception:
+                    logger.exception("Error querying/stopping autodarts.service")
+                try:
+                    import subprocess
+                    subprocess.run(["pkill", "-TERM", "-f", r"(^|/)(ad|autodarts)(\s|$)"], timeout=2)
+                    time.sleep(0.3)
+                except Exception:
+                    pass
+
+            from core.autodarts_service import parse_cam_device
+            cfg = read_cam_config()
+            raw_cams = cfg.get("cams", [])
+            self.configured_cams = [parse_cam_device(c) for c in raw_cams if c and c.strip()]
+            self.raw_cams = [c for c in cfg.get("devices", []) if c and c.strip()]
+            if not self.configured_cams:
+                self.configured_cams = ["/dev/video0", "/dev/video2", "/dev/video4"]
+
+            self.audio_service.start()
+
+            dev_path = (
+                self.configured_cams[idx] if idx < len(self.configured_cams) else f"/dev/video{idx * 2}"
+            )
+            cam_uri = self.raw_cams[idx] if idx < len(self.raw_cams) else None
+            self.focus_service.start_camera(dev_path, uri=cam_uri)
+            GLib.idle_add(self._on_camera_opened)
+
+        threading.Thread(target=_bg_open, daemon=True).start()
+
+    def _on_camera_opened(self):
+        self._is_switching_camera = False
+        self._camera_open = True
+        self.loading_spinner.stop()
+        self.loading_box.set_visible(False)
+        self._start_capture_thread()
+        pending, self._pending_target = self._pending_target, None
+        if pending and pending[0] == "target":
+            self._select_target_mode(pending[1], custom_point=pending[2])
+        elif pending and pending[0] == "pick":
+            self._enter_pick_ui()
+        return False
 
     def _show_target_prompt(self):
         """Switch UI back to target selection prompt."""
@@ -478,51 +569,10 @@ class CameraFocusView(Adw.NavigationPage):
                 self.window.maximize()
 
         self.stack.set_visible_child_name("cam_focus")
-        self.loading_box.set_visible(True)
-        self.loading_spinner.start()
-        self.loading_lbl.set_label("Stopping Autodarts & Opening Camera 1...")
-
-        def _bg_init():
-            try:
-                self.was_autodarts_active = SystemdManager.pause_autodarts()
-                if self.was_autodarts_active:
-                    time.sleep(0.4)
-            except Exception:
-                logger.exception("Error querying/stopping autodarts.service")
-
-            try:
-                import subprocess
-                subprocess.run(["pkill", "-TERM", "-f", r"(^|/)(ad|autodarts)(\s|$)"], timeout=2)
-                time.sleep(0.3)
-            except Exception:
-                pass
-
-            from core.autodarts_service import parse_cam_device
-            cfg = read_cam_config()
-            raw_cams = cfg.get("cams", [])
-            self.configured_cams = [parse_cam_device(c) for c in raw_cams if c and c.strip()]
-            self.raw_cams = [c for c in cfg.get("devices", []) if c and c.strip()]
-            if not self.configured_cams:
-                self.configured_cams = ["/dev/video0", "/dev/video2", "/dev/video4"]
-
-            self.audio_service.start()
-
-            dev_path = self.configured_cams[0]
-            cam_uri = self.raw_cams[0] if hasattr(self, "raw_cams") and self.raw_cams else None
-            self.focus_service.start_camera(dev_path, uri=cam_uri)
-
-            GLib.idle_add(self._on_init_completed, dev_path)
-
-        threading.Thread(target=_bg_init, daemon=True).start()
-
-    def _on_init_completed(self, dev_path: str):
-        """Main thread callback when camera initialization finishes."""
+        self.loading_box.set_visible(False)
         self.current_step = 0
         self._update_tab_buttons(0)
-        self.loading_spinner.stop()
-        self.loading_box.set_visible(False)
         self._show_target_prompt()
-        self._start_capture_thread()
 
     def on_page_closed(self):
         """Lifecycle hook when navigating away: restore previous window maximization state."""
@@ -530,6 +580,8 @@ class CameraFocusView(Adw.NavigationPage):
         self._stop_capture_thread()
         self.focus_service.stop_camera()
         self.audio_service.stop()
+        self._camera_open = False
+        self._pending_target = None
 
         if self.window and not self._was_maximized and hasattr(self.window, "unmaximize"):
             self.window.unmaximize()
@@ -565,44 +617,28 @@ class CameraFocusView(Adw.NavigationPage):
         if idx == self.current_step and not self._is_switching_camera:
             return
 
-        self._is_switching_camera = True
+        if self._is_switching_camera:
+            return
         self.current_step = idx
         self._update_tab_buttons(idx)
+        self.lbl_step_title.set_label(CAMERA_NAMES[idx])
+
+        # Release the current camera; the next one opens once a target is picked
+        was_open = self._camera_open
+        self._camera_open = False
+        self._pending_target = None
+        with self._lock:
+            self._preview_bgra = None
+            self._zoom_bgra = None
+            self._current_frame = None
+            self._current_analysis = None
         self._show_target_prompt()
 
-        cam_name = CAMERA_NAMES[idx]
-        self.lbl_step_title.set_label(cam_name)
-
-        dev_path = (
-            self.configured_cams[idx]
-            if idx < len(self.configured_cams)
-            else f"/dev/video{idx * 2}"
-        )
-        cam_uri = (
-            self.raw_cams[idx]
-            if hasattr(self, "raw_cams") and idx < len(self.raw_cams)
-            else None
-        )
-
-        self.loading_lbl.set_label(f"Opening {cam_name} ({dev_path})...")
-        self.loading_box.set_visible(True)
-        self.loading_spinner.start()
-
-        def _bg_switch():
-            self._stop_capture_thread()
-            self.focus_service.stop_camera()
-            self.focus_service.start_camera(dev_path, uri=cam_uri)
-            GLib.idle_add(self._on_cam_switch_done)
-
-        threading.Thread(target=_bg_switch, daemon=True).start()
-
-    def _on_cam_switch_done(self):
-        """Main thread callback when camera switch completes."""
-        self._is_switching_camera = False
-        self.loading_spinner.stop()
-        self.loading_box.set_visible(False)
-        self._show_target_prompt()
-        self._start_capture_thread()
+        if was_open:
+            def _bg_close():
+                self._stop_capture_thread()
+                self.focus_service.stop_camera()
+            threading.Thread(target=_bg_close, daemon=True).start()
 
     def _start_capture_thread(self):
         """Spawn worker thread for frame acquisition and analysis."""
