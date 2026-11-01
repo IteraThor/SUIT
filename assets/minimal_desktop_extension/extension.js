@@ -65,15 +65,16 @@ const HIDDEN_ITEMS = {
     'dark style toggle': qs => qs._darkMode?.quickSettingsItems,
     'do not disturb icon': qs => qs._doNotDisturb?._indicator,
     'do not disturb toggle': qs => qs._doNotDisturb?.quickSettingsItems,
+    'lock button': qs => qs._system?._systemItem?.child.get_children()
+        .find(c => c.constructor.name === 'LockItem'),
 };
 
 /* Keeps one shell actor hidden although the shell keeps syncing its visibility,
    and remembers what the shell wanted so disabling restores exactly that. */
 class VisibilityGuard {
-    constructor(actor, onWantedChanged = null) {
+    constructor(actor) {
         this._actor = actor;
         this._wanted = actor.visible;
-        this._onWantedChanged = onWantedChanged;
         this._hiding = false;
         actor.connectObject(
             'notify::visible', () => this._onVisibleChanged(),
@@ -87,11 +88,6 @@ class VisibilityGuard {
             return;
         this._wanted = this._actor.visible;
         this._hide();
-        this._onWantedChanged?.(this._wanted);
-    }
-
-    get wanted() {
-        return this._wanted;
     }
 
     _hide() {
@@ -242,7 +238,8 @@ class DesktopDock {
 const LinkToggle = GObject.registerClass(
 class LinkToggle extends QuickToggle {
     _init(link, gicon) {
-        super._init({ title: link.title, subtitle: link.subtitle, gicon });
+        // Always drawn "on" (blue, like an active Wi-Fi tile); clicking never unchecks it
+        super._init({ title: link.title, subtitle: link.subtitle, gicon, checked: true });
         this.url = link.url;
     }
 });
@@ -295,26 +292,37 @@ class LinkShortcuts {
 }
 
 /* Replaces the wide Wi-Fi tile with a round icon button in the top row (next to
-   screenshot and settings). A click opens the network list, like the tile's arrow. */
+   screenshot and settings). A click opens the network list, like the tile's arrow.
+   The tile is parked in a hidden holder instead of being hidden itself, so GNOME keeps
+   full control of its visibility and the button simply mirrors it. */
 class CompactWifiButton {
     constructor() {
         this._button = null;
-        this._guard = null;
         this._cancelWait = whenQuickSettingsReady(qs => this._add(qs));
     }
 
     _add(qs) {
         const toggle = qs?._network?._wirelessToggle;
         const systemItem = qs?._system?._systemItem;
+        const grid = toggle?.get_parent();
         const constraint = toggle?.menu?.actor.get_constraints()
             .find(c => c instanceof Clutter.BindConstraint && c.coordinate === Clutter.BindCoordinate.Y);
-        if (!toggle || !systemItem || !constraint) {
+        if (!toggle || !systemItem || !grid || !constraint) {
             console.warn(`${LOG_PREFIX} Wi-Fi tile or top row not found, Wi-Fi left as is`);
             return;
         }
         this._toggle = toggle;
         this._systemItem = systemItem;
+        this._grid = grid;
         this._constraint = constraint;
+        this._oldSource = constraint.source;
+        this._colSpan = grid.layout_manager.get_child_meta(grid, toggle).columnSpan;
+
+        // The grid lays out visible children only, so a hidden holder takes the tile out
+        this._holder = new Clutter.Actor({ visible: false });
+        grid.insert_child_above(this._holder, toggle);
+        grid.remove_child(toggle);
+        this._holder.add_child(toggle);
 
         this._button = new QuickSettingsItem({
             style_class: 'icon-button suit-wifi-button',
@@ -322,6 +330,7 @@ class CompactWifiButton {
             accessible_name: 'Wi-Fi',
             child: new St.Icon(),
         });
+        toggle.bind_property('visible', this._button, 'visible', GObject.BindingFlags.SYNC_CREATE);
         toggle.bind_property('icon-name', this._button.child, 'icon-name', GObject.BindingFlags.SYNC_CREATE);
         toggle.bind_property('checked', this._button, 'checked', GObject.BindingFlags.SYNC_CREATE);
         this._button.connect('clicked', () => this._openList());
@@ -333,12 +342,7 @@ class CompactWifiButton {
         else
             row.insert_child_at_index(this._button, 0);
 
-        // The tile still decides when Wi-Fi exists at all (no Wi-Fi hardware, airplane mode...)
-        this._guard = new VisibilityGuard(toggle, wanted => (this._button.visible = wanted));
-        this._button.visible = this._guard.wanted;
-
-        // The list hangs below its source item; the tile is hidden, so hang it below the top row
-        this._oldSource = constraint.source;
+        // The list hangs below its source item; the tile is parked, so hang it below the top row
         toggle.menu.connectObject('open-state-changed', (menu, open) => open && this._anchor(), this);
     }
 
@@ -358,11 +362,15 @@ class CompactWifiButton {
             return;
         this._toggle.menu.disconnectObject(this);
         this._toggle.menu.close();
-        this._constraint.source = this._oldSource;
-        this._constraint.offset = this._oldSource.height;
-        this._guard.destroy();
         this._button.destroy();
         this._button = null;
+
+        this._holder.remove_child(this._toggle);
+        this._grid.insert_child_above(this._toggle, this._holder);
+        this._grid.layout_manager.child_set_property(this._grid, this._toggle, 'column-span', this._colSpan);
+        this._holder.destroy();
+        this._constraint.source = this._oldSource;
+        this._constraint.offset = this._oldSource.height;
     }
 }
 

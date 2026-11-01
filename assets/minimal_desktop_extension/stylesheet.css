@@ -53,3 +53,13 @@
   height: 48px;
   color: rgba(255, 255, 255, 0.85);
 }
+
+/* Round Wi-Fi button in the quick settings top row: blue while Wi-Fi is on */
+.suit-wifi-button:checked {
+  background-color: -st-accent-color;
+  color: -st-accent-fg-color;
+}
+
+.suit-wifi-button:checked:hover {
+  background-color: color-mix(in srgb, -st-accent-color 85%, white);
+}
