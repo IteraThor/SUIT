@@ -3,7 +3,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw
 from core.logger import get_logger
-from core.autoglow_service import AutoGlowService, DEFAULT_DIR, WEB_URL
+from core.autoglow_service import AutoGlowService, BACKUP_ROOT, DEFAULT_DIR, WEB_URL
 from modules_gtk.async_utils import run_async, open_browser_url
 from modules_gtk.dialogs.community_dialog import DISCORD_URL
 
@@ -93,6 +93,14 @@ class AutoGlowView(Adw.NavigationPage):
         self.row_install.add_suffix(self.btn_install)
         grp_main.add(self.row_install)
 
+        # An AutoGlow 2 copy SUIT did not install, next to the one it did
+        self.row_old = Adw.ActionRow(title=tr("Older AutoGlow 2 found"))
+        self.btn_replace = _compact_button("Replace", "suggested-action")
+        self.btn_replace.set_tooltip_text(tr("Remove the older copy and keep its profiles"))
+        self.btn_replace.connect("clicked", lambda b: self._confirm_install("Repairing...", on_success=None))
+        self.row_old.add_suffix(self.btn_replace)
+        grp_main.add(self.row_old)
+
         self.row_service = Adw.ActionRow(title=tr("Service"))
         box_service = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         box_service.set_valign(Gtk.Align.CENTER)
@@ -142,20 +150,38 @@ class AutoGlowView(Adw.NavigationPage):
         def on_done(status):
             self._status = status
             self._apply_status()
+            if not status.get("is_git"):
+                self._sync_menu_badge(False)
             if check_updates and status.get("is_git") and not self._busy:
                 self._check_updates(quiet=True)
 
         run_async(AutoGlowService.get_status, on_done=on_done)
 
+    def _old_installs(self) -> list:
+        """Older copies the install replaces. A kept working copy that is not running is left alone."""
+        return [o for o in self._status.get("old_installs", []) if not o["keep"] or o["active"]]
+
+    def _describe_old(self, old: list) -> str:
+        return ", ".join(
+            f"{self._short_path(o['path'])} ({o['version']})" if o["version"] else self._short_path(o["path"])
+            for o in old)
+
     def _apply_status(self):
         s = self._status
         installed = s.get("installed", False)
+        old = self._old_installs()
 
-        if not installed:
+        if not installed and old:
+            _set_pill(self.lbl_pill, "Older Version", "status-pill-pending")
+            self.row_status.set_subtitle(tr("Found in {paths}.").format(paths=self._describe_old(old)))
+            self.row_install.set_subtitle(tr("Removes the older AutoGlow 2 first. Your profiles, flows and settings are carried over."))
+        elif not installed:
             _set_pill(self.lbl_pill, "Not Installed", "status-pill-checking")
             self.row_status.set_subtitle(
                 tr("An AutoGlow 1 service was found. Installing replaces it.") if s.get("legacy")
                 else tr("Installs into {path}.").format(path=self._short_path(DEFAULT_DIR)))
+            self.row_install.set_subtitle(
+                tr("WLED lighting driven by your live games, with the AutoGlow Bridge browser extension."))
         elif not s.get("service_present"):
             _set_pill(self.lbl_pill, "No Service", "status-pill-pending")
         elif s.get("running"):
@@ -172,6 +198,10 @@ class AutoGlowView(Adw.NavigationPage):
             self.row_status.set_subtitle(" · ".join(p for p in parts if p))
 
         self.row_install.set_visible(not installed)
+        self.row_old.set_visible(installed and bool(old))
+        if installed and old:
+            self.row_old.set_subtitle(
+                tr("{paths}. Replacing removes it and keeps its profiles.").format(paths=self._describe_old(old)))
         self.btn_open.set_visible(installed)
         self.btn_open.set_sensitive(running and not self._busy)
         self.btn_open.set_tooltip_text(
@@ -200,7 +230,7 @@ class AutoGlowView(Adw.NavigationPage):
 
     def _set_busy(self, busy: bool, text: str = ""):
         self._busy = busy
-        for w in (self.btn_install, self.row_service, self.row_autostart, self.grp_software, self.btn_open):
+        for w in (self.btn_install, self.row_old, self.row_service, self.row_autostart, self.grp_software, self.btn_open):
             w.set_sensitive(not busy)
         if busy:
             self.spinner.start()
@@ -228,8 +258,37 @@ class AutoGlowView(Adw.NavigationPage):
     # ------------------------------------------------------------- actions
 
     def _on_install_clicked(self, btn):
-        self.window.show_toast(tr("Installing AutoGlow 2. This takes a few minutes..."))
-        self._run_task(AutoGlowService.install, "Installing...", on_success=self._show_browser_hint)
+        self._confirm_install("Installing...", on_success=self._show_browser_hint)
+
+    def _confirm_install(self, busy_text: str, on_success):
+        """Install or repair; with an older AutoGlow 2 around, first ask before it is removed."""
+        def run():
+            self.window.show_toast(tr("Installing AutoGlow 2. This takes a few minutes..."))
+            self._run_task(AutoGlowService.install, busy_text, on_success=on_success)
+
+        old = self._old_installs()
+        if not old:
+            run()
+            return
+        lines = []
+        for o in old:
+            line = "• " + self._describe_old([o])
+            if o["keep"]:
+                line += " – " + tr("folder kept, it has changes that are not on GitHub")
+            lines.append(line)
+        body = (tr("SUIT installs AutoGlow 2 into {path} and removes this older installation completely:").format(
+                    path=self._short_path(DEFAULT_DIR))
+                + "\n\n" + "\n".join(lines) + "\n\n"
+                + tr("Your profiles, flows and settings are carried over. A backup is kept in {path}.").format(
+                    path=self._short_path(BACKUP_ROOT)))
+        dialog = Adw.AlertDialog(heading=tr("Replace Older AutoGlow 2?"), body=body)
+        dialog.add_response("cancel", tr("Cancel"))
+        dialog.add_response("replace", tr("Replace"))
+        dialog.set_response_appearance("replace", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("replace")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", lambda d, r: r == "replace" and run())
+        dialog.present(self.window)
 
     def _show_browser_hint(self):
         dialog = Adw.AlertDialog(
@@ -244,7 +303,10 @@ class AutoGlowView(Adw.NavigationPage):
         dialog.present(self.window)
 
     def _on_repair_clicked(self, btn):
-        self._run_task(AutoGlowService.install, "Repairing...")
+        if self._old_installs():
+            self._confirm_install("Repairing...", on_success=None)
+        else:
+            self._run_task(AutoGlowService.install, "Repairing...")
 
     def _on_start_stop_clicked(self, btn):
         running = self._status.get("running", False)
@@ -285,6 +347,8 @@ class AutoGlowView(Adw.NavigationPage):
         def on_done(info):
             self.btn_update.set_sensitive(True)
             self._update_info = info
+            if not info.get("error"):
+                self._sync_menu_badge(bool(info.get("has_update")))
             if info.get("error"):
                 self.row_update.set_subtitle(tr(info["error"]))
                 self._set_update_button(False)
@@ -306,6 +370,11 @@ class AutoGlowView(Adw.NavigationPage):
 
         run_async(AutoGlowService.check_update, on_done=on_done)
 
+    def _sync_menu_badge(self, available: bool):
+        menu = getattr(self.window, "menu_page", None)
+        if menu is not None and hasattr(menu, "set_autoglow_update"):
+            menu.set_autoglow_update(available)
+
     def _set_update_button(self, has_update: bool):
         self.btn_update.set_label(tr("Update") if has_update else tr("Check"))
         if has_update:
@@ -322,6 +391,7 @@ class AutoGlowView(Adw.NavigationPage):
 
         def on_success():
             self._update_info = None
+            self._sync_menu_badge(False)
             self._set_update_button(False)
             self.row_update.set_subtitle(tr("AutoGlow 2 is up to date."))
 

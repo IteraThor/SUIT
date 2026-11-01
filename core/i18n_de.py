@@ -19,6 +19,8 @@ DE = {
     "AutoGlow 2 Manager": "AutoGlow 2",
     "WLED dartboard automation and lighting effects.": "WLED-Dartboard-Automatik und Lichteffekte.",
     "NEW": "NEU",
+    "UPDATE": "UPDATE",
+    "A new AutoGlow 2 version is available": "Eine neue AutoGlow-2-Version ist verfügbar",
     "Coming Soon": "Demnächst",
     "Check for Updates": "Nach Updates suchen",
     "Checking for Updates...": "Suche nach Updates …",
@@ -468,6 +470,21 @@ DE = {
     "Version {version}": "Version {version}",
     "Open the web interface ({url})": "Die Weboberfläche öffnen ({url})",
     "Start the AutoGlow service to open it": "Starte den AutoGlow-Dienst, um sie zu öffnen",
+    "Older AutoGlow 2 found": "Ältere AutoGlow-2-Version gefunden",
+    "Remove the older copy and keep its profiles": "Die ältere Kopie entfernen und ihre Profile behalten",
+    "Older Version": "Ältere Version",
+    "Found in {paths}.": "Gefunden in {paths}.",
+    "Removes the older AutoGlow 2 first. Your profiles, flows and settings are carried over.":
+        "Entfernt zuerst das ältere AutoGlow 2. Deine Profile, Abläufe und Einstellungen werden übernommen.",
+    "{paths}. Replacing removes it and keeps its profiles.":
+        "{paths}. Beim Ersetzen wird es entfernt, seine Profile bleiben erhalten.",
+    "folder kept, it has changes that are not on GitHub": "Ordner bleibt erhalten, er enthält Änderungen, die nicht auf GitHub sind",
+    "SUIT installs AutoGlow 2 into {path} and removes this older installation completely:":
+        "SUIT installiert AutoGlow 2 nach {path} und entfernt diese ältere Installation vollständig:",
+    "Your profiles, flows and settings are carried over. A backup is kept in {path}.":
+        "Deine Profile, Abläufe und Einstellungen werden übernommen. Eine Sicherung bleibt in {path}.",
+    "Replace Older AutoGlow 2?": "Älteres AutoGlow 2 ersetzen?",
+    "Replace": "Ersetzen",
     "AutoGlow action failed: {error}": "AutoGlow-Aktion fehlgeschlagen: {error}",
     "Installing AutoGlow 2. This takes a few minutes...": "Installiere AutoGlow 2. Das dauert ein paar Minuten …",
     "AutoGlow 2 Installed": "AutoGlow 2 installiert",
@@ -1143,6 +1160,12 @@ DE = {
     "AutoGlow setup timed out.": "Zeitüberschreitung bei der AutoGlow-Einrichtung.",
     "AutoGlow setup failed: {error}": "AutoGlow-Einrichtung fehlgeschlagen: {error}",
     "{path} already exists and is not an AutoGlow 2 folder.": "{path} existiert bereits und ist kein AutoGlow-2-Ordner.",
+    "{path} has changes that are not on GitHub. Move the folder and try again.":
+        "{path} enthält Änderungen, die nicht auf GitHub sind. Verschiebe den Ordner und versuche es erneut.",
+    "AutoGlow 2 is installed. The older version was removed, your profiles were kept.":
+        "AutoGlow 2 ist installiert. Die ältere Version wurde entfernt, deine Profile sind erhalten geblieben.",
+    "Could not back up the older AutoGlow profiles: {error}": "Die älteren AutoGlow-Profile konnten nicht gesichert werden: {error}",
+    "Could not carry over the older AutoGlow profiles: {error}": "Die älteren AutoGlow-Profile konnten nicht übernommen werden: {error}",
     "Download failed. Check internet connection.": "Download fehlgeschlagen. Prüfe die Internetverbindung.",
     "Download failed: {error}": "Download fehlgeschlagen: {error}",
     "AutoGlow was not installed with git, so it cannot update here.":

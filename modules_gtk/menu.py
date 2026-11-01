@@ -5,6 +5,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gtk, Adw, GLib, Gdk, GdkPixbuf, GObject, Graphene, Gsk
 from core.logger import get_logger
 from core.update_service import UpdateService
+from core.autoglow_service import AutoGlowService
 from modules_gtk.async_utils import run_async
 
 from modules_gtk.ui_helpers import build_page_shell
@@ -111,6 +112,7 @@ class MainMenuView(Adw.NavigationPage):
         main_box.append(self.pref_group)
 
         self.rows = {}
+        self.new_badges = {}
 
         # Native Module Items
         items = [
@@ -147,6 +149,14 @@ class MainMenuView(Adw.NavigationPage):
                     lbl_new.add_css_class("status-pill-new")
                     lbl_new.set_valign(Gtk.Align.CENTER)
                     row.add_suffix(lbl_new)
+                    self.new_badges[key] = lbl_new
+                if key == "btn_autoglow":
+                    self.lbl_autoglow_update = Gtk.Label(label=tr("UPDATE"))
+                    self.lbl_autoglow_update.add_css_class("status-pill-update")
+                    self.lbl_autoglow_update.set_valign(Gtk.Align.CENTER)
+                    self.lbl_autoglow_update.set_tooltip_text(tr("A new AutoGlow 2 version is available"))
+                    self.lbl_autoglow_update.set_visible(False)
+                    row.add_suffix(self.lbl_autoglow_update)
                 chevron = Gtk.Image.new_from_icon_name("go-next-symbolic")
                 chevron.set_opacity(0.5)
                 chevron.set_valign(Gtk.Align.CENTER)
@@ -264,7 +274,21 @@ class MainMenuView(Adw.NavigationPage):
                 self._set_update_available(True)
 
         run_async(worker, on_done=on_done)
+
+        def autoglow_worker():
+            # Only SUIT's own git install can update; nothing to ask GitHub otherwise
+            if AutoGlowService.get_install_dir() is None:
+                return {}
+            return AutoGlowService.check_update()
+
+        run_async(autoglow_worker, on_done=lambda info: self.set_autoglow_update(bool(info and info.get("has_update"))))
         return False
+
+    def set_autoglow_update(self, available: bool):
+        """Show UPDATE instead of NEW on the AutoGlow 2 row; the AutoGlow page also calls this."""
+        self.lbl_autoglow_update.set_visible(available)
+        if "btn_autoglow" in self.new_badges:
+            self.new_badges["btn_autoglow"].set_visible(not available)
 
     def _on_check_updates(self, btn):
         logger.info("Check for updates and requirements triggered")
