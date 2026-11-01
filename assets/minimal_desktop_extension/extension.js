@@ -7,7 +7,8 @@ import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as AppFavorites from 'resource:///org/gnome/shell/ui/appFavorites.js';
 import { DashIcon } from 'resource:///org/gnome/shell/ui/dash.js';
-import { QuickToggle, SystemIndicator } from 'resource:///org/gnome/shell/ui/quickSettings.js';
+import Clutter from 'gi://Clutter';
+import { QuickSettingsItem, QuickToggle, SystemIndicator } from 'resource:///org/gnome/shell/ui/quickSettings.js';
 
 const LOG_PREFIX = '[SUIT Minimal Desktop]';
 
@@ -19,9 +20,11 @@ const DOCK_BOTTOM_GAP = 16;
 const QS_RETRY_MS = 250;
 const QS_MAX_RETRIES = 40;
 
-const AUTOGLOW_URL = 'http://localhost:8080';
-// Written by AutoGlow's setup.sh; the shortcut only shows while AutoGlow is installed
-const AUTOGLOW_UNIT = '/etc/systemd/system/autoglow.service';
+// Quick settings buttons that open a web page; `icon` is a file in the extension folder
+const LINKS = [
+    { title: 'Autoglow 2', subtitle: 'Open web interface', url: 'http://autoglow.local:8080/', icon: 'autoglow-symbolic.svg' },
+    { title: 'Autodarts', subtitle: 'play.autodarts.com', url: 'https://play.autodarts.com/', icon: 'autodarts-symbolic.svg' },
+];
 // Same order as SUIT's own "open in browser": Chromium-based first, else the default browser
 const BROWSER_APP_IDS = ['chromium-browser.desktop', 'chromium.desktop', 'google-chrome.desktop', 'brave-browser.desktop'];
 
@@ -67,9 +70,10 @@ const HIDDEN_ITEMS = {
 /* Keeps one shell actor hidden although the shell keeps syncing its visibility,
    and remembers what the shell wanted so disabling restores exactly that. */
 class VisibilityGuard {
-    constructor(actor) {
+    constructor(actor, onWantedChanged = null) {
         this._actor = actor;
         this._wanted = actor.visible;
+        this._onWantedChanged = onWantedChanged;
         this._hiding = false;
         actor.connectObject(
             'notify::visible', () => this._onVisibleChanged(),
@@ -83,6 +87,11 @@ class VisibilityGuard {
             return;
         this._wanted = this._actor.visible;
         this._hide();
+        this._onWantedChanged?.(this._wanted);
+    }
+
+    get wanted() {
+        return this._wanted;
     }
 
     _hide() {
@@ -230,59 +239,130 @@ class DesktopDock {
     }
 }
 
-const AutoglowToggle = GObject.registerClass(
-class AutoglowToggle extends QuickToggle {
-    _init(gicon) {
-        super._init({ title: 'Autoglow 2', subtitle: 'Open web interface', gicon });
+const LinkToggle = GObject.registerClass(
+class LinkToggle extends QuickToggle {
+    _init(link, gicon) {
+        super._init({ title: link.title, subtitle: link.subtitle, gicon });
+        this.url = link.url;
     }
 });
 
-/* Quick settings button next to Wi-Fi that opens the AutoGlow 2 web interface */
-class AutoglowShortcut {
+function openInBrowser(url, title) {
+    const context = global.create_app_launch_context(0, -1);
+    try {
+        const browser = BROWSER_APP_IDS.map(id => Gio.DesktopAppInfo.new(id)).find(Boolean);
+        if (browser)
+            browser.launch_uris([url], context);
+        else
+            Gio.AppInfo.launch_default_for_uri(url, context);
+    } catch (e) {
+        Main.notifyError(`Could not open ${title}`, e.message);
+    }
+}
+
+/* Quick settings buttons next to Wi-Fi that open web pages (Autoglow 2, Autodarts) */
+class LinkShortcuts {
     constructor(extension) {
         this._indicator = null;
-        this._gicon = Gio.icon_new_for_string(`${extension.path}/autoglow-symbolic.svg`);
+        this._path = extension.path;
         this._cancelWait = whenQuickSettingsReady(qs => this._add(qs));
     }
 
     _add(qs) {
-        this._toggle = new AutoglowToggle(this._gicon);
-        this._toggle.connect('clicked', () => this._open());
+        if (!qs)
+            return;
         this._indicator = new SystemIndicator();
-        this._indicator.quickSettingsItems.push(this._toggle);
-        qs.addExternalIndicator(this._indicator);
-
-        // AutoGlow can be installed or removed while the shell runs, so check on every open
-        this._syncVisible();
-        qs.menu.connectObject('open-state-changed', (menu, open) => open && this._syncVisible(), this);
-    }
-
-    _syncVisible() {
-        this._toggle.visible = GLib.file_test(AUTOGLOW_UNIT, GLib.FileTest.EXISTS);
-    }
-
-    _open() {
-        Main.panel.statusArea.quickSettings.menu.close();
-        const context = global.create_app_launch_context(0, -1);
-        try {
-            const browser = BROWSER_APP_IDS.map(id => Gio.DesktopAppInfo.new(id)).find(Boolean);
-            if (browser)
-                browser.launch_uris([AUTOGLOW_URL], context);
-            else
-                Gio.AppInfo.launch_default_for_uri(AUTOGLOW_URL, context);
-        } catch (e) {
-            Main.notifyError('Could not open Autoglow 2', e.message);
+        for (const link of LINKS) {
+            const gicon = Gio.icon_new_for_string(`${this._path}/${link.icon}`);
+            const toggle = new LinkToggle(link, gicon);
+            toggle.connect('clicked', () => {
+                qs.menu.close();
+                openInBrowser(link.url, link.title);
+            });
+            this._indicator.quickSettingsItems.push(toggle);
         }
+        qs.addExternalIndicator(this._indicator);
     }
 
     destroy() {
         this._cancelWait();
         if (!this._indicator)
             return;
-        Main.panel.statusArea.quickSettings.menu.disconnectObject(this);
         this._indicator.quickSettingsItems.forEach(item => item.destroy());
         this._indicator.destroy();
         this._indicator = null;
+    }
+}
+
+/* Replaces the wide Wi-Fi tile with a round icon button in the top row (next to
+   screenshot and settings). A click opens the network list, like the tile's arrow. */
+class CompactWifiButton {
+    constructor() {
+        this._button = null;
+        this._guard = null;
+        this._cancelWait = whenQuickSettingsReady(qs => this._add(qs));
+    }
+
+    _add(qs) {
+        const toggle = qs?._network?._wirelessToggle;
+        const systemItem = qs?._system?._systemItem;
+        const constraint = toggle?.menu?.actor.get_constraints()
+            .find(c => c instanceof Clutter.BindConstraint && c.coordinate === Clutter.BindCoordinate.Y);
+        if (!toggle || !systemItem || !constraint) {
+            console.warn(`${LOG_PREFIX} Wi-Fi tile or top row not found, Wi-Fi left as is`);
+            return;
+        }
+        this._toggle = toggle;
+        this._systemItem = systemItem;
+        this._constraint = constraint;
+
+        this._button = new QuickSettingsItem({
+            style_class: 'icon-button suit-wifi-button',
+            can_focus: true,
+            accessible_name: 'Wi-Fi',
+            child: new St.Icon(),
+        });
+        toggle.bind_property('icon-name', this._button.child, 'icon-name', GObject.BindingFlags.SYNC_CREATE);
+        toggle.bind_property('checked', this._button, 'checked', GObject.BindingFlags.SYNC_CREATE);
+        this._button.connect('clicked', () => this._openList());
+
+        const row = systemItem.child;
+        const settings = row.get_children().find(c => c.constructor.name === 'SettingsItem');
+        if (settings)
+            row.insert_child_above(this._button, settings);
+        else
+            row.insert_child_at_index(this._button, 0);
+
+        // The tile still decides when Wi-Fi exists at all (no Wi-Fi hardware, airplane mode...)
+        this._guard = new VisibilityGuard(toggle, wanted => (this._button.visible = wanted));
+        this._button.visible = this._guard.wanted;
+
+        // The list hangs below its source item; the tile is hidden, so hang it below the top row
+        this._oldSource = constraint.source;
+        toggle.menu.connectObject('open-state-changed', (menu, open) => open && this._anchor(), this);
+    }
+
+    _anchor() {
+        this._constraint.source = this._systemItem;
+        this._constraint.offset = this._systemItem.height;
+    }
+
+    _openList() {
+        this._anchor();
+        this._toggle.menu.open();
+    }
+
+    destroy() {
+        this._cancelWait();
+        if (!this._button)
+            return;
+        this._toggle.menu.disconnectObject(this);
+        this._toggle.menu.close();
+        this._constraint.source = this._oldSource;
+        this._constraint.offset = this._oldSource.height;
+        this._guard.destroy();
+        this._button.destroy();
+        this._button = null;
     }
 }
 
@@ -290,7 +370,8 @@ class AutoglowShortcut {
 const TWEAKS = {
     'hidden shell items': HiddenShellItems,
     'desktop dock': DesktopDock,
-    'autoglow shortcut': AutoglowShortcut,
+    'link shortcuts': LinkShortcuts,
+    'compact wifi button': CompactWifiButton,
 };
 
 export default class MinimalDesktopExtension extends Extension {
