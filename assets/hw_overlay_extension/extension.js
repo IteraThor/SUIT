@@ -18,6 +18,10 @@ const VIRTUAL_IFACES = /^(lo|docker|veth|virbr|br-|waydroid|lxc|podman|cni|flann
 const UPDATE_CHECK_S = 6 * 60 * 60;
 // A second tap within this long confirms an update, which restarts Autodarts
 const UPDATE_CONFIRM_MS = 4000;
+// Autodarts downloads, installs and restarts before answering the apply request, so a lost
+// reply is checked against the running version this often, for this long
+const UPDATE_VERIFY_S = 3;
+const UPDATE_VERIFY_MAX_S = 120;
 // Camera tiles shown even when Autodarts reports fewer (or none): the setup has three
 const MIN_CAM_TILES = 3;
 const AUTODARTS_CONFIG = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'autodarts', 'config.toml']);
@@ -258,6 +262,11 @@ function setButtonColor(actor, cls) {
         actor.add_style_class_name(cls);
 }
 
+// 2.1.0+ nests the version under "status"; 2.0.x has it at the top level
+function adVersion(data) {
+    return String(data?.status?.version ?? data?.version ?? '').trim().replace(/^v/, '');
+}
+
 function capitalize(text) {
     const t = String(text);
     return t.charAt(0).toUpperCase() + t.slice(1);
@@ -289,6 +298,7 @@ export default class HwOverlayExtension extends Extension {
         this._addrsAt = 0;
         this._addrsBusy = false;
         this._updateArmed = false;
+        this._updating = false;
         this._cancellable = new Gio.Cancellable();
         this._config = loadConfig();
         this._lastAd = undefined;
@@ -312,7 +322,7 @@ export default class HwOverlayExtension extends Extension {
             GLib.source_remove(this._reloadId);
             this._reloadId = 0;
         }
-        for (const id of ['_checkFirstId', '_checkId', '_armId']) {
+        for (const id of ['_checkFirstId', '_checkId', '_armId', '_verifyId']) {
             if (this[id]) {
                 GLib.source_remove(this[id]);
                 this[id] = 0;
@@ -574,15 +584,60 @@ export default class HwOverlayExtension extends Extension {
             this._armId = 0;
         }
         this._updateArmed = false;
+        this._updating = true;
         btn.label = 'Updating…';
+        const from = adVersion(this._lastAd);
         this._adRequest('POST', '/api/update/apply', status => {
-            if (status === Soup.Status.OK || status === Soup.Status.ACCEPTED) {
+            if (status >= 200 && status < 300) {
+                this._updating = false;
                 this._notify('Autodarts is installing its update and will restart.');
+            } else if (status === 0) {
+                // No reply: Autodarts usually restarted on the new version mid-request
+                this._verifyUpdate(from);
             } else {
-                this._notify('Could not start the Autodarts update.');
-                this._renderAutodarts(this._lastAd);
+                this._updateFailed();
             }
         }, this._dumpSession);
+    }
+
+    // Read /api/system until the version changes; only give up after UPDATE_VERIFY_MAX_S
+    _verifyUpdate(from) {
+        let waited = 0;
+        this._verifyId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, UPDATE_VERIFY_S, () => {
+            waited += UPDATE_VERIFY_S;
+            this._adRequest('GET', '/api/system', (status, bytes) => {
+                if (!this._updating)
+                    return;
+                let now = '';
+                try {
+                    if (status === Soup.Status.OK)
+                        now = adVersion(JSON.parse(decoder.decode(bytes.get_data())));
+                } catch (e) {}
+                if (now && now !== from) {
+                    this._stopVerify();
+                    this._updating = false;
+                    this._notify(`Autodarts was updated to v${now}.`);
+                    this._pollAutodarts();
+                } else if (waited >= UPDATE_VERIFY_MAX_S) {
+                    this._stopVerify();
+                    this._updateFailed();
+                }
+            });
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _stopVerify() {
+        if (this._verifyId) {
+            GLib.source_remove(this._verifyId);
+            this._verifyId = 0;
+        }
+    }
+
+    _updateFailed() {
+        this._updating = false;
+        this._notify('Could not start the Autodarts update.');
+        this._renderAutodarts(this._lastAd);
     }
 
     _onToggle() {
@@ -907,7 +962,7 @@ export default class HwOverlayExtension extends Extension {
                 [text, cls] = [capitalize(data.turn?.status ?? data.state?.status ?? 'running'), 'suit-hwmon-ok'];
             ad.pill.text = text;
             setLevel(ad.pill, cls);
-            const version = data?.status?.version ?? data?.version ?? '';
+            const version = adVersion(data);
             ad.version.text = version ? `v${String(version).replace(/^v/, '')}` : '';
         }
 
@@ -928,8 +983,8 @@ export default class HwOverlayExtension extends Extension {
             }
         }
 
-        if (ad.update && !this._updateArmed) {
-            const version = String(data?.status?.updateAvailable ?? '').trim().replace(/^v/, '');
+        if (ad.update && !this._updateArmed && !this._updating) {
+            const version = String(data?.status?.updateAvailable ?? data?.updateAvailable ?? '').trim().replace(/^v/, '');
             ad.update.visible = version !== '';
             ad.update.label = `Update to v${version}`;
         }

@@ -374,9 +374,11 @@ def fetch_system_telemetry(config_path: Path | None = None, host: str = DEFAULT_
         with urllib.request.urlopen(req, timeout=1.0) as resp:
             sys_json = json.loads(resp.read().decode("utf-8"))
             data["online"] = True
-            ver = sys_json.get("version", "2.0.0")
+            # 2.1.0+ nests these under "status"; 2.0.x has them at the top level
+            st_info = sys_json.get("status") or {}
+            ver = st_info.get("version") or sys_json.get("version") or "2.0.0"
             data["version"] = f"v{ver}" if not str(ver).startswith("v") else str(ver)
-            data["update_available"] = sys_json.get("updateAvailable", "")
+            data["update_available"] = st_info.get("updateAvailable") or sys_json.get("updateAvailable") or ""
             data["blocker"] = sys_json.get("blocker", "")
 
             st = sys_json.get("state", {})
