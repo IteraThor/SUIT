@@ -20,6 +20,20 @@ DRACUT_CONF = Path("/etc/dracut.conf.d/90-suit-fast-boot.conf")
 # The graphics driver (i915 here: ~2 s) only loads in the initrd so the splash can draw;
 # without these modules the root disk mounts as soon as it appears.
 DRACUT_CONF_TEXT = '# Written by SUIT Fast Boot\nomit_dracutmodules+=" plymouth drm "\n'
+# Only this machine's drivers, and none of the modules a plain unencrypted disk never needs.
+# Without the btrfs module the initqueue (and its wait for every USB camera to finish probing)
+# drops out, so the root disk mounts the moment it appears: about 1.3 s on the dev rig.
+SLIM_CONF = Path("/etc/dracut.conf.d/91-suit-slim-initrd.conf")
+SLIM_OMIT = ("i18n", "memstrack", "prefixdevname", "systemd-battery-check", "systemd-pcrphase",
+             "tpm2-tss", "crypt")
+FIPS_MODULES = ("fips", "fips-crypto-policies", "nss-softokn", "openssl")
+FIPS_ENABLED = Path("/proc/sys/crypto/fips_enabled")
+SYS_BTRFS = Path("/sys/fs/btrfs")
+# Login only needs NetworkManager to have started because systemd-user-sessions is ordered
+# after network.target; a copy without that ordering lets GDM start about 1.2 s sooner.
+USER_SESSIONS_UNIT = "systemd-user-sessions.service"
+USER_SESSIONS_SRC = Path("/usr/lib/systemd/system") / USER_SESSIONS_UNIT
+USER_SESSIONS_OVERRIDE = Path("/etc/systemd/system") / USER_SESSIONS_UNIT
 
 
 @dataclass(frozen=True)
@@ -27,9 +41,11 @@ class Tweak:
     id: str
     title: str
     summary: str
-    kind: str = "units"            # "units", "grub" or "dracut"
+    kind: str = "units"            # "units", "grub", "dracut" or "unit_override"
     system_units: tuple = ()       # disabled, only if enabled now
+    masked_units: tuple = ()       # static or D-Bus activated, so only a mask stops them
     user_units: tuple = ()         # masked for the user session
+    blame_units: tuple = ()        # measured for the estimate besides system_units
     default_s: float = 0.2         # estimate when the last boot gives nothing to measure
     blocks_login: bool = False     # on the critical path to the desktop, not just background load
     recommended: bool = True
@@ -52,6 +68,16 @@ TWEAKS = [
           "Stop network storage services that nothing here uses.",
           system_units=("iscsi-starter.service", "iscsi-onboot.service", "iscsid.socket", "iscsiuio.socket"),
           default_s=0.3, blocks_login=True),
+    Tweak("login_network", "Login Before Network",
+          "Start the desktop as soon as the system is up instead of after NetworkManager has started.",
+          kind="unit_override", blame_units=("NetworkManager.service",), default_s=1.2, blocks_login=True,
+          recommended=False,
+          warning="Replaces a system file. Turn off before upgrading to a new Fedora release."),
+    Tweak("slim_initrd", "Slim Boot Image",
+          "Only this PC's drivers in the early boot image, and no waiting for USB devices before the disk mounts.",
+          kind="dracut", blame_units=("dracut-initqueue.service",), default_s=1.5, blocks_login=True,
+          recommended=False,
+          warning="Rebuilds the boot image. If this disk is moved to another PC, turn it off first."),
     Tweak("boot_menu", "Hide Boot Menu",
           "Skip the boot menu countdown. Hold Shift during boot to get it back.",
           kind="grub", default_s=1.0, blocks_login=True),
@@ -69,6 +95,25 @@ TWEAKS = [
     Tweak("rsyslog", "Duplicate System Log",
           "Turn off rsyslog. The system journal keeps every log anyway.",
           system_units=("rsyslog.service",), default_s=0.5),
+    Tweak("splash_wait", "Don't Wait for Boot Splash",
+          "Stop the boot from waiting for the logo animation to end.",
+          masked_units=("plymouth-quit-wait.service",), default_s=0.3),
+    Tweak("software_updates", "Background Software Updates",
+          "GNOME Software and PackageKit stop checking for updates after every login.",
+          masked_units=("packagekit.service",), user_units=("gnome-software.service",), default_s=0.5,
+          warning="GNOME Software can no longer install or update apps. SUIT and dnf still can."),
+    Tweak("desktop_helpers", "Unused Desktop Helpers",
+          "Calendar reminders, smart card, mobile broadband, print notices, USB protection and the Kerberos cache.",
+          system_units=("pcscd.socket", "sssd-kcm.socket"),
+          user_units=("evolution-alarm-notify.service", "org.gnome.SettingsDaemon.Smartcard.service",
+                      "org.gnome.SettingsDaemon.Wwan.service",
+                      "org.gnome.SettingsDaemon.PrintNotifications.service",
+                      "org.gnome.SettingsDaemon.UsbProtection.service"),
+          default_s=0.5),
+    Tweak("storage_monitors", "LVM and RAID Monitors",
+          "Volume manager monitors and the weekly RAID check, for disks that use neither.",
+          system_units=("lvm2-monitor.service", "dm-event.socket", "lvm2-lvmpolld.socket", "raid-check.timer"),
+          default_s=0.1, blocks_login=True),
     Tweak("splash", "Skip Boot Splash",
           "Leave the logo animation and graphics driver out of the early boot image so the disk mounts sooner.",
           kind="dracut", default_s=1.5, blocks_login=True, recommended=False,
@@ -81,6 +126,10 @@ TWEAKS = [
           "The network only starts after the firewall is up, and login waits for the network.",
           system_units=("firewalld.service",), default_s=1.5, blocks_login=True, recommended=False,
           warning="Less secure. Only on a trusted home network behind a router."),
+    Tweak("thermald", "Intel Thermal Daemon",
+          "Desktop PCs are cooled by the BIOS fan control. thermald mostly matters on laptops.",
+          system_units=("thermald.service",), default_s=0.5, recommended=False,
+          warning="Fanless mini PCs and laptops may run hotter before they throttle."),
 ]
 TWEAKS_BY_ID = {t.id: t for t in TWEAKS}
 
@@ -162,6 +211,70 @@ class BootService:
             return "crypt" in cls._run(["lsblk", "-rno", "TYPE"]).stdout.split()
         except Exception:
             return True
+
+    @classmethod
+    def _lvm_or_raid_in_use(cls) -> bool:
+        try:
+            types = cls._run(["lsblk", "-rno", "TYPE"]).stdout.split()
+        except Exception:
+            return True
+        return any(t == "lvm" or t.startswith(("raid", "md")) for t in types)
+
+    @staticmethod
+    def _btrfs_multi_device() -> bool:
+        """True if any mounted btrfs spans several disks; those need the btrfs dracut module to assemble."""
+        if not SYS_BTRFS.is_dir():
+            return False
+        try:
+            return any(len(list((fs / "devices").iterdir())) > 1
+                       for fs in SYS_BTRFS.iterdir() if (fs / "devices").is_dir())
+        except OSError:
+            return True  # can't tell, keep the module
+
+    @staticmethod
+    def _fips_on() -> bool:
+        try:
+            if FIPS_ENABLED.read_text().strip() == "1":
+                return True
+        except OSError:
+            pass
+        try:
+            return "fips=1" in Path("/proc/cmdline").read_text().split()
+        except OSError:
+            return False
+
+    @classmethod
+    def _slim_text(cls) -> str:
+        omit = list(SLIM_OMIT)
+        if not cls._fips_on():
+            omit += FIPS_MODULES
+        if not cls._btrfs_multi_device():
+            omit.append("btrfs")
+        return ('# Written by SUIT Fast Boot\nhostonly="yes"\nhostonly_mode="strict"\n'
+                f'omit_dracutmodules+=" {" ".join(omit)} "\n')
+
+    @staticmethod
+    def _user_sessions_text() -> str | None:
+        """The packaged unit without network.target in After=, or None if there is nothing to drop."""
+        try:
+            text = USER_SESSIONS_SRC.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        lines, changed = [], False
+        for line in text.splitlines():
+            if line.startswith("After=") and "network.target" in line.split("=", 1)[1].split():
+                kept = [u for u in line.split("=", 1)[1].split() if u != "network.target"]
+                line, changed = "After=" + " ".join(kept), True
+            lines.append(line)
+        if not changed:
+            return None
+        return "# Written by SUIT Fast Boot: login no longer waits for network.target\n" + "\n".join(lines) + "\n"
+
+    @classmethod
+    def _dracut_target(cls, tweak: Tweak) -> tuple[Path, str]:
+        if tweak.id == "slim_initrd":
+            return SLIM_CONF, cls._slim_text()
+        return DRACUT_CONF, DRACUT_CONF_TEXT
 
     @classmethod
     def _grub_fastboot_set(cls) -> bool:
@@ -269,7 +382,7 @@ class BootService:
 
     @classmethod
     def _estimate(cls, tweak: Tweak, blame: dict[str, float]) -> float:
-        measured = sum(blame.get(u, 0.0) for u in tweak.system_units)
+        measured = sum(blame.get(u, 0.0) for u in tweak.system_units + tweak.blame_units)
         return round(measured, 1) if measured >= 0.1 else tweak.default_s
 
     # ------------------------------------------------------------------ tweaks
@@ -280,12 +393,22 @@ class BootService:
             return "iSCSI storage is set up on this machine."
         if tweak.id == "remote_fs" and cls._network_mounts_in_fstab():
             return "Network drives are listed in /etc/fstab."
-        if tweak.kind == "dracut" and cls._disk_encrypted():
+        if tweak.id == "splash" and cls._disk_encrypted():
             return "Disk encryption needs the boot splash for its password prompt."
+        if tweak.id == "slim_initrd" and cls._disk_encrypted():
+            return "Disk encryption needs the full boot image."
+        if tweak.id == "storage_monitors" and cls._lvm_or_raid_in_use():
+            return "LVM or RAID storage is set up on this machine."
+        if tweak.kind == "unit_override":
+            if USER_SESSIONS_OVERRIDE.exists():
+                return "Already active on this system."
+            if cls._user_sessions_text() is None:
+                return "Already off on this system."
         if tweak.kind == "grub" and cls._grub_fastboot_set():
             return "Already active on this system."
         if tweak.kind == "units":
             active = [u for u in tweak.system_units if cls._unit_state(u) == "enabled"]
+            active += [u for u in tweak.masked_units if cls._unit_state(u) not in ("masked", "not-found")]
             active += [u for u in tweak.user_units if cls._unit_state(u, user=True) not in ("masked", "not-found")]
             if not active:
                 return "Already off on this system."
@@ -319,6 +442,14 @@ class BootService:
                 entry["system_units"].append(unit)
             else:
                 failed.append(unit)
+        for unit in tweak.masked_units:
+            if unit in entry.setdefault("masked_units", []) or \
+                    cls._unit_state(unit) in ("masked", "not-found"):
+                continue
+            if cls._run(["sudo", "-n", "systemctl", "mask", unit]).returncode == 0:
+                entry["masked_units"].append(unit)
+            else:
+                failed.append(unit)
         for unit in tweak.user_units:
             if unit in entry.setdefault("user_units", []) or \
                     cls._unit_state(unit, user=True) in ("masked", "not-found"):
@@ -333,21 +464,34 @@ class BootService:
             else:
                 failed.append("boot menu timeout")
         if tweak.kind == "dracut" and not entry.get("dracut_conf"):
-            wrote = cls._run(["sudo", "-n", "tee", str(DRACUT_CONF)], input=DRACUT_CONF_TEXT).returncode == 0
+            conf, text = cls._dracut_target(tweak)
+            wrote = cls._run(["sudo", "-n", "tee", str(conf)], input=text).returncode == 0
             if wrote and cls._run(["sudo", "-n", "dracut", "-f"]).returncode == 0:
                 entry["dracut_conf"] = True
             else:
-                cls._run(["sudo", "-n", "rm", "-f", str(DRACUT_CONF)])
+                cls._run(["sudo", "-n", "rm", "-f", str(conf)])
                 failed.append("boot image rebuild")
+        if tweak.kind == "unit_override" and not entry.get("unit_override"):
+            text = cls._user_sessions_text()
+            wrote = text is not None and cls._run(
+                ["sudo", "-n", "tee", str(USER_SESSIONS_OVERRIDE)], input=text).returncode == 0
+            if wrote and cls._run(["sudo", "-n", "systemctl", "daemon-reload"]).returncode == 0:
+                entry["unit_override"] = True
+            else:
+                cls._run(["sudo", "-n", "rm", "-f", str(USER_SESSIONS_OVERRIDE)])
+                failed.append(USER_SESSIONS_UNIT)
         return failed
 
     @classmethod
-    def _revert(cls, entry: dict) -> dict:
+    def _revert(cls, tweak: Tweak, entry: dict) -> dict:
         """Undo what entry recorded; return what is still applied (empty when fully reverted)."""
         remaining = {}
         for unit in entry.get("system_units", []):
             if cls._run(["sudo", "-n", "systemctl", "enable", unit]).returncode != 0:
                 remaining.setdefault("system_units", []).append(unit)
+        for unit in entry.get("masked_units", []):
+            if cls._run(["sudo", "-n", "systemctl", "unmask", unit]).returncode != 0:
+                remaining.setdefault("masked_units", []).append(unit)
         for unit in entry.get("user_units", []):
             if cls._run(["systemctl", "--user", "unmask", unit]).returncode != 0:
                 remaining.setdefault("user_units", []).append(unit)
@@ -355,9 +499,14 @@ class BootService:
             if cls._run(["sudo", "-n", "grub2-editenv", "-", "unset", "fastboot"]).returncode != 0:
                 remaining["grub_fastboot"] = True
         if entry.get("dracut_conf"):
-            removed = cls._run(["sudo", "-n", "rm", "-f", str(DRACUT_CONF)]).returncode == 0
+            conf = SLIM_CONF if tweak.id == "slim_initrd" else DRACUT_CONF
+            removed = cls._run(["sudo", "-n", "rm", "-f", str(conf)]).returncode == 0
             if not (removed and cls._run(["sudo", "-n", "dracut", "-f"]).returncode == 0):
                 remaining["dracut_conf"] = True
+        if entry.get("unit_override"):
+            removed = cls._run(["sudo", "-n", "rm", "-f", str(USER_SESSIONS_OVERRIDE)]).returncode == 0
+            if not (removed and cls._run(["sudo", "-n", "systemctl", "daemon-reload"]).returncode == 0):
+                remaining["unit_override"] = True
         return remaining
 
     @classmethod
@@ -380,7 +529,7 @@ class BootService:
         entry = state["tweaks"].get(tweak_id)
         if entry is None:
             return True, tr("{title} already off.").format(title=tr(tweak.title))
-        remaining = cls._revert(entry)
+        remaining = cls._revert(tweak, entry)
         if remaining:
             # Keep what is still applied so the switch stays on and a retry finishes the job
             state["tweaks"][tweak_id] = {**remaining, "saved_s": entry.get("saved_s", tweak.default_s)}

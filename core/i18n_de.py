@@ -1213,6 +1213,37 @@ DE = {
         "Baut das Boot-Image neu (etwa eine Minute). Bis zur Anmeldung bleibt der Bildschirm schwarz oder zeigt Text.",
     "Bluetooth keyboards, controllers and speakers stop working.": "Bluetooth-Tastaturen, Controller und Lautsprecher funktionieren dann nicht mehr.",
     "Less secure. Only on a trusted home network behind a router.": "Weniger sicher. Nur in einem vertrauenswürdigen Heimnetz hinter einem Router.",
+    "Login Before Network": "Anmeldung vor dem Netzwerk",
+    "Start the desktop as soon as the system is up instead of after NetworkManager has started.":
+        "Den Desktop starten, sobald das System bereit ist, statt erst nach dem Start von NetworkManager.",
+    "Replaces a system file. Turn off before upgrading to a new Fedora release.":
+        "Ersetzt eine Systemdatei. Vor einem Upgrade auf eine neue Fedora-Version ausschalten.",
+    "Slim Boot Image": "Schlankes Boot-Image",
+    "Only this PC's drivers in the early boot image, and no waiting for USB devices before the disk mounts.":
+        "Nur die Treiber dieses PCs im frühen Boot-Image und kein Warten auf USB-Geräte, bevor die Festplatte eingebunden wird.",
+    "Rebuilds the boot image. If this disk is moved to another PC, turn it off first.":
+        "Baut das Boot-Image neu. Vorher ausschalten, wenn diese Festplatte in einen anderen PC kommt.",
+    "Don't Wait for Boot Splash": "Nicht auf den Startbildschirm warten",
+    "Stop the boot from waiting for the logo animation to end.":
+        "Der Start wartet nicht mehr, bis die Logo-Animation beendet ist.",
+    "Background Software Updates": "Software-Updates im Hintergrund",
+    "GNOME Software and PackageKit stop checking for updates after every login.":
+        "GNOME Software und PackageKit suchen nicht mehr nach jeder Anmeldung nach Updates.",
+    "GNOME Software can no longer install or update apps. SUIT and dnf still can.":
+        "GNOME Software kann dann keine Apps mehr installieren oder aktualisieren. SUIT und dnf können es weiterhin.",
+    "Unused Desktop Helpers": "Ungenutzte Desktop-Helfer",
+    "Calendar reminders, smart card, mobile broadband, print notices, USB protection and the Kerberos cache.":
+        "Kalendererinnerungen, Smartcard, Mobilfunk, Druckhinweise, USB-Schutz und der Kerberos-Cache.",
+    "LVM and RAID Monitors": "LVM- und RAID-Überwachung",
+    "Volume manager monitors and the weekly RAID check, for disks that use neither.":
+        "Überwachung der Volume-Verwaltung und die wöchentliche RAID-Prüfung, für Festplatten ohne beides.",
+    "Intel Thermal Daemon": "Intel-Thermal-Daemon",
+    "Desktop PCs are cooled by the BIOS fan control. thermald mostly matters on laptops.":
+        "Desktop-PCs werden über die Lüftersteuerung des BIOS gekühlt. thermald ist vor allem für Laptops wichtig.",
+    "Fanless mini PCs and laptops may run hotter before they throttle.":
+        "Lüfterlose Mini-PCs und Laptops können heißer werden, bevor sie drosseln.",
+    "Disk encryption needs the full boot image.": "Die Festplattenverschlüsselung braucht das vollständige Boot-Image.",
+    "LVM or RAID storage is set up on this machine.": "Auf diesem Rechner ist LVM- oder RAID-Speicher eingerichtet.",
     "iSCSI storage is set up on this machine.": "Auf diesem Rechner ist iSCSI-Speicher eingerichtet.",
     "Disk encryption needs the boot splash for its password prompt.": "Die Festplattenverschlüsselung braucht den Startbildschirm für die Passwortabfrage.",
     "Already active on this system.": "Auf diesem System bereits aktiv.",
