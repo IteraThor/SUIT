@@ -1282,6 +1282,15 @@ DE = {
     "Turn off the full-screen logo": "Vollbild-Logo ausschalten",
     "Often called Quiet Boot or Full Screen Logo.": "Heißt oft Quiet Boot oder Full Screen Logo.",
     "Turn off unused onboard devices": "Unbenutzte Onboard-Geräte ausschalten",
+    "Turn off booting from USB": "Booten von USB ausschalten",
+    "The firmware then stops checking every USB device (cameras, hubs, touchscreen) for something to boot.":
+        "Die Firmware prüft dann nicht mehr jedes USB-Gerät (Kameras, Hubs, Touchscreen) auf etwas Bootfähiges.",
+    "Turn off Intel AMT remote management": "Intel-AMT-Fernverwaltung ausschalten",
+    "Business PCs with Intel vPro start the management engine's network features at every power-on.":
+        "Business-PCs mit Intel vPro starten bei jedem Einschalten die Netzwerkfunktionen der Management Engine.",
+    "Advanced > Boot Options > untick USB Storage Boot.": "Advanced > Boot Options > USB Storage Boot abwählen.",
+    "Advanced > Remote Management Options > Active Management (AMT) off.":
+        "Advanced > Remote Management Options > Active Management (AMT) ausschalten.",
     "Serial ports, card readers or a second network card each add a little start-up time.":
         "Serielle Schnittstellen, Kartenleser oder eine zweite Netzwerkkarte verlängern den Start jeweils ein wenig.",
 

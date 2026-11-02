@@ -156,6 +156,10 @@ BIOS_STEPS = [
      "Often called Quiet Boot or Full Screen Logo."),
     ("devices", "Turn off unused onboard devices",
      "Serial ports, card readers or a second network card each add a little start-up time."),
+    ("usb_boot", "Turn off booting from USB",
+     "The firmware then stops checking every USB device (cameras, hubs, touchscreen) for something to boot."),
+    ("amt", "Turn off Intel AMT remote management",
+     "Business PCs with Intel vPro start the management engine's network features at every power-on."),
 ]
 VENDOR_HINTS = {
     "hp": {
@@ -166,6 +170,8 @@ VENDOR_HINTS = {
         "legacy": "Advanced > Secure Boot Configuration > Legacy Support Disable.",
         "logo": None,
         "devices": "Advanced > Built-In Device Options and Port Options.",
+        "usb_boot": "Advanced > Boot Options > untick USB Storage Boot.",
+        "amt": "Advanced > Remote Management Options > Active Management (AMT) off.",
     },
 }
 
@@ -599,7 +605,9 @@ class BootService:
         findings = []
         efi = cls._efi_boot_entries() if EFI_DIR.exists() else {}
         entries = efi.get("entries", {})
-        network = [name for name, active in entries.values()
+        # Only entries in the boot order are tried; HP keeps the NIC entries active even with PXE off
+        tried = [entries[i] for i in efi.get("order", []) if i in entries]
+        network = [name for name, active in tried
                    if active and re.search(r"\b(ipv4|ipv6|pxe|network)\b", name, re.I)]
         if network:
             findings.append("Network (PXE) boot is on, so the network card is prepared every start.")
