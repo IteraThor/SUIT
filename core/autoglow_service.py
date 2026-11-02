@@ -39,7 +39,8 @@ USER_DATA = ["config.json", "config.json.bak", "game_flows.json", "game_flows.js
 # checkout is someone's own work
 RUNTIME_FILES = ["venv", ".venv", "__pycache__", "*.pyc", "*.log", "*.log.*", "config.json", "config.json.*",
                  "game_flows.json", "game_flows.json.*", "presets", "studio", "backups", "scratch",
-                 "chrome_extension.key", "online_signals.jsonl", ".sync_status.json", "build", "dist"]
+                 "chrome_extension.key", "online_signals.jsonl", ".sync_status.json", "build", "dist",
+                 "target"]  # rust_core/target: setup.sh's build of the Rust LED engine
 # The new version is cloned here first, so a failed download leaves an older install untouched
 STAGING_DIR = DEFAULT_DIR.with_name(".Autoglow-2.suit-new")
 BACKUP_ROOT = Path.home() / ".local" / "share" / "suit" / "autoglow-backups"
