@@ -34,6 +34,9 @@ SYS_BTRFS = Path("/sys/fs/btrfs")
 USER_SESSIONS_UNIT = "systemd-user-sessions.service"
 USER_SESSIONS_SRC = Path("/usr/lib/systemd/system") / USER_SESSIONS_UNIT
 USER_SESSIONS_OVERRIDE = Path("/etc/systemd/system") / USER_SESSIONS_UNIT
+# GNOME Software only starts PackageKit through its packagekit plugin. Fedora 44 ships the dnf5
+# plugin instead, which talks to dnf5daemon-server, so there masking PackageKit saves nothing.
+GS_PLUGIN_DIRS = (Path("/usr/lib64/gnome-software"), Path("/usr/lib/gnome-software"))
 
 
 @dataclass(frozen=True)
@@ -99,9 +102,14 @@ TWEAKS = [
           "Stop the boot from waiting for the logo animation to end.",
           masked_units=("plymouth-quit-wait.service",), default_s=0.3),
     Tweak("software_updates", "Background Software Updates",
-          "GNOME Software and PackageKit stop checking for updates after every login.",
-          masked_units=("packagekit.service",), user_units=("gnome-software.service",), default_s=0.5,
+          "PackageKit stops checking for updates after every login.",
+          masked_units=("packagekit.service",), default_s=0.3,
           warning="GNOME Software can no longer install or update apps. SUIT and dnf still can."),
+    # Masking the user unit also stops the app itself: its launcher is D-Bus activated through this unit
+    Tweak("gnome_software", "GNOME Software App",
+          "Stop GNOME Software (and the firmware updater it pulls in) from starting in the background after login.",
+          user_units=("gnome-software.service",), default_s=0.5, recommended=False,
+          warning="The GNOME Software app can't be opened while this is on. Turn this off again to use it."),
     Tweak("desktop_helpers", "Unused Desktop Helpers",
           "Calendar reminders, smart card, mobile broadband, print notices, USB protection and the Kerberos cache.",
           system_units=("pcscd.socket", "sssd-kcm.socket"),
@@ -276,6 +284,13 @@ class BootService:
             return None
         return "# Written by SUIT Fast Boot: login no longer waits for network.target\n" + "\n".join(lines) + "\n"
 
+    @staticmethod
+    def _gnome_software_uses_packagekit() -> bool:
+        plugins = [p.name for d in GS_PLUGIN_DIRS if d.is_dir()
+                   for p in d.glob("plugins-*/libgs_plugin_*.so")]
+        # No GNOME Software plugins found: can't tell what starts PackageKit, so keep the tweak
+        return not plugins or "libgs_plugin_packagekit.so" in plugins
+
     @classmethod
     def _dracut_target(cls, tweak: Tweak) -> tuple[Path, str]:
         if tweak.id == "slim_initrd":
@@ -304,7 +319,17 @@ class BootService:
             return {"tweaks": {}}
         if "tweaks" not in state:
             state = BootService._migrate_v1(state)
+        BootService._split_gnome_software(state["tweaks"])
         return state
+
+    @staticmethod
+    def _split_gnome_software(tweaks: dict):
+        """software_updates used to mask gnome-software.service too; that mask now has its own switch."""
+        old = tweaks.get("software_updates", {})
+        if "gnome-software.service" in old.get("user_units", []) and "gnome_software" not in tweaks:
+            old["user_units"].remove("gnome-software.service")
+            tweaks["gnome_software"] = {"user_units": ["gnome-software.service"],
+                                        "saved_s": TWEAKS_BY_ID["gnome_software"].default_s}
 
     @staticmethod
     def _migrate_v1(old: dict) -> dict:
@@ -405,6 +430,8 @@ class BootService:
             return "Disk encryption needs the full boot image."
         if tweak.id == "storage_monitors" and cls._lvm_or_raid_in_use():
             return "LVM or RAID storage is set up on this machine."
+        if tweak.id == "software_updates" and not cls._gnome_software_uses_packagekit():
+            return "GNOME Software uses dnf5 here, so PackageKit doesn't start after login."
         if tweak.kind == "unit_override":
             if USER_SESSIONS_OVERRIDE.exists():
                 return "Already active on this system."
@@ -421,8 +448,55 @@ class BootService:
         return ""
 
     @classmethod
+    def _still_applied(cls, tweak: Tweak, entry: dict) -> dict | None:
+        """Drop the recorded changes that were undone outside SUIT (by hand or by a package update), so the
+        switch shows the real state and turning it on again redoes them. None when nothing is left."""
+        kept = {"saved_s": entry["saved_s"]} if "saved_s" in entry else {}
+        # A failed is-enabled reads as not-found or unknown: keep the record rather than lose track of a change
+        keep_masked = ("masked", "not-found", "unknown")
+        system = [u for u in entry.get("system_units", []) if cls._unit_state(u) != "enabled"]
+        masked = [u for u in entry.get("masked_units", []) if cls._unit_state(u) in keep_masked]
+        user = [u for u in entry.get("user_units", []) if cls._unit_state(u, user=True) in keep_masked]
+        for key, units in (("system_units", system), ("masked_units", masked), ("user_units", user)):
+            if units:
+                kept[key] = units
+        if entry.get("grub_fastboot"):
+            kept["grub_fastboot"] = True  # grubenv needs root to read; revert copes with it being unset
+        if entry.get("dracut_conf") and cls._exists(cls._dracut_target(tweak)[0]):
+            kept["dracut_conf"] = True
+        if entry.get("unit_override") and cls._exists(USER_SESSIONS_OVERRIDE):
+            kept["unit_override"] = True
+        return kept if set(kept) - {"saved_s"} else None
+
+    @classmethod
+    def _exists(cls, path: Path) -> bool:
+        return cls._run(["test", "-e", str(path)]).returncode == 0
+
+    @classmethod
+    def _reconcile(cls, state: dict, tweak_ids) -> bool:
+        """Bring the recorded tweaks in tweak_ids in line with the system; True if the state changed."""
+        changed = False
+        for tweak_id in tweak_ids:
+            entry = state["tweaks"].get(tweak_id)
+            if entry is None or tweak_id not in TWEAKS_BY_ID:
+                continue
+            kept = cls._still_applied(TWEAKS_BY_ID[tweak_id], entry)
+            if kept != entry:
+                changed = True
+                logger.info(f"Fast Boot tweak {tweak_id} was partly undone outside SUIT, now: {kept}")
+                if kept is None:
+                    del state["tweaks"][tweak_id]
+                else:
+                    state["tweaks"][tweak_id] = kept
+        return changed
+
+    @classmethod
     def get_tweaks(cls, state_path: Path | None = None) -> list[dict]:
-        applied = cls._load_state(state_path or DEFAULT_STATE_PATH)["tweaks"]
+        path = state_path or DEFAULT_STATE_PATH
+        state = cls._load_state(path)
+        if cls._reconcile(state, list(state["tweaks"])):
+            cls._save_state(state, path)
+        applied = state["tweaks"]
         blame = cls._blame()
         rows = []
         for t in TWEAKS:
@@ -520,6 +594,8 @@ class BootService:
         tweak = TWEAKS_BY_ID[tweak_id]
         path = state_path or DEFAULT_STATE_PATH
         state = cls._load_state(path)
+        if cls._reconcile(state, [tweak_id]):
+            cls._save_state(state, path)
 
         if enabled:
             estimate = cls._estimate(tweak, cls._blame())

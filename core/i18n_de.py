@@ -1227,8 +1227,13 @@ DE = {
     "Stop the boot from waiting for the logo animation to end.":
         "Der Start wartet nicht mehr, bis die Logo-Animation beendet ist.",
     "Background Software Updates": "Software-Updates im Hintergrund",
-    "GNOME Software and PackageKit stop checking for updates after every login.":
-        "GNOME Software und PackageKit suchen nicht mehr nach jeder Anmeldung nach Updates.",
+    "PackageKit stops checking for updates after every login.":
+        "PackageKit sucht nicht mehr nach jeder Anmeldung nach Updates.",
+    "GNOME Software App": "GNOME-Software-App",
+    "Stop GNOME Software (and the firmware updater it pulls in) from starting in the background after login.":
+        "GNOME Software (und der mitgestartete Firmware-Updater) startet nach der Anmeldung nicht mehr im Hintergrund.",
+    "The GNOME Software app can't be opened while this is on. Turn this off again to use it.":
+        "Die App GNOME Software lässt sich nicht öffnen, solange dies an ist. Zum Benutzen wieder ausschalten.",
     "GNOME Software can no longer install or update apps. SUIT and dnf still can.":
         "GNOME Software kann dann keine Apps mehr installieren oder aktualisieren. SUIT und dnf können es weiterhin.",
     "Unused Desktop Helpers": "Ungenutzte Desktop-Helfer",
@@ -1244,6 +1249,8 @@ DE = {
         "Lüfterlose Mini-PCs und Laptops können heißer werden, bevor sie drosseln.",
     "Disk encryption needs the full boot image.": "Die Festplattenverschlüsselung braucht das vollständige Boot-Image.",
     "LVM or RAID storage is set up on this machine.": "Auf diesem Rechner ist LVM- oder RAID-Speicher eingerichtet.",
+    "GNOME Software uses dnf5 here, so PackageKit doesn't start after login.":
+        "GNOME Software nutzt hier dnf5, PackageKit startet nach der Anmeldung also gar nicht.",
     "iSCSI storage is set up on this machine.": "Auf diesem Rechner ist iSCSI-Speicher eingerichtet.",
     "Disk encryption needs the boot splash for its password prompt.": "Die Festplattenverschlüsselung braucht den Startbildschirm für die Passwortabfrage.",
     "Already active on this system.": "Auf diesem System bereits aktiv.",
