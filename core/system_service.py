@@ -119,6 +119,10 @@ class SystemService:
         return KeyringService.reset_keyring_to_blank.__func__(cls, keyring_path=keyring_path)
 
     @staticmethod
+    def keyring_uses_oo7() -> bool:
+        return KeyringService.uses_oo7()
+
+    @staticmethod
     def is_seahorse_installed() -> bool:
         return KeyringService.is_seahorse_installed()
 

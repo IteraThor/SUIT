@@ -168,6 +168,7 @@ class SystemView(Adw.NavigationPage):
         self.grp_system.add(self.row_blanking)
 
         # 4. GNOME Keyring Password Status
+        self._keyring_oo7 = SystemService.keyring_uses_oo7()
         self.row_keyring = Adw.ActionRow(
             title=tr("Keyring Password"),
             subtitle=tr("Unlock apps without password popups.")
@@ -418,7 +419,7 @@ class SystemView(Adw.NavigationPage):
                     kbox.set_halign(Gtk.Align.CENTER)
                     kbox.set_valign(Gtk.Align.CENTER)
                     kbox.append(Gtk.Image.new_from_icon_name("dialog-password-symbolic"))
-                    kbox.append(Gtk.Label(label=tr("Remove Password")))
+                    kbox.append(Gtk.Label(label=tr("Set Up") if self._keyring_oo7 else tr("Remove Password")))
                     self.btn_keyring_action.set_child(kbox)
                     self.btn_keyring_action.remove_css_class("secondary-btn")
                     self.btn_keyring_action.add_css_class("suggested-action")
@@ -666,7 +667,23 @@ class SystemView(Adw.NavigationPage):
     def _on_keyring_action_clicked(self, btn):
         is_blank = getattr(self, "_keyring_is_blank", False)
 
-        if is_blank:
+        if self._keyring_oo7:
+            if is_blank:
+                self.window.show_toast(tr("The keyring already unlocks automatically on boot."))
+                return
+            # oo7 (Fedora 45+) has no blank keyring: it unlocks with a password stored for it in the TPM
+            dialog = Adw.AlertDialog(
+                heading=tr("Unlock the Keyring on Boot?"),
+                body=tr(
+                    "SUIT stores a keyring password protected by this computer's TPM, so the keyring unlocks "
+                    "by itself after the automatic login.\n\n"
+                    "Saved entries are kept. If the keyring is locked now, it asks for its current password once."
+                )
+            )
+            dialog.add_response("cancel", tr("Cancel"))
+            dialog.add_response("reset", tr("Set Up"))
+            dialog.set_response_appearance("reset", Adw.ResponseAppearance.SUGGESTED)
+        elif is_blank:
             dialog = Adw.AlertDialog(
                 heading=tr("Reset Keyring to Blank Password?"),
                 body=tr(
