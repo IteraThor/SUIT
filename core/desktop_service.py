@@ -289,12 +289,38 @@ class DesktopService:
             if not f.is_file():
                 continue
             target = dest / f.name
+            if f.name == "metadata.json" and target.exists():
+                data = DesktopService._merged_metadata(f, target)
+                if data is not None:
+                    if target.read_bytes() != data:
+                        target.write_bytes(data)
+                        changed = True
+                    continue
             if not target.exists() or target.read_bytes() != f.read_bytes():
                 shutil.copy2(str(f), str(target))
                 changed = True
         if changed:
             logger.info("Shell extension files installed to %s", dest)
         return changed
+
+    @staticmethod
+    def _merged_metadata(src: Path, target: Path) -> bytes | None:
+        """The bundled metadata.json plus shell versions only the installed copy lists.
+
+        After an OS upgrade to a GNOME Shell newer than the bundled list, SUIT's repair adds that version to
+        the installed copy; keep it, or every start-up would switch the extension off again.
+        Returns None when the installed copy adds nothing (then the plain file is copied)."""
+        try:
+            new = json.loads(src.read_text(encoding="utf-8"))
+            old = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        bundled = [str(v) for v in new.get("shell-version", [])]
+        extra = [str(v) for v in old.get("shell-version", []) if str(v) not in bundled]
+        if not extra:
+            return None
+        new["shell-version"] = bundled + extra
+        return (json.dumps(new, indent=2) + "\n").encode("utf-8")
 
     @classmethod
     def install_suit_extensions(cls) -> None:

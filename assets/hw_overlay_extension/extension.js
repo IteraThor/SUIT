@@ -302,6 +302,22 @@ export default class HwOverlayExtension extends Extension {
         this._cancellable = new Gio.Cancellable();
         this._config = loadConfig();
         this._lastAd = undefined;
+        this._panelGone = false;
+        this._boxIds = [];
+
+        // GNOME Shell 51 destroys the panel on shutdown before the background group (and this box) is gone;
+        // the box's size notifications must not reach the destroyed panel then.
+        this._panelHeight = Main.panel.height;
+        this._panelHeightId = Main.panel.connect('notify::height', () => {
+            this._panelHeight = Main.panel.height;
+            this._reposition();
+        });
+        this._panelDestroyId = Main.panel.connect('destroy', () => {
+            this._panelHeightId = 0;
+            this._panelDestroyId = 0;
+            this._panelGone = true;
+            this._disconnectBox();
+        });
 
         this._buildUi();
         this._watchConfig();
@@ -339,6 +355,12 @@ export default class HwOverlayExtension extends Extension {
             Main.layoutManager.disconnect(this._monitorsId);
             this._monitorsId = 0;
         }
+        for (const id of ['_panelHeightId', '_panelDestroyId']) {
+            if (this[id] && !this._panelGone)
+                Main.panel.disconnect(this[id]);
+            this[id] = 0;
+        }
+        this._disconnectBox();
         this._box?.destroy();
         this._box = null;
         this._session = null;
@@ -386,6 +408,7 @@ export default class HwOverlayExtension extends Extension {
             return;
         const prevInterval = this._config.interval;
         this._config = loadConfig();
+        this._disconnectBox();
         this._box.destroy();
         this._buildUi();
         if (this._config.interval !== prevInterval)
@@ -426,9 +449,17 @@ export default class HwOverlayExtension extends Extension {
         this._box.visible = system.length > 0 || autodarts;
 
         Main.layoutManager._backgroundGroup.add_child(this._box);
-        this._box.connect('notify::width', () => this._reposition());
-        this._box.connect('notify::height', () => this._reposition());
+        this._boxIds = [
+            this._box.connect('notify::width', () => this._reposition()),
+            this._box.connect('notify::height', () => this._reposition()),
+        ];
         this._reposition();
+    }
+
+    _disconnectBox() {
+        for (const id of this._boxIds ?? [])
+            this._box?.disconnect(id);
+        this._boxIds = [];
     }
 
     _buildAutodarts() {
@@ -738,11 +769,11 @@ export default class HwOverlayExtension extends Extension {
 
     _reposition() {
         const mon = Main.layoutManager.primaryMonitor;
-        if (!this._box || !mon)
+        if (!this._box || !mon || this._panelGone)
             return;
         const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
         const margin = MARGIN * scale;
-        const panelHeight = Main.panel?.height ?? 0;
+        const panelHeight = this._panelHeight ?? 0;
         const [vertical, horizontal] = this._config.position.split('-');
         const x = horizontal === 'left' ? mon.x + margin : mon.x + mon.width - this._box.width - margin;
         const y = vertical === 'top' ? mon.y + panelHeight + margin : mon.y + mon.height - this._box.height - margin;
