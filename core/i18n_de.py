@@ -1343,4 +1343,101 @@ DE = {
         "Gespeichert. Der laufende Stream von Autodarts behält seine Qualität bis zum Neustart von Autodarts",
     "busy (not an Autodarts camera)": "belegt (keine Autodarts-Kamera)",
     "busy (no Autodarts image)": "belegt (kein Bild von Autodarts)",
+
+    # ------------------------------------------------------------------ repair after a system upgrade
+    "System Update Detected": "Systemupdate erkannt",
+    "Repairs Needed": "Reparatur nötig",
+    "Fix All": "Alles reparieren",
+    "{changes}\n\nThese SUIT features need repairs to work again:\n{list}":
+        "{changes}\n\nDiese SUIT-Funktionen müssen repariert werden, damit sie wieder funktionieren:\n{list}",
+    "A system update left these SUIT features broken:\n{list}":
+        "Nach einem Systemupdate funktionieren diese SUIT-Funktionen nicht mehr:\n{list}",
+    "Restart the computer to finish the repair after the system update.":
+        "Starte den Computer neu, um die Reparatur nach dem Systemupdate abzuschließen.",
+    "System Repair": "Systemreparatur",
+    "After the System Update": "Nach dem Systemupdate",
+    "Updated: {changes}. Some SUIT features need repairs to work again.":
+        "Aktualisiert: {changes}. Einige SUIT-Funktionen müssen repariert werden, damit sie wieder funktionieren.",
+    "A system update left some SUIT features broken.":
+        "Nach einem Systemupdate funktionieren einige SUIT-Funktionen nicht mehr.",
+    "Steps": "Schritte",
+    "To Fix": "Offen",
+    "Fixing...": "Wird repariert …",
+    "Fixed": "Repariert",
+    "A password prompt opens.": "Ein Passwort-Dialog öffnet sich.",
+    "{count} step(s) could not be fixed": "{count} Schritt(e) konnten nicht repariert werden",
+    "Check the messages above, then try again. Details are in suit.log.":
+        "Prüfe die Meldungen oben und versuche es erneut. Details stehen in suit.log.",
+    "Try Again": "Erneut versuchen",
+    "Everything is repaired": "Alles ist repariert",
+    "Restart the computer so GNOME loads the updated extensions.":
+        "Starte den Computer neu, damit GNOME die aktualisierten Erweiterungen lädt.",
+    "Repair finished.": "Reparatur abgeschlossen.",
+    "Repair finished with errors.": "Reparatur mit Fehlern abgeschlossen.",
+    "Restart failed: {error}": "Neustart fehlgeschlagen: {error}",
+    "SUIT Python environment": "SUIT-Python-Umgebung",
+    "Built for Python {old}, the system now runs Python {new}. Rotation at boot and the camera keeper use it.":
+        "Für Python {old} erstellt, das System nutzt jetzt Python {new}. Die Drehung beim Start und der "
+        "Kamera-Wächter verwenden sie.",
+    "Python environment rebuilt.": "Python-Umgebung neu erstellt.",
+    "Could not rebuild the Python environment: {error}": "Die Python-Umgebung konnte nicht neu erstellt werden: {error}",
+    "Python environment rebuilt, but these packages could not be reinstalled: {pkgs}":
+        "Python-Umgebung neu erstellt, aber diese Pakete konnten nicht neu installiert werden: {pkgs}",
+    "Its Python environment was built for Python {old} and cannot start. AutoGlow's setup runs again "
+    "(takes a few minutes).":
+        "Seine Python-Umgebung wurde für Python {old} erstellt und startet nicht mehr. Die Einrichtung von "
+        "AutoGlow läuft erneut (dauert ein paar Minuten).",
+    "AutoGlow 2 is running again.": "AutoGlow 2 läuft wieder.",
+    "AutoGlow 2 was set up again but its service is {state}.":
+        "AutoGlow 2 wurde neu eingerichtet, aber sein Dienst ist {state}.",
+    "Touch, overlay and desktop extensions": "Touch-, Overlay- und Desktop-Erweiterungen",
+    "GNOME {version} switched off: {names}. They get a version for this GNOME.":
+        "GNOME {version} hat abgeschaltet: {names}. Sie bekommen eine Version für dieses GNOME.",
+    "Already updated, GNOME loads them at the next login: {names}.":
+        "Bereits aktualisiert, GNOME lädt sie bei der nächsten Anmeldung: {names}.",
+    "Extensions updated for GNOME {version}. Restart or log out to load them.":
+        "Erweiterungen für GNOME {version} aktualisiert. Neu starten oder abmelden, um sie zu laden.",
+    "Extensions updated (not yet tested with GNOME {version}). Restart or log out to load them.":
+        "Erweiterungen aktualisiert (noch nicht mit GNOME {version} getestet). Neu starten oder abmelden, um sie zu laden.",
+    "Login keyring": "Anmelde-Schlüsselbund",
+    "The new keyring service (oo7) cannot unlock the keyring after the automatic login and asks for a "
+    "password at every start. SUIT stores a keyring password protected by this computer's TPM, so oo7 "
+    "unlocks it by itself. Saved entries are kept.":
+        "Der neue Schlüsselbund-Dienst (oo7) kann den Schlüsselbund nach der automatischen Anmeldung nicht "
+        "entsperren und fragt bei jedem Start nach einem Passwort. SUIT speichert ein durch das TPM dieses "
+        "Computers geschütztes Schlüsselbund-Passwort, damit oo7 ihn selbst entsperrt. Gespeicherte Einträge "
+        "bleiben erhalten.",
+    "Unlock the Keyring on Boot?": "Schlüsselbund beim Start entsperren?",
+    "SUIT stores a keyring password protected by this computer's TPM, so the keyring unlocks by itself after "
+    "the automatic login.\n\nSaved entries are kept. If the keyring is locked now, it asks for its current "
+    "password once.":
+        "SUIT speichert ein durch das TPM dieses Computers geschütztes Schlüsselbund-Passwort, damit sich der "
+        "Schlüsselbund nach der automatischen Anmeldung selbst entsperrt.\n\nGespeicherte Einträge bleiben "
+        "erhalten. Ist der Schlüsselbund gerade gesperrt, fragt er einmal nach seinem aktuellen Passwort.",
+    "Set Up": "Einrichten",
+    "The keyring already unlocks automatically on boot.": "Der Schlüsselbund entsperrt sich beim Start bereits automatisch.",
+    "No login keyring was found.": "Es wurde kein Anmelde-Schlüsselbund gefunden.",
+    "The keyring now unlocks automatically on boot.": "Der Schlüsselbund entsperrt sich jetzt beim Start automatisch.",
+    "The keyring now unlocks automatically on boot ({count} saved entries kept).":
+        "Der Schlüsselbund entsperrt sich jetzt beim Start automatisch ({count} gespeicherte Einträge übernommen).",
+    "The keyring now unlocks automatically on boot. Its old entries could not be opened and are kept in {path}.":
+        "Der Schlüsselbund entsperrt sich jetzt beim Start automatisch. Seine alten Einträge ließen sich nicht "
+        "öffnen und liegen in {path}.",
+    "The keyring still does not unlock on its own. The old keyring is in {path}.":
+        "Der Schlüsselbund entsperrt sich weiterhin nicht selbst. Der alte Schlüsselbund liegt in {path}.",
+    "Remote Desktop": "Remotedesktop",
+    "It starts at the same moment as the new keyring service (oo7) and fails when oo7 is not ready yet. "
+    "It is set to wait for oo7.":
+        "Er startet im selben Moment wie der neue Schlüsselbund-Dienst (oo7) und schlägt fehl, wenn oo7 noch "
+        "nicht bereit ist. Er wird so eingestellt, dass er auf oo7 wartet.",
+    "Remote Desktop waits for the keyring service from now on.":
+        "Der Remotedesktop wartet ab jetzt auf den Schlüsselbund-Dienst.",
+    "Remote Desktop does not start ({state}). Details are in its journal.":
+        "Der Remotedesktop startet nicht ({state}). Details stehen in seinem Journal.",
+    "Remote Desktop is running again.": "Der Remotedesktop läuft wieder.",
+    "Fast Boot: login before network": "Schnellstart: Anmeldung vor dem Netzwerk",
+    "SUIT's copy of systemd-user-sessions.service is older than the new systemd's. It is copied again.":
+        "SUITs Kopie von systemd-user-sessions.service ist älter als die des neuen systemd. Sie wird neu kopiert.",
+    "Login unit updated to the new systemd version.": "Anmelde-Unit auf die neue systemd-Version aktualisiert.",
+    "Could not write {path}: {error}": "{path} konnte nicht geschrieben werden: {error}",
 }

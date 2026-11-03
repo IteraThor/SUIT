@@ -206,6 +206,14 @@ class SuitWindow(Adw.ApplicationWindow):
             except Exception as e:
                 logger.debug("Background service heal notice: %s", e)
 
+            # After the heal: it already reinstalls the bundled shell extensions
+            try:
+                from core import upgrade_service
+                result = upgrade_service.startup_check()
+                GLib.idle_add(self._on_upgrade_check, result)
+            except Exception:
+                logger.exception("System upgrade check failed")
+
             quiet.wait()
             try:
                 # Pre-import heavy native C extensions in background thread
@@ -249,6 +257,50 @@ class SuitWindow(Adw.ApplicationWindow):
             dialog.connect("response", on_response)
             dialog.present(self)
         return False
+
+    def _on_upgrade_check(self, result):
+        """Startup: after a Fedora upgrade, offer to repair what it broke."""
+        problems = result.get("problems") or []
+        if not problems:
+            return False
+        if all(p.waiting_for_login for p in problems):
+            self.show_toast(tr("Restart the computer to finish the repair after the system update."))
+            return False
+        if self.get_visible_dialog() is not None:
+            # e.g. the privileges dialog: ask after it
+            GLib.timeout_add(1000, self._on_upgrade_check, result)
+            return False
+
+        changes = result.get("changes") or []
+        lines = "\n".join(f"• {p.title}" for p in problems)
+        if changes:
+            heading = tr("System Update Detected")
+            body = tr("{changes}\n\nThese SUIT features need repairs to work again:\n{list}").format(
+                changes="\n".join(changes), list=lines)
+        else:
+            heading = tr("Repairs Needed")
+            body = tr("A system update left these SUIT features broken:\n{list}").format(list=lines)
+        dialog = Adw.AlertDialog(heading=heading, body=body)
+        dialog.add_response("later", tr("Later"))
+        dialog.add_response("fix", tr("Fix All"))
+        dialog.set_response_appearance("fix", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("fix")
+        dialog.set_close_response("later")
+
+        def on_response(_d, response):
+            if response == "fix":
+                self.open_upgrade_repair_page(problems, changes, start=True)
+
+        dialog.connect("response", on_response)
+        dialog.present(self)
+        return False
+
+    def open_upgrade_repair_page(self, problems, changes, start: bool = False):
+        from modules_gtk.upgrade_repair_page import UpgradeRepairPage
+        page = UpgradeRepairPage(self, problems, changes)
+        self._show_page(page)
+        if start:
+            page.fix_all()
 
     def _on_nav_changed(self, *args):
         """Updates back button visibility and title according to current page."""
