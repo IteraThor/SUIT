@@ -10,13 +10,9 @@ if [ ! -f /etc/fedora-release ]; then
     echo "Warning: /etc/fedora-release not detected. SUIT is optimized for Fedora Linux."
 fi
 
-# 2. Clean up legacy SUIT artifacts if present
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "${SCRIPT_DIR}/uninstall_legacy.sh" ]; then
-    "${SCRIPT_DIR}/uninstall_legacy.sh"
-fi
 
-# 3. Install native system dependencies via DNF
+# 2. Install native system dependencies via DNF
 echo "[1/3] Installing system packages..."
 sudo dnf install -y --setopt=install_weak_deps=False \
     python3 \
@@ -28,11 +24,11 @@ sudo dnf install -y --setopt=install_weak_deps=False \
     v4l-utils \
     git
 
-# 4. Create Application and Desktop Launchers
+# 3. Create Application and Desktop Launchers
 echo "[2/3] Generating desktop and menu launchers..."
 python3 "${SCRIPT_DIR}/create_launcher.py"
 
-# 5. Synchronize active display & touch autostarts
+# 4. Synchronize active display & touch autostarts
 if [ -f "$HOME/.suit_rotation_config.json" ]; then
     echo "  - Synchronizing display & touch autostart..."
     if ! (cd "${SCRIPT_DIR}" && python3 -c "from core.display_service import DisplayService; DisplayService.ensure_autostart()"); then
@@ -40,12 +36,12 @@ if [ -f "$HOME/.suit_rotation_config.json" ]; then
     fi
 fi
 
-# 6. Pre-install the switchable SUIT shell extensions (disabled) so GNOME discovers them at next login
+# 5. Pre-install the switchable SUIT shell extensions (disabled) so GNOME discovers them at next login
 if ! (cd "${SCRIPT_DIR}" && python3 -c "from core.desktop_service import DesktopService; DesktopService.install_suit_extensions()"); then
     echo "  ! Warning: could not pre-install the SUIT shell extensions. Launch SUIT once to retry automatically."
 fi
 
-# 7. Success confirmation
+# 6. Success confirmation
 echo "[3/3] Installation completed successfully!"
 echo "========================================="
 echo "SUIT is now installed and ready to use."

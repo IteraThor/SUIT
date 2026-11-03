@@ -29,16 +29,6 @@ cd SUIT && ./uninstall.sh
 
 ---
 
-## Upgrading from Legacy SUIT (Ubuntu / Tkinter Edition)
-
-If you are migrating from an older installation of SUIT (Tkinter / Ubuntu edition), run this one-line command to remove legacy background services (`suit-killswitch.service`, `autoglow.service`) and old Ubuntu launchers:
-
-```bash
-curl -sSL https://raw.githubusercontent.com/IteraThor/SUIT/main/uninstall_legacy.sh | bash
-```
-
----
-
 ## Features & Modes
 
 ### 1. Main Dashboard
