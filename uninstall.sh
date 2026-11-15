@@ -2,7 +2,7 @@
 set -e
 
 echo "========================================="
-echo "   SUIT for Fedora - Uninstall & Cleanup "
+echo "   SUIT for Fedora (Rust) - Uninstall      "
 echo "========================================="
 
 echo "[1/5] Stopping and removing SUIT systemd services..."
@@ -57,6 +57,18 @@ for f in "de.iterathor.suit.gtk.desktop" "SUIT.desktop"; do
         echo "  - Removing ~/.local/share/applications/$f"
         rm -f "$HOME/.local/share/applications/$f"
     fi
+done
+# App Grid overrides that hid build dependency launchers (only the ones SUIT wrote)
+for f in opencascade-draw.desktop; do
+    if grep -qs '^X-SUIT-Hidden=true' "$HOME/.local/share/applications/$f"; then
+        echo "  - Restoring the $f menu entry"
+        rm -f "$HOME/.local/share/applications/$f"
+    fi
+done
+
+# Kiosk native messaging host manifests point at this checkout
+for d in "$HOME/.config/chromium" "$HOME/.config/google-chrome" "$HOME/.config/BraveSoftware/Brave-Browser"; do
+    rm -f "$d/NativeMessagingHosts/com.suit.kiosk.json"
 done
 
 echo "[5/5] Checking configuration files..."

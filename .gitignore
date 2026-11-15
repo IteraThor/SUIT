@@ -1,34 +1,5 @@
-__pycache__/
+/target/
 *.log
-venv/
-.pytest_cache/
-.agents/
-docs/superpowers/
-tests/
-scripts/
-core/private/
-modules_gtk/private/
-private/
-data/
-tools/*.py
-tools/*.json
-
-# Dev audio and media prototypes
-assets/audio_samples/
-docs/assets/animations/
-assets/icons/suit-icon-gtk4.png
-
-# Unused screenshots
-docs/assets/screenshots/04-camera-focus.png
-docs/assets/screenshots/06-kiosk-mode.png
-docs/assets/screenshots/07-advanced-users.png
-docs/assets/screenshots/08-usb-bandwidth.png
-
-# Dev and research docs
-docs/AUTODARTS_ARCHITECTURE.md
-docs/AUTODARTS_CAMERA_OPTIMIZATION_GUIDE.md
-
-# Research & retired modules
-core/recognition_arbiter.py
-core/vision_critic.py
-modules_gtk/cam_calibration/step_dashboard.py
+suit-build.log
+assets/icons/de.iterathor.suit.gtk.png
+__pycache__/
