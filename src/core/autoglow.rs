@@ -50,16 +50,45 @@ pub fn is_autoglow2_dir(p: &Path) -> bool {
     p.join("server.py").is_file() && p.join("core/version.py").is_file()
 }
 
+/// Where AutoGlow's one-line installer (install.sh from a GitHub release) puts AutoGlow
+pub fn release_default_dir() -> PathBuf {
+    home().join("autoglow")
+}
+const RELEASES_API: &str = "https://api.github.com/repos/IteraThor/Autoglow-2/releases/latest";
+
+/// A folder from AutoGlow's one-line installer: the ready-built program and its installer, no source code.
+pub fn is_release_dir(p: &Path) -> bool {
+    p.join("autoglow").is_file()
+        && p.join("install.sh").is_file()
+        && p.join("web").is_dir()
+        && !p.join(".git").exists()
+        && !p.join("Cargo.toml").exists()
+        && !p.join("server.py").exists()
+}
+
 /// WorkingDirectory of autoglow.service, whatever it belongs to.
 pub fn unit_dir() -> Option<PathBuf> {
     let t = std::fs::read_to_string(UNIT_PATH).ok()?;
     regex::Regex::new(r"(?m)^WorkingDirectory=(.+)$").unwrap().captures(&t).map(|c| PathBuf::from(c[1].trim()))
 }
 
-/// The AutoGlow 2 install SUIT manages: a git clone in the default folder.
+/// The AutoGlow 2 install SUIT manages: a git clone in the default folder, or a folder from the one-line
+/// installer (the one the service runs, else ~/autoglow). With both, the one the service runs wins.
 pub fn get_install_dir() -> Option<PathBuf> {
-    let d = default_dir();
-    if is_autoglow2_dir(&d) && d.join(".git").exists() { Some(d) } else { None }
+    let git = default_dir();
+    let git_ok = is_autoglow2_dir(&git) && git.join(".git").exists();
+    if let Some(u) = unit_dir() {
+        if git_ok && canon(&u) == canon(&git) {
+            return Some(git);
+        }
+        if is_release_dir(&u) {
+            return Some(u);
+        }
+    }
+    if git_ok {
+        return Some(git);
+    }
+    Some(release_default_dir()).filter(|r| is_release_dir(r))
 }
 
 /// (pid, folder) of python processes running a server.py or start.py, e.g. a hand-started copy.
@@ -169,6 +198,11 @@ fn has_local_work(p: &Path) -> bool {
 }
 
 pub fn get_version(dir: &Path) -> String {
+    if is_release_dir(dir) {
+        // Prints "AutoGlow 2 v0.33.1"
+        let r = run(&[&dir.join("autoglow").to_string_lossy(), "version"], Some(10));
+        return r.stdout.trim().rsplit(" v").next().filter(|_| r.ok()).unwrap_or_default().to_string();
+    }
     let Ok(t) = std::fs::read_to_string(dir.join("core/version.py")) else { return String::new() };
     regex::Regex::new(r#"__version__\s*=\s*["']([^"']+)["']"#).unwrap().captures(&t).map(|c| c[1].to_string()).unwrap_or_default()
 }
@@ -189,6 +223,8 @@ pub struct AutoGlowStatus {
     pub install_dir: Option<PathBuf>,
     pub version: String,
     pub is_git: bool,
+    /// Installed by AutoGlow's one-line installer: updated from the GitHub releases, not with git
+    pub release: bool,
     pub service_present: bool,
     pub running: bool,
     pub active_state: String,
@@ -217,10 +253,11 @@ pub fn get_status() -> AutoGlowStatus {
     AutoGlowStatus {
         installed: inst.is_some(),
         // AutoGlow 1 used the same service name
-        legacy: Path::new(UNIT_PATH).is_file() && !ud.as_ref().map(|u| is_autoglow2_dir(u)).unwrap_or(false),
+        legacy: Path::new(UNIT_PATH).is_file() && !ud.as_ref().map(|u| is_autoglow2_dir(u) || is_release_dir(u)).unwrap_or(false),
         old_installs: old,
         version: inst.as_ref().map(|d| get_version(d)).unwrap_or_default(),
         is_git: inst.as_ref().map(|d| d.join(".git").exists()).unwrap_or(false),
+        release: inst.as_ref().map(|d| is_release_dir(d)).unwrap_or(false),
         service_present: unit.active_state != "nofile" && Path::new(UNIT_PATH).is_file() && inst.is_some() && ud == inst,
         running: unit.active_state == "active",
         enabled: unit.unit_file_state == "enabled",
@@ -477,6 +514,13 @@ pub fn install() -> (bool, String) {
             return (ok, msg);
         }
     }
+    if inst.as_ref().is_some_and(|d| is_release_dir(d)) {
+        let (ok, mut msg) = run_installer(&target);
+        if ok && !old.is_empty() {
+            msg = tr("AutoGlow 2 is installed. The older version was removed, your profiles were kept.");
+        }
+        return (ok, msg);
+    }
     if target == staging_dir() {
         if let Err(e) = std::fs::rename(staging_dir(), &dd) {
             return (false, trf("AutoGlow setup failed: {error}", &[("error", &e)]));
@@ -489,7 +533,54 @@ pub fn install() -> (bool, String) {
     (ok, msg)
 }
 
+/// AutoGlow's own installer in a one-line install: downloads the latest release into the folder and restarts
+/// the service. Settings, flows and profiles are kept.
+fn run_installer(dir: &Path) -> (bool, String) {
+    let installer = dir.join("install.sh");
+    let r = run_in(
+        dir,
+        &["sudo", "-n", "env", &format!("AUTOGLOW_DIR={}", dir.display()), "bash", &installer.to_string_lossy()],
+        Some(SETUP_TIMEOUT),
+    );
+    if r.timed_out {
+        return (false, "AutoGlow setup timed out.".into());
+    }
+    if r.code != 0 {
+        let out = format!("{}\n{}", r.stdout, r.stderr);
+        let tail = out.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("unknown error").to_string();
+        log::warn!("AutoGlow install.sh failed: {}", out.trim());
+        return (false, trf("AutoGlow setup failed: {error}", &[("error", &tail)]));
+    }
+    (true, "AutoGlow 2 is installed and running.".into())
+}
+
+/// "0.33.1" -> (0, 33, 1)
+fn version_key(v: &str) -> Vec<u64> {
+    v.trim().trim_start_matches('v').split('.').map(|p| p.parse().unwrap_or(0)).collect()
+}
+
+/// A one-line install: is there a newer GitHub release?
+fn check_release_update(dir: &Path) -> super::update::UpdateInfo {
+    let current = get_version(dir);
+    let Some(tag) = super::http::get_json(RELEASES_API, 15.0).and_then(|j| j["tag_name"].as_str().map(String::from)) else {
+        return super::update::UpdateInfo { error: Some("Could not reach GitHub to check for updates.".into()), ..Default::default() };
+    };
+    let latest = tag.trim_start_matches('v').to_string();
+    let has = !current.is_empty() && version_key(&latest) > version_key(&current);
+    super::update::UpdateInfo {
+        has_update: has,
+        commits_behind: has as u32,
+        latest_message: if has { format!("v{}", latest) } else { String::new() },
+        current_commit: current,
+        remote_commit: latest,
+        error: None,
+    }
+}
+
 pub fn check_update() -> super::update::UpdateInfo {
+    if let Some(d) = get_install_dir().filter(|d| is_release_dir(d)) {
+        return check_release_update(&d);
+    }
     match get_install_dir().filter(|d| d.join(".git").exists()) {
         Some(d) => super::update::check_update(Some(&d)),
         None => super::update::UpdateInfo {
@@ -500,6 +591,14 @@ pub fn check_update() -> super::update::UpdateInfo {
 }
 
 pub fn update() -> (bool, String) {
+    if let Some(d) = get_install_dir().filter(|d| is_release_dir(d)) {
+        let (ok, msg) = run_installer(&d);
+        if !ok {
+            return (ok, msg);
+        }
+        let v = get_version(&d);
+        return (true, if v.is_empty() { tr("AutoGlow 2 updated to the latest version.") } else { trf("AutoGlow 2 updated to {version}.", &[("version", &v)]) });
+    }
     let Some(dir) = get_install_dir().filter(|d| d.join(".git").exists()) else {
         return (false, "AutoGlow was not installed with git, so it cannot update here.".into());
     };
@@ -558,17 +657,24 @@ pub fn set_enabled(enabled: bool) -> bool {
     r.code == 0
 }
 
+/// SUIT's clone in ~/Autoglow-2, or the one-line installer's ~/autoglow: folders that only hold AutoGlow
+pub fn is_own_folder(d: &Path) -> bool {
+    d == default_dir() || (d == release_default_dir() && is_release_dir(d))
+}
+
 pub fn uninstall(remove_files: bool) -> (bool, String) {
     let inst = get_install_dir();
     if !remove_system_parts(&inst.iter().cloned().collect::<Vec<_>>()) {
         return (false, "Failed removing the AutoGlow service.".into());
     }
-    // Only a folder SUIT cloned itself is deleted, never a copy the user set up elsewhere
-    if remove_files && inst.as_deref() == Some(default_dir().as_path()) {
-        if let Err(e) = std::fs::remove_dir_all(default_dir()) {
+    // Only a folder SUIT cloned itself, or the one-line installer's ~/autoglow, is deleted, never a copy the user
+    // set up elsewhere
+    if let Some(d) = inst.filter(|d| remove_files && is_own_folder(d)) {
+        if let Err(e) = std::fs::remove_dir_all(&d) {
             return (false, trf("Uninstall failed: {error}", &[("error", &e)]));
         }
         return (true, "AutoGlow 2 removed.".into());
     }
     (true, "AutoGlow 2 service removed, its folder was kept.".into())
 }
+

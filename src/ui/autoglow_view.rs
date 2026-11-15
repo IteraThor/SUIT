@@ -240,7 +240,7 @@ impl AutoGlowView {
     fn do_refresh(self: &Rc<Self>, check_updates: bool) {
         let m = self.clone();
         run_async(autoglow::get_status, move |s| {
-            let is_git = s.is_git;
+            let is_git = s.is_git || s.release;
             *m.status.borrow_mut() = s;
             m.apply_status();
             if !is_git {
@@ -312,7 +312,7 @@ impl AutoGlowView {
         self.btn_ext.set_sensitive(s.extension.is_some());
         self.btn_ext.set_css_classes(&[if s.extension == Some(false) { "suggested-action" } else { "secondary-btn" }, "compact-btn"]);
         self.grp_software.set_visible(s.installed);
-        self.row_update.set_visible(s.is_git);
+        self.row_update.set_visible(s.is_git || s.release);
         self.btn_start_stop.set_label(&tr(if s.running { "Stop" } else { "Start" }));
         self.btn_restart.set_sensitive(s.running);
         self.loading.set(true);
@@ -471,12 +471,13 @@ impl AutoGlowView {
     }
 
     fn on_uninstall(self: &Rc<Self>) {
-        let own = self.status.borrow().install_dir.as_deref() == Some(autoglow::default_dir().as_path());
+        let dir = self.status.borrow().install_dir.clone();
+        let own = dir.as_deref().is_some_and(autoglow::is_own_folder);
         let mut body = tr("This stops AutoGlow and removes its service and the AutoGlow Bridge browser extension.");
         if own {
             body += &format!(
                 "\n\n{}",
-                trf("Delete the AutoGlow folder ({path}) as well? This also deletes your AutoGlow settings, flows and profiles.", &[("path", &short_path(&autoglow::default_dir()))])
+                trf("Delete the AutoGlow folder ({path}) as well? This also deletes your AutoGlow settings, flows and profiles.", &[("path", &short_path(dir.as_deref().unwrap_or(Path::new(""))))])
             );
         }
         let d = adw::AlertDialog::new(Some(&tr("Uninstall AutoGlow 2?")), Some(&body));

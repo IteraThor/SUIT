@@ -1204,5 +1204,6 @@
  "Start AutoGlow to install the AutoGlow Bridge extension.": "Starte AutoGlow, um die Erweiterung AutoGlow Bridge zu installieren.",
  "Start AutoGlow first: the browser gets the extension from it.": "Starte zuerst AutoGlow: Der Browser bekommt die Erweiterung von dort.",
  "Could not set up the AutoGlow Bridge extension (administrator rights needed).": "Die Erweiterung AutoGlow Bridge konnte nicht eingerichtet werden (Administratorrechte nötig).",
- "AutoGlow Bridge is set up. An open browser adds it within a few seconds, otherwise the next time it starts.": "AutoGlow Bridge ist eingerichtet. Ein offener Browser fügt sie in wenigen Sekunden hinzu, sonst beim nächsten Start."
+ "AutoGlow Bridge is set up. An open browser adds it within a few seconds, otherwise the next time it starts.": "AutoGlow Bridge ist eingerichtet. Ein offener Browser fügt sie in wenigen Sekunden hinzu, sonst beim nächsten Start.",
+ "Could not reach GitHub to check for updates.": "GitHub ist nicht erreichbar, daher konnte nicht nach Updates gesucht werden."
 }
