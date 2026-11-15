@@ -50,6 +50,8 @@ pub struct AutoGlowView {
     btn_start_stop: gtk::Button,
     btn_restart: gtk::Button,
     row_autostart: adw::SwitchRow,
+    row_ext: adw::ActionRow,
+    btn_ext: gtk::Button,
     grp_software: adw::PreferencesGroup,
     row_update: adw::ActionRow,
     btn_update: gtk::Button,
@@ -116,6 +118,10 @@ impl AutoGlowView {
         gm.add(&row_service);
         let row_autostart = super::helpers::switch_row("Start on Boot", "");
         gm.add(&row_autostart);
+        let row_ext = super::helpers::action_row(&tr("Browser Extension"), "");
+        let btn_ext = compact("Install", "secondary-btn");
+        row_ext.add_suffix(&btn_ext);
+        gm.add(&row_ext);
         let gsw = group(&tr("Software"), "");
         main.append(&gsw);
         let row_update = super::helpers::action_row(&tr("Updates"), &tr("Not checked yet."));
@@ -151,12 +157,23 @@ impl AutoGlowView {
             btn_start_stop,
             btn_restart,
             row_autostart,
+            row_ext,
+            btn_ext,
             grp_software: gsw,
             row_update,
             btn_update,
         });
         let m = me.clone();
         me.btn_install.connect_clicked(move |_| m.confirm_install("Installing...", true));
+        let m = me.clone();
+        me.btn_ext.connect_clicked(move |_| {
+            // The browser adds it a few seconds after the policy is written
+            let after: Box<dyn Fn(&Rc<AutoGlowView>)> = Box::new(|m| {
+                let m = m.clone();
+                super::helpers::once(15_000, move || m.refresh());
+            });
+            m.run_task(Box::new(autoglow::install_extension), "Installing...", Some(after));
+        });
         let m = me.clone();
         btn_replace.connect_clicked(move |_| m.confirm_install("Repairing...", false));
         let m = me.clone();
@@ -285,6 +302,15 @@ impl AutoGlowView {
         let has_service = s.installed && s.service_present;
         self.row_service.set_visible(has_service);
         self.row_autostart.set_visible(has_service);
+        self.row_ext.set_visible(has_service);
+        self.row_ext.set_subtitle(&tr(match s.extension {
+            Some(true) => "AutoGlow Bridge is installed in the browser.",
+            Some(false) => "AutoGlow Bridge is not in the browser yet. Chrome, Chromium, Brave and Edge get it.",
+            None => "Start AutoGlow to install the AutoGlow Bridge extension.",
+        }));
+        self.btn_ext.set_label(&tr(if s.extension == Some(true) { "Reinstall" } else { "Install" }));
+        self.btn_ext.set_sensitive(s.extension.is_some());
+        self.btn_ext.set_css_classes(&[if s.extension == Some(false) { "suggested-action" } else { "secondary-btn" }, "compact-btn"]);
         self.grp_software.set_visible(s.installed);
         self.row_update.set_visible(s.is_git);
         self.btn_start_stop.set_label(&tr(if s.running { "Stop" } else { "Start" }));
@@ -300,6 +326,7 @@ impl AutoGlowView {
         self.row_old.set_sensitive(!busy);
         self.row_service.set_sensitive(!busy);
         self.row_autostart.set_sensitive(!busy);
+        self.row_ext.set_sensitive(!busy);
         self.grp_software.set_sensitive(!busy);
         self.btn_open.set_sensitive(!busy);
         self.spinner.set_visible(busy);

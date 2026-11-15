@@ -193,6 +193,8 @@ pub struct AutoGlowStatus {
     pub running: bool,
     pub active_state: String,
     pub enabled: bool,
+    /// The AutoGlow Bridge extension is in a browser profile; None while AutoGlow is not running (its ID is unknown)
+    pub extension: Option<bool>,
 }
 
 pub fn get_status() -> AutoGlowStatus {
@@ -222,9 +224,49 @@ pub fn get_status() -> AutoGlowStatus {
         service_present: unit.active_state != "nofile" && Path::new(UNIT_PATH).is_file() && inst.is_some() && ud == inst,
         running: unit.active_state == "active",
         enabled: unit.unit_file_state == "enabled",
+        extension: if unit.active_state == "active" { extension_id().map(|id| extension_installed(&id)) } else { None },
         active_state: unit.active_state,
         install_dir: inst,
     }
+}
+
+/// The ID of this install's AutoGlow Bridge extension, as the running AutoGlow serves it (the key is per install).
+fn extension_id() -> Option<String> {
+    let xml = String::from_utf8(super::http::get(&format!("{}/extension/update.xml", WEB_URL), 3.0)?).ok()?;
+    let id = xml.split("appid='").nth(1)?.split('\'').next()?;
+    (id.len() == 32 && id.bytes().all(|b| (b'a'..=b'p').contains(&b))).then(|| id.to_string())
+}
+
+/// Is the extension in a profile of Chromium, Chrome, Brave or Edge?
+fn extension_installed(id: &str) -> bool {
+    ["chromium", "google-chrome", "BraveSoftware/Brave-Browser", "microsoft-edge"].iter().any(|b| {
+        let pat = format!("{}/.config/{}/*/Extensions/{}", home().display(), b, id);
+        glob::glob(&pat).map(|mut g| g.next().is_some()).unwrap_or(false)
+    })
+}
+
+/// Writes the browser policy that makes Chromium, Chrome, Brave and Edge install the AutoGlow Bridge extension from
+/// the running AutoGlow, for the same browsers as AutoGlow's install.sh. A browser that is open adds it within seconds.
+pub fn install_extension() -> (bool, String) {
+    let Some(id) = extension_id() else {
+        return (false, tr("Start AutoGlow first: the browser gets the extension from it."));
+    };
+    let policy = format!("{{\"ExtensionInstallForcelist\": [\"{};{}/extension/update.xml\"]}}", id, WEB_URL);
+    let script = format!(
+        "has() {{ command -v \"$1\" >/dev/null 2>&1; }}; dirs='/etc/opt/chrome /etc/chromium'; \
+         if has chromium-browser || [ -d /snap/chromium ]; then dirs=\"$dirs /etc/chromium-browser\"; fi; \
+         if has brave-browser || has brave; then dirs=\"$dirs /etc/brave\"; fi; \
+         if has microsoft-edge || has microsoft-edge-stable; then dirs=\"$dirs /etc/opt/edge\"; fi; \
+         for d in $dirs; do mkdir -p \"$d/policies/managed\" && printf '%s\\n' {} > \"$d/policies/managed/autoglow.json\" \
+         && chmod 644 \"$d/policies/managed/autoglow.json\" || exit 1; done",
+        shquote(&policy)
+    );
+    let r = run(&["sudo", "-n", "bash", "-c", &script], Some(30));
+    if r.code != 0 {
+        log::warn!("Writing the AutoGlow Bridge browser policy failed: {}", r.stderr.trim());
+        return (false, tr("Could not set up the AutoGlow Bridge extension (administrator rights needed)."));
+    }
+    (true, tr("AutoGlow Bridge is set up. An open browser adds it within a few seconds, otherwise the next time it starts."))
 }
 
 /// AutoGlow's own setup.sh: system packages, venv, browser extension policy and the service.

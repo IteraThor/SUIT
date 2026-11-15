@@ -1197,5 +1197,12 @@
  "Fast Boot: login before network": "Schnellstart: Anmeldung vor dem Netzwerk",
  "SUIT's copy of systemd-user-sessions.service is older than the new systemd's. It is copied again.": "SUITs Kopie von systemd-user-sessions.service ist älter als die des neuen systemd. Sie wird neu kopiert.",
  "Login unit updated to the new systemd version.": "Anmelde-Unit auf die neue systemd-Version aktualisiert.",
- "Could not write {path}: {error}": "{path} konnte nicht geschrieben werden: {error}"
+ "Could not write {path}: {error}": "{path} konnte nicht geschrieben werden: {error}",
+ "Browser Extension": "Browser-Erweiterung",
+ "AutoGlow Bridge is installed in the browser.": "AutoGlow Bridge ist im Browser installiert.",
+ "AutoGlow Bridge is not in the browser yet. Chrome, Chromium, Brave and Edge get it.": "AutoGlow Bridge ist noch nicht im Browser. Chrome, Chromium, Brave und Edge bekommen sie.",
+ "Start AutoGlow to install the AutoGlow Bridge extension.": "Starte AutoGlow, um die Erweiterung AutoGlow Bridge zu installieren.",
+ "Start AutoGlow first: the browser gets the extension from it.": "Starte zuerst AutoGlow: Der Browser bekommt die Erweiterung von dort.",
+ "Could not set up the AutoGlow Bridge extension (administrator rights needed).": "Die Erweiterung AutoGlow Bridge konnte nicht eingerichtet werden (Administratorrechte nötig).",
+ "AutoGlow Bridge is set up. An open browser adds it within a few seconds, otherwise the next time it starts.": "AutoGlow Bridge ist eingerichtet. Ein offener Browser fügt sie in wenigen Sekunden hinzu, sonst beim nächsten Start."
 }
