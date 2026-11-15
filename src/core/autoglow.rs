@@ -54,6 +54,7 @@ pub fn is_autoglow2_dir(p: &Path) -> bool {
 pub fn release_default_dir() -> PathBuf {
     home().join("autoglow")
 }
+const INSTALLER_URL: &str = "https://github.com/IteraThor/Autoglow-2/releases/latest/download/install.sh";
 const RELEASES_API: &str = "https://api.github.com/repos/IteraThor/Autoglow-2/releases/latest";
 
 /// A folder from AutoGlow's one-line installer: the ready-built program and its installer, no source code.
@@ -508,6 +509,8 @@ pub fn install() -> (bool, String) {
             staging_dir()
         }
     };
+    // Folders with local work are kept by replace_old_installs
+    let removes = old.iter().any(|d| !has_local_work(d));
     if !old.is_empty() {
         let (ok, msg) = replace_old_installs(&old, &target, inst.is_some());
         if !ok {
@@ -516,7 +519,7 @@ pub fn install() -> (bool, String) {
     }
     if inst.as_ref().is_some_and(|d| is_release_dir(d)) {
         let (ok, mut msg) = run_installer(&target);
-        if ok && !old.is_empty() {
+        if ok && removes {
             msg = tr("AutoGlow 2 is installed. The older version was removed, your profiles were kept.");
         }
         return (ok, msg);
@@ -527,21 +530,29 @@ pub fn install() -> (bool, String) {
         }
     }
     let (ok, mut msg) = run_setup(&dd);
-    if ok && !old.is_empty() {
+    if ok && removes {
         msg = tr("AutoGlow 2 is installed. The older version was removed, your profiles were kept.");
     }
     (ok, msg)
 }
 
-/// AutoGlow's own installer in a one-line install: downloads the latest release into the folder and restarts
-/// the service. Settings, flows and profiles are kept.
+/// The one-line installer of the latest release, run for the folder: downloads that release into it and
+/// restarts the service. Settings, flows and profiles are kept. The folder's own install.sh is not used: one from
+/// an older release can point at a download that no longer exists.
 fn run_installer(dir: &Path) -> (bool, String) {
-    let installer = dir.join("install.sh");
+    let Some(script) = super::http::get(INSTALLER_URL, 30.0) else {
+        return (false, tr("Could not download the AutoGlow installer. Check the internet connection."));
+    };
+    let installer = std::env::temp_dir().join(format!("suit-autoglow-install-{}.sh", std::process::id()));
+    if let Err(e) = std::fs::write(&installer, script) {
+        return (false, trf("AutoGlow setup failed: {error}", &[("error", &e)]));
+    }
     let r = run_in(
         dir,
         &["sudo", "-n", "env", &format!("AUTOGLOW_DIR={}", dir.display()), "bash", &installer.to_string_lossy()],
         Some(SETUP_TIMEOUT),
     );
+    let _ = std::fs::remove_file(&installer);
     if r.timed_out {
         return (false, "AutoGlow setup timed out.".into());
     }
@@ -677,4 +688,5 @@ pub fn uninstall(remove_files: bool) -> (bool, String) {
     }
     (true, "AutoGlow 2 service removed, its folder was kept.".into())
 }
+
 
