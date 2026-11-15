@@ -230,8 +230,8 @@ pub struct AutoGlowStatus {
     pub running: bool,
     pub active_state: String,
     pub enabled: bool,
-    /// The AutoGlow Bridge extension is in a browser profile; None while AutoGlow is not running (its ID is unknown)
-    pub extension: Option<bool>,
+    /// The AutoGlow Bridge extension in the browsers; None while AutoGlow is not running
+    pub extension: Option<ExtensionState>,
 }
 
 pub fn get_status() -> AutoGlowStatus {
@@ -262,49 +262,147 @@ pub fn get_status() -> AutoGlowStatus {
         service_present: unit.active_state != "nofile" && Path::new(UNIT_PATH).is_file() && inst.is_some() && ud == inst,
         running: unit.active_state == "active",
         enabled: unit.unit_file_state == "enabled",
-        extension: if unit.active_state == "active" { extension_id().map(|id| extension_installed(&id)) } else { None },
+        extension: if unit.active_state == "active" { extension_state() } else { None },
         active_state: unit.active_state,
         install_dir: inst,
     }
 }
 
-/// The ID of this install's AutoGlow Bridge extension, as the running AutoGlow serves it (the key is per install).
-fn extension_id() -> Option<String> {
+/// The AutoGlow Bridge extension in the browsers, compared with the one the running AutoGlow serves
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExtensionState {
+    Missing,
+    Current(String),
+    /// Older than AutoGlow serves, or a copy from an older AutoGlow install (each install has its own extension ID)
+    Outdated { installed: String, latest: String, old_copy: bool },
+}
+
+/// The ID and version of this install's AutoGlow Bridge extension, as the running AutoGlow serves them (the key is per install).
+fn served_extension() -> Option<(String, String)> {
     let xml = String::from_utf8(super::http::get(&format!("{}/extension/update.xml", WEB_URL), 3.0)?).ok()?;
     let id = xml.split("appid='").nth(1)?.split('\'').next()?;
-    (id.len() == 32 && id.bytes().all(|b| (b'a'..=b'p').contains(&b))).then(|| id.to_string())
+    let version = xml.split("<updatecheck").nth(1)?.split("version='").nth(1)?.split('\'').next()?;
+    (id.len() == 32 && id.bytes().all(|b| (b'a'..=b'p').contains(&b))).then(|| (id.to_string(), version.to_string()))
 }
 
-/// Is the extension in a profile of Chromium, Chrome, Brave or Edge?
-fn extension_installed(id: &str) -> bool {
-    ["chromium", "google-chrome", "BraveSoftware/Brave-Browser", "microsoft-edge"].iter().any(|b| {
-        let pat = format!("{}/.config/{}/*/Extensions/{}", home().display(), b, id);
-        glob::glob(&pat).map(|mut g| g.next().is_some()).unwrap_or(false)
-    })
+/// (extension ID, version) of every AutoGlow Bridge in a profile of Chromium, Chrome, Brave or Edge
+fn installed_bridges() -> Vec<(String, String)> {
+    let mut out = vec![];
+    for b in ["chromium", "google-chrome", "BraveSoftware/Brave-Browser", "microsoft-edge"] {
+        let pat = format!("{}/.config/{}/*/Extensions/*/*/manifest.json", home().display(), b);
+        for p in glob::glob(&pat).into_iter().flatten().flatten() {
+            let Ok(m) = std::fs::read_to_string(&p).map(|t| serde_json::from_str::<serde_json::Value>(&t).unwrap_or_default()) else { continue };
+            if !m["name"].as_str().unwrap_or("").starts_with("AutoGlow Bridge") {
+                continue;
+            }
+            let id = p.parent().and_then(|v| v.parent()).and_then(|d| d.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            out.push((id, m["version"].as_str().unwrap_or("").to_string()));
+        }
+    }
+    out
 }
 
-/// Writes the browser policy that makes Chromium, Chrome, Brave and Edge install the AutoGlow Bridge extension from
-/// the running AutoGlow, for the same browsers as AutoGlow's install.sh. A browser that is open adds it within seconds.
-pub fn install_extension() -> (bool, String) {
-    let Some(id) = extension_id() else {
-        return (false, tr("Start AutoGlow first: the browser gets the extension from it."));
-    };
-    let policy = format!("{{\"ExtensionInstallForcelist\": [\"{};{}/extension/update.xml\"]}}", id, WEB_URL);
+/// Extension IDs the browser policies currently force-install
+fn policy_ids() -> Vec<String> {
+    POLICY_FILES
+        .iter()
+        .filter_map(|f| std::fs::read_to_string(f).ok())
+        .filter_map(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .flat_map(|v| v["ExtensionInstallForcelist"].as_array().cloned().unwrap_or_default())
+        .filter_map(|e| e.as_str().and_then(|s| s.split(';').next()).map(String::from))
+        .collect()
+}
+
+/// Is the AutoGlow service running, and the extension state while it is: cheap enough for a periodic check
+pub fn live_extension() -> (bool, Option<ExtensionState>) {
+    let running = systemd::get_status(SERVICE_NAME, Scope::System).active_state == "active";
+    (running, if running { extension_state() } else { None })
+}
+
+/// None while AutoGlow is not running (it serves the extension, so its ID and latest version are unknown)
+pub fn extension_state() -> Option<ExtensionState> {
+    let (id, latest) = served_extension()?;
+    let found = installed_bridges();
+    if found.is_empty() {
+        return Some(ExtensionState::Missing);
+    }
+    let mine = found.iter().filter(|(i, _)| *i == id).map(|(_, v)| v.clone()).max_by_key(|v| version_key(v));
+    let old_copy = found.iter().any(|(i, _)| *i != id) || policy_ids().iter().any(|i| *i != id);
+    match mine {
+        Some(v) if !old_copy && version_key(&v) >= version_key(&latest) => Some(ExtensionState::Current(v)),
+        mine => {
+            let installed = mine.or_else(|| found.iter().map(|(_, v)| v.clone()).max_by_key(|v| version_key(v))).unwrap_or_default();
+            Some(ExtensionState::Outdated { installed, latest, old_copy })
+        }
+    }
+}
+
+/// Writes the browser policy for the same browsers as AutoGlow's install.sh, plus every browser that already has one.
+/// An open browser applies it within seconds.
+fn write_policy(ids: &[&str]) -> bool {
+    let list: Vec<String> = ids.iter().map(|id| format!("\"{};{}/extension/update.xml\"", id, WEB_URL)).collect();
+    let policy = format!("{{\"ExtensionInstallForcelist\": [{}]}}", list.join(", "));
+    let existing: Vec<String> = POLICY_FILES.iter().filter(|f| Path::new(f).is_file()).map(|f| f.trim_end_matches("/policies/managed/autoglow.json").to_string()).collect();
     let script = format!(
-        "has() {{ command -v \"$1\" >/dev/null 2>&1; }}; dirs='/etc/opt/chrome /etc/chromium'; \
+        "has() {{ command -v \"$1\" >/dev/null 2>&1; }}; dirs='/etc/opt/chrome /etc/chromium {}'; \
          if has chromium-browser || [ -d /snap/chromium ]; then dirs=\"$dirs /etc/chromium-browser\"; fi; \
          if has brave-browser || has brave; then dirs=\"$dirs /etc/brave\"; fi; \
          if has microsoft-edge || has microsoft-edge-stable; then dirs=\"$dirs /etc/opt/edge\"; fi; \
          for d in $dirs; do mkdir -p \"$d/policies/managed\" && printf '%s\\n' {} > \"$d/policies/managed/autoglow.json\" \
          && chmod 644 \"$d/policies/managed/autoglow.json\" || exit 1; done",
+        existing.join(" "),
         shquote(&policy)
     );
     let r = run(&["sudo", "-n", "bash", "-c", &script], Some(30));
     if r.code != 0 {
         log::warn!("Writing the AutoGlow Bridge browser policy failed: {}", r.stderr.trim());
+    }
+    r.code == 0
+}
+
+fn browser_running() -> bool {
+    ["chromium", "chrome", "brave", "msedge"].iter().any(|b| run(&["pgrep", "-f", &format!("/{}", b)], Some(5)).code == 0)
+}
+
+/// Makes Chromium, Chrome, Brave and Edge install the AutoGlow Bridge extension from the running AutoGlow.
+pub fn install_extension() -> (bool, String) {
+    let Some((id, _)) = served_extension() else {
+        return (false, tr("Start AutoGlow first: the browser gets the extension from it."));
+    };
+    if !write_policy(&[&id]) {
         return (false, tr("Could not set up the AutoGlow Bridge extension (administrator rights needed)."));
     }
     (true, tr("AutoGlow Bridge is set up. An open browser adds it within a few seconds, otherwise the next time it starts."))
+}
+
+/// Removes every AutoGlow Bridge from the browsers and installs the latest one fresh: an extension taken off the
+/// force-install policy is uninstalled by the browser, putting it back installs the version AutoGlow serves now.
+pub fn reinstall_extension() -> (bool, String) {
+    let Some((id, latest)) = served_extension() else {
+        return (false, tr("Start AutoGlow first: the browser gets the extension from it."));
+    };
+    let admin_err = || (false, tr("Could not set up the AutoGlow Bridge extension (administrator rights needed)."));
+    let open = browser_running();
+    if open && !installed_bridges().is_empty() {
+        if !write_policy(&[]) {
+            return admin_err();
+        }
+        let t = Instant::now();
+        while !installed_bridges().is_empty() && t.elapsed() < Duration::from_secs(30) {
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        let left = installed_bridges();
+        if !left.is_empty() {
+            log::warn!("The browser did not remove AutoGlow Bridge in time: {:?}", left);
+        }
+    }
+    if !write_policy(&[&id]) {
+        return admin_err();
+    }
+    if !open {
+        return (true, trf("AutoGlow Bridge {version} is installed the next time the browser starts.", &[("version", &latest)]));
+    }
+    (true, trf("AutoGlow Bridge is reinstalled. The browser adds version {version} within a few seconds.", &[("version", &latest)]))
 }
 
 /// AutoGlow's own setup.sh: system packages, venv, browser extension policy and the service.
@@ -688,5 +786,3 @@ pub fn uninstall(remove_files: bool) -> (bool, String) {
     }
     (true, "AutoGlow 2 service removed, its folder was kept.".into())
 }
-
-

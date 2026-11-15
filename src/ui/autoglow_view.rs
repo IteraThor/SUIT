@@ -2,11 +2,12 @@
 use super::dialogs::community::DISCORD_URL;
 use super::helpers::{alert, ask, esc, group, icon_button, open_browser_url, page_shell, run_async, set_pill};
 use super::{Page, Win};
-use crate::core::autoglow::{self, AutoGlowStatus, OldInstall, WEB_URL};
+use crate::core::autoglow::{self, AutoGlowStatus, ExtensionState, OldInstall, WEB_URL};
 use crate::core::i18n::{tr, trf};
 use crate::core::update::UpdateInfo;
 use crate::core::util::home;
 use adw::prelude::*;
+use gtk::glib;
 use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
@@ -52,6 +53,8 @@ pub struct AutoGlowView {
     row_autostart: adw::SwitchRow,
     row_ext: adw::ActionRow,
     btn_ext: gtk::Button,
+    /// Re-checks the browser extension while the page is open
+    ext_timer: RefCell<Option<glib::SourceId>>,
     grp_software: adw::PreferencesGroup,
     row_update: adw::ActionRow,
     btn_update: gtk::Button,
@@ -159,6 +162,7 @@ impl AutoGlowView {
             row_autostart,
             row_ext,
             btn_ext,
+            ext_timer: RefCell::new(None),
             grp_software: gsw,
             row_update,
             btn_update,
@@ -172,7 +176,12 @@ impl AutoGlowView {
                 let m = m.clone();
                 super::helpers::once(15_000, move || m.refresh());
             });
-            m.run_task(Box::new(autoglow::install_extension), "Installing...", Some(after));
+            let missing = m.status.borrow().extension == Some(ExtensionState::Missing);
+            if missing {
+                m.run_task(Box::new(autoglow::install_extension), "Installing...", Some(after));
+            } else {
+                m.run_task(Box::new(autoglow::reinstall_extension), "Reinstalling...", Some(after));
+            }
         });
         let m = me.clone();
         btn_replace.connect_clicked(move |_| m.confirm_install("Repairing...", false));
@@ -233,8 +242,46 @@ impl AutoGlowView {
         let m = me.clone();
         btn_uninstall.connect_clicked(move |_| m.on_uninstall());
         let m = me.clone();
-        me.nav.connect_map(move |_| m.do_refresh(true));
+        me.nav.connect_map(move |_| {
+            m.do_refresh(true);
+            let m2 = m.clone();
+            let id = super::helpers::every(10_000, move || {
+                m2.check_extension();
+                true
+            });
+            if let Some(old) = m.ext_timer.replace(Some(id)) {
+                old.remove();
+            }
+        });
+        let m = me.clone();
+        me.nav.connect_unmap(move |_| {
+            if let Some(id) = m.ext_timer.take() {
+                id.remove();
+            }
+        });
         me
+    }
+
+    /// Compares the extension in the browsers with the one AutoGlow serves; cheap enough to run every few seconds.
+    /// When the service started or stopped meanwhile, the whole page is refreshed.
+    fn check_extension(self: &Rc<Self>) {
+        if self.busy.get() || !self.status.borrow().service_present {
+            return;
+        }
+        let m = self.clone();
+        run_async(autoglow::live_extension, move |(running, e)| {
+            if m.busy.get() {
+                return;
+            }
+            if running != m.status.borrow().running {
+                m.do_refresh(false);
+                return;
+            }
+            if m.status.borrow().extension != e {
+                m.status.borrow_mut().extension = e;
+                m.apply_status();
+            }
+        });
     }
 
     fn do_refresh(self: &Rc<Self>, check_updates: bool) {
@@ -303,14 +350,30 @@ impl AutoGlowView {
         self.row_service.set_visible(has_service);
         self.row_autostart.set_visible(has_service);
         self.row_ext.set_visible(has_service);
-        self.row_ext.set_subtitle(&tr(match s.extension {
-            Some(true) => "AutoGlow Bridge is installed in the browser.",
-            Some(false) => "AutoGlow Bridge is not in the browser yet. Chrome, Chromium, Brave and Edge get it.",
-            None => "Start AutoGlow to install the AutoGlow Bridge extension.",
+        self.row_ext.set_subtitle(&esc(&match &s.extension {
+            Some(ExtensionState::Current(v)) => trf("AutoGlow Bridge {version} is installed in the browser, the latest version.", &[("version", v)]),
+            Some(ExtensionState::Outdated { latest, old_copy: true, .. }) => {
+                trf("The browser has AutoGlow Bridge from an older AutoGlow install. Update replaces it with version {latest}.", &[("latest", latest)])
+            }
+            Some(ExtensionState::Outdated { installed, latest, .. }) => {
+                trf("AutoGlow Bridge {installed} is installed, version {latest} is available.", &[("installed", installed), ("latest", latest)])
+            }
+            Some(ExtensionState::Missing) => tr("AutoGlow Bridge is not in the browser yet. Chrome, Chromium, Brave and Edge get it."),
+            None => tr("Start AutoGlow to install the AutoGlow Bridge extension."),
         }));
-        self.btn_ext.set_label(&tr(if s.extension == Some(true) { "Reinstall" } else { "Install" }));
+        let (label, css) = match &s.extension {
+            Some(ExtensionState::Current(_)) => ("Reinstall", "secondary-btn"),
+            Some(ExtensionState::Outdated { .. }) => ("Update", "suggested-action"),
+            Some(ExtensionState::Missing) => ("Install", "suggested-action"),
+            None => ("Install", "secondary-btn"),
+        };
+        self.btn_ext.set_label(&tr(label));
         self.btn_ext.set_sensitive(s.extension.is_some());
-        self.btn_ext.set_css_classes(&[if s.extension == Some(false) { "suggested-action" } else { "secondary-btn" }, "compact-btn"]);
+        self.btn_ext.set_tooltip_text(match &s.extension {
+            Some(ExtensionState::Current(_) | ExtensionState::Outdated { .. }) => Some(tr("Removes AutoGlow Bridge from the browser and installs the latest version")),
+            _ => None,
+        }.as_deref());
+        self.btn_ext.set_css_classes(&[css, "compact-btn"]);
         self.grp_software.set_visible(s.installed);
         self.row_update.set_visible(s.is_git || s.release);
         self.btn_start_stop.set_label(&tr(if s.running { "Stop" } else { "Start" }));

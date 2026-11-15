@@ -1206,5 +1206,12 @@
  "Could not set up the AutoGlow Bridge extension (administrator rights needed).": "Die Erweiterung AutoGlow Bridge konnte nicht eingerichtet werden (Administratorrechte nötig).",
  "AutoGlow Bridge is set up. An open browser adds it within a few seconds, otherwise the next time it starts.": "AutoGlow Bridge ist eingerichtet. Ein offener Browser fügt sie in wenigen Sekunden hinzu, sonst beim nächsten Start.",
  "Could not reach GitHub to check for updates.": "GitHub ist nicht erreichbar, daher konnte nicht nach Updates gesucht werden.",
- "Could not download the AutoGlow installer. Check the internet connection.": "Das AutoGlow-Installationsprogramm konnte nicht heruntergeladen werden. Prüfe die Internetverbindung."
+ "Could not download the AutoGlow installer. Check the internet connection.": "Das AutoGlow-Installationsprogramm konnte nicht heruntergeladen werden. Prüfe die Internetverbindung.",
+ "AutoGlow Bridge {version} is installed in the browser, the latest version.": "AutoGlow Bridge {version} ist im Browser installiert, die neueste Version.",
+ "The browser has AutoGlow Bridge from an older AutoGlow install. Update replaces it with version {latest}.": "Der Browser hat AutoGlow Bridge aus einer älteren AutoGlow-Installation. Aktualisieren ersetzt sie durch Version {latest}.",
+ "AutoGlow Bridge {installed} is installed, version {latest} is available.": "AutoGlow Bridge {installed} ist installiert, Version {latest} ist verfügbar.",
+ "Removes AutoGlow Bridge from the browser and installs the latest version": "Entfernt AutoGlow Bridge aus dem Browser und installiert die neueste Version",
+ "Reinstalling...": "Installiere neu …",
+ "AutoGlow Bridge {version} is installed the next time the browser starts.": "AutoGlow Bridge {version} wird beim nächsten Browserstart installiert.",
+ "AutoGlow Bridge is reinstalled. The browser adds version {version} within a few seconds.": "AutoGlow Bridge wird neu installiert. Der Browser fügt Version {version} in wenigen Sekunden hinzu."
 }
