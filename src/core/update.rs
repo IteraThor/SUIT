@@ -52,6 +52,17 @@ pub fn check_update(project: Option<&Path>) -> UpdateInfo {
             return Ok(UpdateInfo { current_commit: local, remote_commit: remote, ..Default::default() });
         }
         let behind: u32 = git(&["rev-list", "--count", &format!("HEAD..{}", remote_ref)])?.parse().unwrap_or(1);
+        // SUIT itself: offer a new commit once CI has published its binary, so the update takes seconds instead
+        // of a local build; after an hour without one (CI failed, unsupported Fedora) offer it anyway
+        if project.is_none() && behind > 0 {
+            let full = git(&["rev-parse", &remote_ref])?;
+            let age = git(&["log", "-1", "--format=%ct", &remote_ref])?.parse::<i64>().map(|t| chrono::Utc::now().timestamp() - t);
+            let published = run_in(&dir, &["bash", "fetch-binary.sh", "--exists", &full], Some(15)).ok();
+            if !published && age.map(|a| a < 3600).unwrap_or(false) {
+                log::info!("Update {} waits for its prebuilt binary", remote);
+                return Ok(UpdateInfo { current_commit: local, remote_commit: remote, ..Default::default() });
+            }
+        }
         let msg = git(&["log", "-1", "--pretty=format:%s", &remote_ref])?;
         Ok(UpdateInfo {
             has_update: behind > 0,
@@ -70,12 +81,13 @@ pub fn check_update(project: Option<&Path>) -> UpdateInfo {
 
 /// Rebuild the release binary after a pull.
 pub fn rebuild(dir: &Path) -> (bool, String) {
-    let cargo = if has_cmd("cargo") { "cargo".to_string() } else { super::util::home().join(".cargo/bin/cargo").to_string_lossy().to_string() };
-    let r = run_in(dir, &[&cargo, "build", "--release"], Some(1800));
+    // install.sh downloads the prebuilt binary for this commit, or installs the build packages and builds
+    let r = run_in(dir, &["bash", "install.sh"], Some(1800));
     if r.ok() {
         (true, String::new())
     } else {
-        let tail: Vec<&str> = r.stderr.lines().rev().take(8).collect();
+        let out = format!("{}\n{}", r.stdout, r.stderr);
+        let tail: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).rev().take(8).collect();
         (false, tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
     }
 }

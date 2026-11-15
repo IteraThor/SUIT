@@ -24,8 +24,8 @@ GERMAN = (locale.getlocale()[0] or os.environ.get("LANG", "")).startswith("de")
 TEXTS = {
     "title": ("Updating SUIT", "SUIT wird aktualisiert"),
     "body": (
-        "SUIT is switching to its new version. This takes a few minutes and needs an internet connection.",
-        "SUIT wechselt auf die neue Version. Das dauert ein paar Minuten und braucht eine Internetverbindung.",
+        "SUIT is switching to its new version. This needs an internet connection and usually takes under a minute.",
+        "SUIT wechselt auf die neue Version. Das braucht eine Internetverbindung und dauert meist unter einer Minute.",
     ),
     "failed": (
         "The update could not be finished. See the details below.",

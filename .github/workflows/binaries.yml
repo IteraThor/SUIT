@@ -1,0 +1,85 @@
+# Prebuilt SUIT binaries: one per commit on main, Fedora release and CPU, as assets of the "binaries" release.
+# fetch-binary.sh downloads the one for its checkout, so installs and updates take seconds instead of a build.
+name: Binaries
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create the binaries release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view binaries -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create binaries -R "$GITHUB_REPOSITORY" --prerelease --title "Prebuilt binaries" \
+              --notes "Downloaded by install.sh and the in-app update. Not meant for manual download."
+
+  build:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        fedora: [43, 44, 45]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    container: registry.fedoraproject.org/fedora:${{ matrix.fedora }}
+    steps:
+      - name: Install build packages
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            cargo rust gtk4-devel libadwaita-devel vte291-gtk4-devel opencv-devel clang-devel \
+            git gh tar gzip binutils
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: fc${{ matrix.fedora }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: fc${{ matrix.fedora }}-${{ runner.arch }}-
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package with the runtime packages it needs
+        id: package
+        run: |
+          cd target/release
+          ./suit --version
+          for lib in $(readelf -d suit | awk '/NEEDED/ { gsub(/[][]/, "", $5); print $5 }'); do
+            rpm -qf --qf '%{NAME}\n' "$(ldconfig -p | awk -v l="$lib" '$1 == l { print $NF; exit }')"
+          done | sort -u > runtime-packages.txt
+          cat runtime-packages.txt
+          NAME="suit-${GITHUB_SHA}-fc${{ matrix.fedora }}-$(uname -m).tar.gz"
+          tar -czf "$NAME" suit runtime-packages.txt
+          echo "file=target/release/$NAME" >> "$GITHUB_OUTPUT"
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload binaries -R "$GITHUB_REPOSITORY" --clobber "${{ steps.package.outputs.file }}"
+
+  prune:
+    needs: build
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 30
+      - name: Delete binaries of commits older than the last 30
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          keep="$(git rev-list -n 30 HEAD)"
+          gh release view binaries -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | while read -r asset; do
+            sha="$(echo "$asset" | cut -d- -f2)"
+            if ! grep -qx "$sha" <<< "$keep"; then
+              gh release delete-asset binaries "$asset" -R "$GITHUB_REPOSITORY" -y
+            fi
+          done

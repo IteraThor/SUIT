@@ -16,7 +16,7 @@ git clone https://github.com/IteraThor/SUIT.git && cd SUIT && chmod +x install.s
 
 Launch **SUIT for Fedora** directly from your application menu or Dash favorites once installed.
 
-Since version 0.7.0 SUIT is written in Rust. An existing Python install switches over with the in-app **Update** button: the first start after the update builds the new version, which takes a few minutes.
+Since version 0.7.0 SUIT is written in Rust. An existing Python install switches over with the in-app **Update** button: the first start after the update downloads the new version, which usually takes under a minute.
 
 ---
 
