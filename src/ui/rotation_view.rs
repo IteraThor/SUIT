@@ -46,7 +46,7 @@ fn rot_name(r: i64) -> String {
 impl RotationView {
     pub fn new(win: Win) -> Rc<dyn Page> {
         let (scrolled, main) = page_shell();
-        let nav = adw::NavigationPage::builder().title(tr("Screen & Touch Manager")).tag("rotation").child(&scrolled).build();
+        let nav = adw::NavigationPage::builder().title(tr("Display Rotation & Touch")).tag("rotation").child(&scrolled).build();
         let wc = gtk::Box::new(gtk::Orientation::Horizontal, 14);
         wc.add_css_class("warning-card");
         main.append(&wc);

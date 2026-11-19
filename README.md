@@ -111,7 +111,7 @@ Live view and every setting of each camera, for any UVC camera, found under **Ca
 ---
 
 ### 7. Screen & Touch Manager
-Wayland display orientation and touch coordinate matrix calibration.
+Wayland display orientation and touch coordinate matrix calibration. The page is a hub with **Display Rotation & Touch** and **Wireless Screen** (an Android or iOS tablet as the screen).
 
 <div align="center">
   <img src="docs/assets/screenshots/05-screen-touch.png" alt="Screen and Touch Manager" width="700">
@@ -120,6 +120,16 @@ Wayland display orientation and touch coordinate matrix calibration.
 * Rotate displays seamlessly between 0° Normal, 90° Right, 180° Inverted, and 270° Left.
 * Automatic touch matrix calibration (`LIBINPUT_CALIBRATION_MATRIX`) via udev rules to align touch input with rotated screens.
 * Discovers connected displays and touchscreen controllers automatically.
+
+**Wireless Screen** uses a tablet as the screen of the PC, also with no monitor connected. The wizard shows one simple screen at a time:
+1. **Start**: one button, 1920 x 1200 by default (**Change** offers iPad and Android sizes). Start stays off without a free video port or internet. After you confirm, SUIT turns a free video port into a virtual screen (own EDID, dracut, kernel args via `grubby`; the rescue boot entry stays without it, kernel updates keep it) and installs [Sunshine](https://github.com/LizardByte/Sunshine) from its COPR with low-latency settings (KMS capture, software x264 `zerolatency`, LAN only, firewall ports). The desktop no longer blanks, locks or sleeps.
+2. **Restart**: one button (asks first, save your work); SUIT opens the wizard again after the login.
+3. **Connect**: QR codes for the free Moonlight app, then tap this PC in Moonlight; SUIT shows the PIN field as soon as Moonlight asks and tells you exactly what went wrong.
+4. **Done**: open Moonlight → this PC → **Desktop**. It shows whether the tablet is connected, can switch to the tablet only, offers **Match my tablet** with the size the tablet asked for, and warns when the PC is on Wi-Fi. Settings: same picture or extended desktop with a monitor (the `suit-wireless-screen` user service), Sharp or Smooth picture, hide the cursor while streaming, tablet size, **Check my setup** (checklist with **Fix it**), add another tablet, **Copy details**, and **Remove everything**.
+
+Without the GUI: `suit wireless-screen --remove` undoes everything (safe to run twice); `suit wireless-screen --help` lists the other options (`--status`, `--check --fix`, ...).
+
+The picture is encoded by the processor (software H.264). Moonlight on iOS sends mouse input, not multi-touch.
 
 ---
 

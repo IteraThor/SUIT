@@ -106,7 +106,7 @@ impl MenuPage {
             ("system", "preferences-system-symbolic", "System Utilities & Tweaks", "Performance, power, and touch tweaks.", |w| w.open_system_page()),
             ("autodarts", "darts-symbolic", "Autodarts Setup", "Board pairing, service, and camera telemetry.", |w| w.open_autodarts_page()),
             ("camera_tools", "camera-photo-symbolic", "Camera Tools", "Focus calibration, camera controls, and the camera optimizer.", |w| w.open_camera_tools_page()),
-            ("touch", "screen-touch-symbolic", "Screen & Touch Manager", "Display rotation and touch calibration.", |w| w.open_rotation_page()),
+            ("touch", "screen-touch-symbolic", "Screen & Touch Manager", "Wireless screen, display rotation, and touch calibration.", |w| w.open_screen_touch_page()),
             ("kiosk", "view-fullscreen-symbolic", "Kiosk Mode", "Fullscreen browser autostart and controls.", |w| w.open_kiosk_page()),
             ("autoglow", "display-brightness-symbolic", "AutoGlow 2 Manager", "WLED dartboard automation and lighting effects.", |w| w.open_autoglow_page()),
         ];
@@ -125,6 +125,12 @@ impl MenuPage {
                 log::debug!("Navigating to {} view", key);
                 open(&w)
             });
+            if key == "touch" {
+                let exp = gtk::Label::new(Some(&tr("EXPERIMENTAL")));
+                exp.add_css_class("status-pill-experimental");
+                exp.set_valign(gtk::Align::Center);
+                row.add_suffix(&exp);
+            }
             if key == "autoglow" {
                 row.add_suffix(&badge_new);
                 row.add_suffix(&badge_update);

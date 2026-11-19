@@ -46,6 +46,7 @@ pub struct Mode {
     pub w: i32,
     pub h: i32,
     pub rate: f64,
+    pub preferred: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +56,7 @@ pub struct PhysMonitor {
     pub product: String,
     pub serial: String,
     pub current: Option<Mode>,
+    pub modes: Vec<Mode>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,20 +91,23 @@ fn parse_state(v: &Variant) -> Option<MutterState> {
         let spec: (String, String, String, String) = m.child_value(0).get()?;
         let modes = m.child_value(1);
         let mut current = None;
+        let mut all = Vec::new();
         for j in 0..modes.n_children() {
             let md = modes.child_value(j);
             let props = glib::VariantDict::new(Some(&md.child_value(6)));
+            let mode = Mode {
+                id: md.child_value(0).get()?,
+                w: md.child_value(1).get()?,
+                h: md.child_value(2).get()?,
+                rate: md.child_value(3).get()?,
+                preferred: props.contains("is-preferred"),
+            };
             if props.contains("is-current") {
-                current = Some(Mode {
-                    id: md.child_value(0).get()?,
-                    w: md.child_value(1).get()?,
-                    h: md.child_value(2).get()?,
-                    rate: md.child_value(3).get()?,
-                });
-                break;
+                current = Some(mode.clone());
             }
+            all.push(mode);
         }
-        monitors.push(PhysMonitor { connector: spec.0, vendor: spec.1, product: spec.2, serial: spec.3, current });
+        monitors.push(PhysMonitor { connector: spec.0, vendor: spec.1, product: spec.2, serial: spec.3, current, modes: all });
     }
     let lms = v.child_value(2);
     let mut logical = Vec::new();
@@ -231,8 +236,11 @@ pub fn get_monitors() -> Vec<MonitorView> {
     out
 }
 
+/// One logical monitor for ApplyMonitorsConfig: (x, y, scale, transform, primary, [(connector, mode id, props)]).
+pub type LogicalConfig = (i32, i32, f64, u32, bool, Vec<(String, String, HashMap<String, Variant>)>);
+
 pub fn build_monitors_variant(st: &MutterState, method: u32, connector: &str, rotation: u32) -> Variant {
-    let lms: Vec<(i32, i32, f64, u32, bool, Vec<(String, String, HashMap<String, Variant>)>)> = st
+    let lms: Vec<LogicalConfig> = st
         .logical
         .iter()
         .map(|lm| {
@@ -253,11 +261,25 @@ pub fn build_monitors_variant(st: &MutterState, method: u32, connector: &str, ro
     (st.serial, method, lms, HashMap::<String, Variant>::new()).to_variant()
 }
 
+fn apply_variant(v: &Variant) -> Result<(), glib::Error> {
+    let Some(p) = mutter_proxy(1, 0.5) else { return Err(glib::Error::new(gio::IOErrorEnum::NotFound, "Mutter DisplayConfig unavailable")) };
+    p.call_sync("ApplyMonitorsConfig", Some(v), gio::DBusCallFlags::NONE, 3000, gio::Cancellable::NONE).map(|_| ())
+}
+
+/// Apply a whole layout (method 1=temporary, 2=persistent).
+pub fn apply_monitors_config(serial: u32, method: u32, lms: Vec<LogicalConfig>) -> bool {
+    match apply_variant(&(serial, method, lms, HashMap::<String, Variant>::new()).to_variant()) {
+        Ok(_) => true,
+        Err(e) => {
+            log::error!("Failed applying monitor layout: {}", e);
+            false
+        }
+    }
+}
+
 pub fn apply_rotation(connector: &str, rotation: u32, method: u32) -> bool {
-    let Some(p) = mutter_proxy(1, 0.5) else { return false };
     let Some(st) = get_current_mutter_state(1) else { return false };
-    let v = build_monitors_variant(&st, method, connector, rotation);
-    match p.call_sync("ApplyMonitorsConfig", Some(&v), gio::DBusCallFlags::NONE, 3000, gio::Cancellable::NONE) {
+    match apply_variant(&build_monitors_variant(&st, method, connector, rotation)) {
         Ok(_) => {
             log::info!("Applied rotation {} to {} (method {})", rotation, connector, method);
             true

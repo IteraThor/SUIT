@@ -28,3 +28,4 @@ pub mod autoglow;
 pub mod system;
 pub mod update;
 pub mod upgrade;
+pub mod wireless_screen;

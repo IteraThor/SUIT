@@ -105,7 +105,9 @@ impl Win {
         w.nav.connect_visible_page_notify(move |_| w2.on_nav_changed());
         w.push_menu();
         let w2 = w.clone();
-        glib::idle_add_local_once(move || w2.check_first_run_privileges());
+        if !super::wireless_screen_view::DEMO.load(std::sync::atomic::Ordering::Relaxed) {
+            glib::idle_add_local_once(move || w2.check_first_run_privileges());
+        }
         w.start_background_heal();
         let w2 = w.clone();
         w.window.connect_close_request(move |_| w2.on_close_request());
@@ -126,6 +128,8 @@ impl Win {
             ("autodarts", |w| w.open_autodarts_page()),
             ("camera_tools", |w| w.open_camera_tools_page()),
             ("camera_focus", |w| w.open_focus_page()),
+            ("screen_touch", |w| w.open_screen_touch_page()),
+            ("wireless_screen", |w| w.open_wireless_screen_page()),
             ("rotation", |w| w.open_rotation_page()),
             ("kiosk", |w| w.open_kiosk_page()),
             ("autoglow", |w| w.open_autoglow_page()),
@@ -360,6 +364,8 @@ impl Win {
             "camera_tools" => (740, 480),
             "camera_focus" => (940, 640),
             "autodarts" => (840, 680),
+            "screen_touch" => (760, 640),
+            "wireless_screen" => (760, 640),
             "rotation" => (780, 600),
             "kiosk" => (780, 680),
             "system" => (800, 700),
@@ -436,6 +442,64 @@ impl Win {
     }
     pub fn open_focus_page(&self) {
         self.open("camera_focus", super::camera_focus_view::CameraFocusView::new);
+    }
+    pub fn open_screen_touch_page(&self) {
+        self.open("screen_touch", super::screen_touch_view::ScreenTouchView::new);
+    }
+    pub fn open_wireless_screen_page(&self) {
+        self.open("wireless_screen", super::wireless_screen_view::WirelessScreenView::new);
+    }
+
+    /// After the Wireless Screen restart (`--resume`): an autostarted kiosk browser opens later and covers
+    /// SUIT, so the user on the tablet would never see the wizard. For `secs` seconds, every 3 s, bring the
+    /// window back to the front when it is not active. Stops once the user clicks or types in the window,
+    /// once it stayed active for two polls after the first 15 s, or when a dialog is open.
+    pub fn keep_in_front(&self, secs: u64) {
+        let touched = Rc::new(Cell::new(false));
+        let key = gtk::EventControllerKey::new();
+        key.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let t = touched.clone();
+        key.connect_key_pressed(move |_, _, _, _| {
+            t.set(true);
+            glib::Propagation::Proceed
+        });
+        let click = gtk::GestureClick::new();
+        click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let t = touched.clone();
+        click.connect_pressed(move |_, _, _, _| t.set(true));
+        self.window.add_controller(key.clone());
+        self.window.add_controller(click.clone());
+        let (w, start) = (self.window.clone(), Instant::now());
+        let (mut active_polls, mut presented) = (0, false);
+        super::helpers::every(3000, move || {
+            let elapsed = start.elapsed();
+            if w.is_active() {
+                presented = false;
+                active_polls = if elapsed.as_secs() >= 15 { active_polls + 1 } else { 0 };
+            }
+            let done = touched.get() || w.visible_dialog().is_some() || active_polls >= 2 || elapsed.as_secs() >= secs;
+            if done {
+                w.remove_controller(&key);
+                w.remove_controller(&click);
+                log::info!("Wireless Screen resume: stopped keeping SUIT in front after {} s", elapsed.as_secs());
+                return false;
+            }
+            if !w.is_active() {
+                if w.is_fullscreen() {
+                    w.unfullscreen();
+                }
+                if w.is_suspended() || !w.is_visible() || presented {
+                    // present() without a recent user action may only flash "ready" on GNOME Wayland: map the
+                    // window again, a newly mapped window goes on top
+                    log::info!("Wireless Screen resume: mapping SUIT again on top");
+                    w.set_visible(false);
+                    w.set_visible(true);
+                }
+                w.present();
+                presented = true;
+            }
+            true
+        });
     }
     pub fn open_rotation_page(&self) {
         self.open("rotation", super::rotation_view::RotationView::new);
