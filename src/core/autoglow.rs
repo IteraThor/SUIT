@@ -663,6 +663,53 @@ fn run_installer(dir: &Path) -> (bool, String) {
     (true, "AutoGlow 2 is installed and running.".into())
 }
 
+/// Puts the latest release's ready-built program into the git folder, so the update does not compile.
+/// False (nothing changed) when there is no build for this CPU or the download fails.
+fn fetch_latest_binary(dir: &Path) -> bool {
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x86_64",
+        "aarch64" => "aarch64",
+        _ => return false,
+    };
+    let Some(tag) = super::http::get_json(RELEASES_API, 15.0).and_then(|j| j["tag_name"].as_str().map(String::from)) else {
+        return false;
+    };
+    let url = format!("https://github.com/IteraThor/Autoglow-2/releases/download/{tag}/autoglow-linux-{arch}.tar.gz");
+    let tmp = std::env::temp_dir().join(format!("suit-autoglow-bin-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    if std::fs::create_dir_all(&tmp).is_err() {
+        return false;
+    }
+    let tarball = tmp.join("a.tar.gz");
+    let ok = super::http::download(&url, &tarball, 300.0).is_ok()
+        && run_in(&tmp, &["tar", "-xzf", "a.tar.gz", "./autoglow"], Some(60)).code == 0
+        && std::fs::copy(tmp.join("autoglow"), dir.join(".autoglow.new")).is_ok()
+        && std::fs::set_permissions(dir.join(".autoglow.new"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).is_ok()
+        // Renamed into place, so a running AutoGlow keeps its program until it restarts
+        && std::fs::rename(dir.join(".autoglow.new"), dir.join("autoglow")).is_ok();
+    let _ = std::fs::remove_dir_all(&tmp);
+    ok
+}
+
+/// install.sh of the git folder, with the program already in place (what setup.sh does after fetching a release)
+fn run_installer_from_source(dir: &Path) -> (bool, String) {
+    let r = run_in(
+        dir,
+        &["sudo", "-n", "env", &format!("AUTOGLOW_DIR={}", dir.display()), "AUTOGLOW_FROM_SOURCE=1", "bash", &dir.join("install.sh").to_string_lossy()],
+        Some(SETUP_TIMEOUT),
+    );
+    if r.timed_out {
+        return (false, "AutoGlow setup timed out.".into());
+    }
+    if r.code != 0 {
+        let out = format!("{}\n{}", r.stdout, r.stderr);
+        let tail = out.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("unknown error").to_string();
+        log::warn!("AutoGlow install.sh failed: {}", out.trim());
+        return (false, trf("AutoGlow setup failed: {error}", &[("error", &tail)]));
+    }
+    (true, "AutoGlow 2 is installed and running.".into())
+}
+
 /// "0.33.1" -> (0, 33, 1)
 fn version_key(v: &str) -> Vec<u64> {
     v.trim().trim_start_matches('v').split('.').map(|p| p.parse().unwrap_or(0)).collect()
@@ -731,7 +778,8 @@ pub fn update() -> (bool, String) {
         log::warn!("AutoGlow git pull failed: {}", r.stderr.trim());
         return (false, "Update download failed. Local changes in the AutoGlow folder may block it.".into());
     }
-    let (ok, msg) = run_setup(&dir);
+    // Prefer the latest release's ready-built program; compiling (setup.sh) takes many minutes
+    let (ok, msg) = if fetch_latest_binary(&dir) { run_installer_from_source(&dir) } else { run_setup(&dir) };
     if !ok {
         return (ok, msg);
     }
