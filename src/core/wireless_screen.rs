@@ -798,8 +798,12 @@ pub fn write_virtual_screen(cfg: &Config) -> (bool, String) {
     }
     clean_rescue(&forced_args(cfg));
     save_config(cfg);
-    log::info!("Virtual screen set up on {} ({}x{}@{})", cfg.connector, cfg.width, cfg.height, cfg.refresh);
-    (true, tr("Virtual screen set up. Restart to turn it on."))
+    update_greeter_layout(cfg);
+    // the tablet only shows the desktop of a logged-in user: at the login screen nobody could sign in on it
+    let user = super::util::username();
+    let autologin = super::power::is_auto_login_enabled(None).0 || super::power::set_auto_login(true, &user, None);
+    log::info!("Virtual screen set up on {} ({}x{}@{}), autologin={}", cfg.connector, cfg.width, cfg.height, cfg.refresh, autologin);
+    (true, tr(if autologin { "Virtual screen set up. Restart to turn it on." } else { "Virtual screen set up. Restart to turn it on. Turn on Automatic Login in System, or the tablet shows no login screen." }))
 }
 
 /// Restart now; SUIT opens this page again after the login.
@@ -1034,6 +1038,9 @@ pub fn remove_everything() -> (bool, String) {
     if !sudo(&["rm", "-f", COPR_REPO, EDID_PATH, DRACUT_CONF], 20).ok() || (initramfs && !sudo(&["dracut", "-f"], 900).ok()) {
         failed.push("dracut");
     }
+    if std::fs::read_to_string(GREETER_LAYOUT).is_ok_and(|t| t.contains(GREETER_MARK)) {
+        sudo(&["rm", "-f", GREETER_LAYOUT], 20);
+    }
     set_hide_cursor(false);
     let _ = std::fs::remove_dir_all(sunshine_dir());
     let _ = std::fs::remove_file(home().join(".config/suit/cursor-theme.prev"));
@@ -1177,6 +1184,64 @@ fn mode_of_size(m: &PhysMonitor, w: i32, h: i32) -> Option<&Mode> {
     m.modes.iter().filter(|x| x.w == w && x.h == h).max_by(|a, b| a.rate.total_cmp(&b.rate))
 }
 
+// ---------------------------------------------------------------- login screen
+
+/// System-wide layout Mutter falls back to when a user has none; the GDM greeter has no home of its own, so
+/// this is how the login screen gets a real monitor as the main screen.
+const GREETER_LAYOUT: &str = "/etc/xdg/monitors.xml";
+const GREETER_MARK: &str = "<!-- Written by SUIT Wireless Screen -->";
+
+/// Refresh rate (Hz) Mutter reports for the virtual screen's preferred mode, from the EDID timing.
+pub fn edid_rate(w: u32, h: u32, refresh: u32) -> f64 {
+    let (d, clock) = cvt_rb_dtd(w, h, refresh);
+    let vtotal = h + (d[6] as u32 | ((d[7] as u32 & 0x0f) << 8));
+    clock as f64 * 1e4 / ((w + 160) * vtotal) as f64
+}
+
+/// The login screen layout: the real monitors side by side (the first is the main screen) and the
+/// virtual screen after them. Without it GDM takes the virtual screen as the main one and the real
+/// monitor stays black. None without a real monitor.
+pub fn greeter_layout(cfg: &Config, real: &[&PhysMonitor]) -> Option<String> {
+    let spec = |c: &str, v: &str, p: &str, s: &str| format!("<monitorspec><connector>{}</connector><vendor>{}</vendor><product>{}</product><serial>{}</serial></monitorspec>", c, v, p, s);
+    let mut x = 0;
+    let mut out = String::new();
+    let mut add = |sp: String, w: i32, h: i32, rate: f64| {
+        out += &format!(
+            "    <logicalmonitor><x>{x}</x><y>0</y><scale>1</scale>{}<monitor>{sp}<mode><width>{w}</width><height>{h}</height><rate>{rate:.3}</rate></mode></monitor></logicalmonitor>\n",
+            if x == 0 { "<primary>yes</primary>" } else { "" }
+        );
+        x += w;
+    };
+    for m in real {
+        let md = best_mode(m)?;
+        add(spec(&m.connector, &m.vendor, &m.product, &m.serial), md.w, md.h, md.rate);
+    }
+    if real.is_empty() {
+        return None;
+    }
+    add(spec(&mutter_name(&cfg.connector), "SUI", "SUIT Screen", "0x00000000"), cfg.width as i32, cfg.height as i32, edid_rate(cfg.width, cfg.height, cfg.refresh));
+    Some(format!("{GREETER_MARK}\n<monitors version=\"2\">\n  <configuration>\n    <layoutmode>logical</layoutmode>\n{out}  </configuration>\n</monitors>\n"))
+}
+
+/// Keep the login screen layout current (setup and whenever the monitors change). Never touches a
+/// layout somebody else wrote.
+pub fn update_greeter_layout(cfg: &Config) {
+    if cfg.connector.is_empty() {
+        return;
+    }
+    let old = std::fs::read_to_string(GREETER_LAYOUT).ok();
+    if old.as_deref().is_some_and(|t| !t.contains(GREETER_MARK)) {
+        return;
+    }
+    let virt = mutter_name(&cfg.connector);
+    let new = display::get_current_mutter_state(3).and_then(|st| greeter_layout(cfg, &st.monitors.iter().filter(|m| m.connector != virt).collect::<Vec<_>>()));
+    match (new, old) {
+        (Some(n), o) if o.as_deref() != Some(&n) => log::info!("Login screen layout written: ok={}", sudo_write(GREETER_LAYOUT, &n)),
+        (None, Some(_)) => log::info!("Login screen layout removed: ok={}", sudo(&["rm", "-f", GREETER_LAYOUT], 20).ok()),
+        _ => {}
+    }
+}
+
 /// Mirror every monitor onto the virtual screen (or extend), as `cfg.mirror` says. Does nothing until
 /// the virtual screen is running.
 pub fn apply_layout(cfg: &Config) -> bool {
@@ -1247,6 +1312,7 @@ pub fn watch() {
             return;
         }
         *last.borrow_mut() = set;
+        update_greeter_layout(&cfg);
         apply_layout(&cfg);
     });
     check();

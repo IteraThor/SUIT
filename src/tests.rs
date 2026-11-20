@@ -329,3 +329,17 @@ fn mutter_connector_names() {
     assert_eq!(mutter_name("DP-3"), "DP-3");
     assert_eq!(mutter_name("eDP-1"), "eDP-1");
 }
+
+#[test]
+fn greeter_layout_puts_real_monitor_first() {
+    use crate::core::display::{Mode, PhysMonitor};
+    use crate::core::wireless_screen::{greeter_layout, Config};
+    let mode = Mode { id: "m".into(), w: 1920, h: 1200, rate: 59.95, preferred: true };
+    let mon = PhysMonitor { connector: "HDMI-3".into(), vendor: "RTK".into(), product: "ANMITE".into(), serial: "0x1".into(), current: Some(mode.clone()), modes: vec![mode] };
+    let cfg = Config { width: 2160, height: 1620, connector: "HDMI-A-2".into(), ..Config::default() };
+    let x = greeter_layout(&cfg, &[&mon]).unwrap();
+    assert!(x.find("<connector>HDMI-3").unwrap() < x.find("<connector>HDMI-2").unwrap());
+    assert_eq!(x.matches("<primary>yes</primary>").count(), 1);
+    assert!(x.contains("<x>1920</x>") && x.contains("<rate>59.959</rate>"), "{}", x);
+    assert!(greeter_layout(&cfg, &[]).is_none());
+}

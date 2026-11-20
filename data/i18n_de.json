@@ -107,6 +107,7 @@
  "Remove everything": "Alles entfernen",
  "Setting up the virtual screen failed: {error}": "Einrichten des virtuellen Bildschirms fehlgeschlagen: {error}",
  "Virtual screen set up. Restart to turn it on.": "Virtueller Bildschirm eingerichtet. Starte neu, um ihn einzuschalten.",
+ "Virtual screen set up. Restart to turn it on. Turn on Automatic Login in System, or the tablet shows no login screen.": "Virtueller Bildschirm eingerichtet. Starte neu, um ihn einzuschalten. Schalte unter System die automatische Anmeldung ein, sonst zeigt das Tablet keinen Anmeldebildschirm.",
  "Installing Sunshine failed: {error}": "Installation von Sunshine fehlgeschlagen: {error}",
  "Adding the Sunshine download source...": "Downloadquelle für Sunshine wird hinzugefügt ...",
  "Downloading and installing Sunshine. This can take a few minutes...": "Sunshine wird heruntergeladen und installiert. Das kann ein paar Minuten dauern ...",
