@@ -23,7 +23,62 @@ pub const VIDIOC_G_CTRL: u64 = 0xC008561B;
 pub const VIDIOC_S_CTRL: u64 = 0xC008561C;
 pub const VIDIOC_QUERYCTRL: u64 = 0xC0445624;
 
+pub const VIDIOC_ENUM_FRAMESIZES: u64 = 0xC02C564A;
+
 const BUF_SIZE: usize = 88; // struct v4l2_buffer on 64-bit
+
+/// Discrete frame sizes a camera offers for a pixel format (VIDIOC_ENUM_FRAMESIZES), smallest first.
+pub fn frame_sizes(device: &str, pixfmt: &str) -> Vec<(u32, u32)> {
+    let Ok(c) = CString::new(device) else { return Vec::new() };
+    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDWR | libc::O_NONBLOCK) };
+    if fd < 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for index in 0..64u32 {
+        let mut b = [0u8; 44];
+        put_u32(&mut b, 0, index);
+        put_u32(&mut b, 4, fourcc(pixfmt));
+        if ioctl(fd, VIDIOC_ENUM_FRAMESIZES, b.as_mut_ptr()).is_err() {
+            break;
+        }
+        if get_u32(&b, 8) == 1 {
+            out.push((get_u32(&b, 12), get_u32(&b, 16)));
+        }
+    }
+    unsafe { libc::close(fd) };
+    out.sort_by_key(|&(w, h)| (w * h, w));
+    out.dedup();
+    out
+}
+
+pub const VIDIOC_ENUM_FRAMEINTERVALS: u64 = 0xC034564B;
+
+/// Highest discrete frame rate a camera offers at this size (VIDIOC_ENUM_FRAMEINTERVALS); 0 when none is listed.
+pub fn max_fps(device: &str, pixfmt: &str, w: u32, h: u32) -> f64 {
+    let Ok(c) = CString::new(device) else { return 0.0 };
+    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDWR | libc::O_NONBLOCK) };
+    if fd < 0 {
+        return 0.0;
+    }
+    let mut best = 0.0f64;
+    for index in 0..32u32 {
+        let mut b = [0u8; 52];
+        put_u32(&mut b, 0, index);
+        put_u32(&mut b, 4, fourcc(pixfmt));
+        put_u32(&mut b, 8, w);
+        put_u32(&mut b, 12, h);
+        if ioctl(fd, VIDIOC_ENUM_FRAMEINTERVALS, b.as_mut_ptr()).is_err() {
+            break;
+        }
+        let (num, den) = (get_u32(&b, 20), get_u32(&b, 24));
+        if get_u32(&b, 16) == 1 && num > 0 {
+            best = best.max(den as f64 / num as f64);
+        }
+    }
+    unsafe { libc::close(fd) };
+    best
+}
 
 pub fn fourcc(s: &str) -> u32 {
     let b = s.as_bytes();

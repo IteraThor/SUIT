@@ -1,14 +1,13 @@
 //! Per-camera profile store (~/.config/hbvcal/profiles.json), keyed by USB port path.
 //!
-//! All HBV cameras report the same serial (HB2026070001, hard-coded in firmware), so a camera is identified by
-//! the port it is plugged into (`/dev/v4l/by-path/...`).
+//! All HBV cameras of a model report the same serial (hard-coded in firmware), so a camera is identified by
+//! the port it is plugged into (`/dev/v4l/by-path/...`). A profile also records the camera's USB ID (older ones
+//! only the serial), and is never used on a different camera that is now plugged into that port.
+use super::models;
 use super::settings::Settings;
 use crate::core::util::home;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
-
-pub const SHARED_SERIAL: &str = "HB2026070001";
-pub const HBV_USB_ID: &str = "0bdc:2710";
 
 pub type Profiles = Map<String, Value>;
 
@@ -100,8 +99,49 @@ pub fn save_all(cams: &Profiles) {
     write_store(&store(), "cameras", Value::Object(cams.clone()));
 }
 
-pub fn get(device: &str) -> Option<Value> {
+/// The saved profile of the camera on this port, also when it was made for another camera.
+pub fn get_raw(device: &str) -> Option<Value> {
     load_all().get(&port_key(device)).cloned()
+}
+
+/// Was a saved profile (or preset entry) made for a different camera than the one connected now? Compares the
+/// USB ID; for older profiles without one, the serial (shared by all cameras of an HBV model).
+pub fn made_for_other(saved: &Value, device: &str) -> bool {
+    saved_for_other(saved, usb_id(device).as_deref(), serial_of(device).as_deref())
+}
+
+/// made_for_other with the connected camera's USB ID and serial given.
+pub fn saved_for_other(saved: &Value, usb: Option<&str>, serial: Option<&str>) -> bool {
+    if let Some(u) = saved["usb_id"].as_str() {
+        return usb.map(|c| c != u).unwrap_or(false);
+    }
+    match (saved["serial"].as_str(), serial) {
+        (Some(a), Some(b)) => a != b,
+        _ => false,
+    }
+}
+
+/// Name of the camera a mismatched profile on this port was made for (None: no profile, or it fits).
+pub fn mismatch(device: &str) -> Option<String> {
+    let p = get_raw(device)?;
+    if !made_for_other(&p, device) {
+        return None;
+    }
+    Some(match p["usb_id"].as_str() {
+        Some(u) => models::name_of(Some(u)),
+        None => p["model"].as_str().and_then(models::by_key).map(|m| m.name.to_string()).unwrap_or_else(|| "another camera".into()),
+    })
+}
+
+/// The profile of the camera on this port, if it was made for this camera.
+pub fn get(device: &str) -> Option<Value> {
+    get_raw(device).filter(|p| !made_for_other(p, device))
+}
+
+/// The stream size a profile was calibrated at (meta.resolution "WxH").
+pub fn size_of(prof: &Value) -> Option<(u32, u32)> {
+    let (w, h) = prof["meta"]["resolution"].as_str()?.split_once('x')?;
+    Some((w.parse().ok()?, h.parse().ok()?))
 }
 
 pub fn get_settings(device: &str) -> Option<Settings> {
@@ -115,6 +155,8 @@ pub fn put(device: &str, settings: &Settings, meta: Option<Value>) {
         json!({
             "settings": settings.to_json(),
             "serial": serial_of(device),
+            "usb_id": usb_id(device),
+            "model": models::of_device(device).map(|m| m.key),
             "updated": now(),
             "meta": meta.unwrap_or_else(|| json!({})),
         }),
@@ -149,21 +191,44 @@ pub fn consent() -> Option<Value> {
     crate::core::util::read_json(consent_file())
 }
 
-pub fn set_consent(hbv_confirmed: bool) {
+/// Model keys the user confirmed (consent files from before models were recorded: OV2710).
+pub fn consented_models() -> Vec<String> {
+    let Some(c) = consent() else { return Vec::new() };
+    if !c["hbv_confirmed"].as_bool().unwrap_or(false) {
+        return Vec::new();
+    }
+    match c["models"].as_array() {
+        Some(a) => a.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        None => vec![models::OV2710.key.to_string()],
+    }
+}
+
+/// yes: these models are confirmed (added to the ones confirmed before). no: the hidden settings stay off.
+pub fn set_consent(hbv_confirmed: bool, model_keys: &[&str]) {
+    let mut keys = if hbv_confirmed { consented_models() } else { Vec::new() };
+    for k in model_keys {
+        if hbv_confirmed && !keys.iter().any(|x| x == k) {
+            keys.push(k.to_string());
+        }
+    }
     let _ = crate::core::util::write_file(
         consent_file(),
-        &json!({"hbv_confirmed": hbv_confirmed, "time": now()}).to_string(),
+        &json!({"hbv_confirmed": hbv_confirmed, "models": keys, "time": now()}).to_string(),
     );
 }
 
+/// A known HBV camera model (models.rs)?
 pub fn hbv(device: &str) -> bool {
-    usb_id(device).as_deref() == Some(HBV_USB_ID)
+    models::of_device(device).is_some()
 }
 
-/// May the tuning back door (MJPEG quality, sensor registers) be used on this camera? Only on HBV cameras,
-/// and only after the user confirmed once that they use HBV OV2710 cameras.
+/// May the tuning back door (MJPEG quality, sensor registers) be used on this camera? Only on known HBV models
+/// with verified firmware builds, and only after the user confirmed that they use cameras of that model.
 pub fn hidden_ok(device: &str) -> bool {
-    consent().map(|c| c["hbv_confirmed"].as_bool().unwrap_or(false)).unwrap_or(false) && hbv(device)
+    match models::of_device(device) {
+        Some(m) => m.hidden_capable() && consented_models().iter().any(|k| k == m.key),
+        None => false,
+    }
 }
 
 /// A profile made by the optimizer (autocal stamps the calibration time), not one kept from manual changes.
@@ -206,13 +271,37 @@ pub fn set_default_preset(name: Option<&str>) {
     }
 }
 
+/// The camera device now connected at a port key, if any.
+pub fn device_at(port: &str) -> Option<String> {
+    let d = format!("/dev/v4l/by-path/{}-video-index0", port);
+    if Path::new(&d).exists() { Some(d) } else { None }
+}
+
+/// May this preset entry be used for the camera on its port? Not when it was made for another camera (entries
+/// record the USB ID; older ones are judged by the profile saved for that port).
+pub fn preset_entry_fits(js: &Value, saved: Option<&Value>, device: Option<&str>) -> bool {
+    let Some(dev) = device else { return true };
+    if js["usb_id"].is_string() {
+        return !made_for_other(js, dev);
+    }
+    saved.map(|p| !made_for_other(p, dev)).unwrap_or(true)
+}
+
 /// Make a preset's settings the kept profiles (the keeper applies them). Returns the number of cameras.
 pub fn preset_to_profiles(name: &str) -> usize {
     let presets = load_presets();
     let entry = presets.get(name).and_then(|e| e.as_object()).cloned().unwrap_or_default();
     let mut cams = load_all();
+    let mut n = 0;
     for (port, js) in &entry {
         let p = cams.get(port).cloned();
+        let dev = device_at(port);
+        if !preset_entry_fits(js, p.as_ref(), dev.as_deref()) {
+            log::warn!("preset {:?}: entry for {} was made for another camera, not loaded", name, port);
+            continue;
+        }
+        n += 1;
+        let p = p.filter(|p| dev.as_deref().map(|d| !made_for_other(p, d)).unwrap_or(true));
         let mut meta = p
             .as_ref()
             .and_then(|p| p["meta"].as_object().cloned())
@@ -228,14 +317,20 @@ pub fn preset_to_profiles(name: &str) -> usize {
         }
         meta.remove("manual_edit");
         meta.insert("preset".into(), json!(name));
+        let usb = js["usb_id"].clone();
+        let mut settings = js.clone();
+        if let Some(o) = settings.as_object_mut() {
+            o.remove("usb_id");
+        }
         cams.insert(
             port.clone(),
-            json!({"settings": js, "serial": p.as_ref().map(|p| p["serial"].clone()).unwrap_or(Value::Null),
+            json!({"settings": settings, "serial": p.as_ref().map(|p| p["serial"].clone()).unwrap_or(Value::Null),
+                   "usb_id": if usb.is_string() { usb } else { p.as_ref().map(|p| p["usb_id"].clone()).unwrap_or(Value::Null) },
                    "updated": now(), "meta": meta}),
         );
     }
     save_all(&cams);
-    entry.len()
+    n
 }
 
 /// At the first keeper start of a boot: the default preset becomes the kept profiles. Its name, if loaded.

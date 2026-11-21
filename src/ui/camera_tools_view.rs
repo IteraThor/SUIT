@@ -25,7 +25,7 @@ impl CameraToolsView {
         let items: [(&str, &str, &str, Open); 3] = [
             ("Focus Calibration", "Tune optical sharpness, target sweet spots, and audio tone guidance.", "camera-photo-symbolic", |w| w.open_focus_page()),
             ("Camera Controls", "Live view and every camera setting, kept across restarts, with presets.", "preferences-system-symbolic", |w| w.open_camera_controls_page()),
-            ("Camera Optimizer", "One-click exposure, gain, and JPEG quality calibration for HBV OV2710 cameras.", "applications-science-symbolic", |w| w.open_camera_optimizer_page()),
+            ("Camera Optimizer", "One-click exposure, gain, and JPEG quality calibration for HBV cameras.", "applications-science-symbolic", |w| w.open_camera_optimizer_page()),
         ];
         for (t, s, icon, open) in items {
             let r = adw::ActionRow::new();

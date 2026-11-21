@@ -1,7 +1,7 @@
 //! Realtek RTS58xx extension-unit (XU) mailbox access through the uvcvideo driver.
 //!
 //! Uses UVCIOC_CTRL_QUERY on /dev/videoN, so it works while another program streams and needs no root.
-//! Protocol verified on 0bdc:2710 (firmware bcd 31.00) and against the sample firmware:
+//! Protocol verified on 0bdc:2710 and 0bdc:8088 (firmware bcd 31.00) and against the sample firmware:
 //!
 //!   * ioctl number: _IOWR('u', 0x21, struct uvc_xu_control_query) = 0xC0107521
 //!   * XU unit 4. Selector 0x0A = 8-byte command (SET) / status (GET). Selector 0x0B = 8-byte data window.
@@ -9,13 +9,14 @@
 //!   * status packet: [state, max_data_bytes(=8), 0, 0xBB...]
 //!       state 0 = idle, 1 = read data pending, 2 = waiting for write data, >2 = error code of the last command
 //!   * command group 0xFF resets the mailbox state to idle (also clears an error state).
-//!   * tuning lock: while the flag is 0, memory and code reads come back masked. Unlock = I2CWrite (00 8A)
-//!     with address 0xF7F7 and data 15 08 (all known builds). The flag lives in RAM.
+//!   * tuning lock: while the flag is 0, memory, code and sensor reads come back masked. Unlock = I2CWrite
+//!     (00 8A) with address 0xF7F7 and data 15 08 (all known builds). The flag lives in RAM.
 //!   * the mailbox is ONE state machine per camera: every transaction holds a per-camera flock.
-//!   * sensor registers (OV2710, 16-bit address, needs a running stream):
+//!   * sensor registers (OmniVision, 16-bit address, needs a running stream):
 //!       read  = 00 CA, address = register, length 2 -> [value, 0]
 //!       write = 00 8A, address = register, data [value, 0]
-use std::cell::Cell;
+use super::models::{self, Build, Model};
+use std::cell::{Cell, RefCell};
 use std::ffi::CString;
 use std::io;
 
@@ -38,11 +39,9 @@ pub const OP_CODE_READ: (u8, u8) = (0x00, 0xC3);
 pub const OP_SENSOR_READ: (u8, u8) = (0x00, 0xCA);
 pub const OP_SENSOR_WRITE: (u8, u8) = (0x00, 0x8A);
 
-const UNLOCK_ADDR: u32 = 0xF7F7;
-const UNLOCK_DATA: [u8; 2] = [0x15, 0x08];
-/// build -> tuning-lock flag (XDATA)
-pub const BUILDS: &[(&str, u32)] = &[("07/11/26", 0xC888), ("07/28/26", 0xC888), ("02/15/25", 0xC879)];
-const BUILD_STRING_ADDRS: [u32; 2] = [0x1D10, 0x0FE4];
+pub const UNLOCK_ADDR: u32 = 0xF7F7;
+pub const UNLOCK_DATA: [u8; 2] = [0x15, 0x08];
+const MAGIC: &[u8; 8] = b"REALSIL\0";
 const LOCKED_CODE_MASKS: [u8; 3] = [0x00, 0x21, 0x0D];
 
 pub fn xu_err(errno: i32, msg: String) -> io::Error {
@@ -61,6 +60,8 @@ pub struct Xu {
     fd: i32,
     lock_fd: Cell<i32>,
     lock_depth: Cell<u32>,
+    pub model: Option<&'static Model>,
+    build: RefCell<Option<String>>,
 }
 
 /// Guard of [`Xu::transaction`].
@@ -83,7 +84,16 @@ impl Xu {
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(Xu { device: device.into(), unit: XU_UNIT, delay: 0.002, fd, lock_fd: Cell::new(-1), lock_depth: Cell::new(0) })
+        Ok(Xu {
+            device: device.into(),
+            unit: XU_UNIT,
+            delay: 0.002,
+            fd,
+            lock_fd: Cell::new(-1),
+            lock_depth: Cell::new(0),
+            model: models::of_device(device),
+            build: RefCell::new(None),
+        })
     }
 
     /// Exclusive use of this camera's mailbox across processes (re-entrant within one Xu object).
@@ -212,16 +222,20 @@ impl Xu {
     }
 
     pub fn is_unlocked(&self) -> io::Result<bool> {
-        Ok(self.mem_read(self.lock_flag()?, 1)?[0] == 0x01)
+        let b = self.build_info()?;
+        match b.lock_flag {
+            Some(flag) => Ok(self.mem_read(flag, 1)?[0] == 0x01),
+            None => Ok(self.read(OP_CODE_READ, b.build_addr, 8)?.as_slice() == MAGIC),
+        }
     }
 
-    pub fn lock_flag(&self) -> io::Result<u32> {
+    /// The verified firmware build of this camera's model; an error for an unknown model or build.
+    pub fn build_info(&self) -> io::Result<&'static Build> {
+        let m = self.model.ok_or_else(|| xu_err(0, format!("{}: not a known HBV camera model", self.device)))?;
         let build = self.firmware_build()?;
-        BUILDS
-            .iter()
-            .find(|(b, _)| *b == build)
-            .map(|(_, f)| *f)
-            .ok_or_else(|| xu_err(0, format!("unknown firmware build {:?}: tuning lock not mapped, not touching it", build)))
+        m.build(&build).ok_or_else(|| {
+            xu_err(0, format!("unknown firmware build {:?} on {}: memory layout not verified, not touching it", build, m.name))
+        })
     }
 
     /// Enable the firmware's tuning access (RAM flag, harmless, idempotent). Known builds only.
@@ -235,13 +249,26 @@ impl Xu {
         Ok(())
     }
 
-    /// Build date of the running firmware, e.g. '07/28/26' ('REALSIL\0<date>' in code).
+    /// Build date of the running firmware, e.g. '07/28/26' ('REALSIL\0<date>' in code). Cached per Xu.
     pub fn firmware_build(&self) -> io::Result<String> {
-        for addr in BUILD_STRING_ADDRS {
+        if let Some(b) = self.build.borrow().clone() {
+            return Ok(b);
+        }
+        let b = self.read_build()?;
+        *self.build.borrow_mut() = Some(b.clone());
+        Ok(b)
+    }
+
+    fn read_build(&self) -> io::Result<String> {
+        let addrs = match self.model {
+            Some(m) if !m.build_string_addrs.is_empty() => m.build_string_addrs.to_vec(),
+            _ => models::all_build_addrs(),
+        };
+        for addr in addrs {
             let raw = self.read(OP_CODE_READ, addr, 16)?;
             for mask in LOCKED_CODE_MASKS {
                 let plain: Vec<u8> = raw.iter().map(|b| b.wrapping_sub(mask)).collect();
-                if plain.starts_with(b"REALSIL\0") {
+                if plain.starts_with(MAGIC) {
                     let s = &plain[8..16];
                     let end = s.iter().position(|&c| c == 0).unwrap_or(s.len());
                     return Ok(String::from_utf8_lossy(&s[..end]).to_string());
@@ -251,12 +278,12 @@ impl Xu {
         Ok("unknown".into())
     }
 
-    /// Read one OV2710 register (camera must be streaming).
+    /// Read one sensor register (camera must be streaming; masked while locked).
     pub fn sensor_read(&self, reg: u32) -> io::Result<u8> {
         Ok(self.read(OP_SENSOR_READ, reg, 2)?[0])
     }
 
-    /// Write one OV2710 register (camera must be streaming).
+    /// Write one sensor register (camera must be streaming).
     pub fn sensor_write(&self, reg: u32, value: u8) -> io::Result<()> {
         self.write(OP_SENSOR_WRITE, &[value, 0], reg)
     }

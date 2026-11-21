@@ -37,7 +37,9 @@ pub fn run_worker(dev: &str, s: &Settings, w: u32, h: u32, fps: u32, seconds: f6
     let mut waited = false;
     let r = (|| -> std::io::Result<WorkerStats> {
         let xu = Xu::open(dev)?;
-        apply_prestream(&xu, s, w)?;
+        if s.mjpeg_q.is_some() {
+            apply_prestream(&xu, s, w)?;
+        }
         let mut cam = Camera::open(dev)?;
         cam.configure(w, h, "MJPG", fps)?;
         start.wait();

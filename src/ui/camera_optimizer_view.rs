@@ -1,4 +1,4 @@
-//! Camera Optimizer page: one-click calibration of HBV OV2710 cameras (core::hbvcal).
+//! Camera Optimizer page: one-click calibration of HBV cameras (core::hbvcal; models in core::hbvcal::models).
 //!
 //! Two tabs under the shared camera strip. Optimize: a table of the cameras with their calibration, a lighting
 //! check, the run with a progress bar and step checklist. Before & After: the pictures taken by the last run as
@@ -11,7 +11,7 @@ use crate::core::cvx;
 use crate::core::hbvcal::autocal::{PREVIEW, WHITE_TARGET};
 use crate::core::hbvcal::daemon::cameras;
 use crate::core::hbvcal::oneclick::{self, Pictures, Support, JOB};
-use crate::core::hbvcal::{live, profiles};
+use crate::core::hbvcal::{live, models, profiles};
 use crate::core::i18n::{get_language, tr, trf};
 use adw::prelude::*;
 use gtk::{glib, pango};
@@ -68,6 +68,9 @@ struct Status {
     consent: Option<Value>,
     autodarts: String,
     pending: bool,
+    /// resolutions every supported camera offers (largest first) and Autodarts' current one
+    sizes: Vec<(u32, u32)>,
+    ad_size: (u32, u32),
 }
 
 struct BaData {
@@ -104,6 +107,9 @@ pub struct CameraOptimizerPage {
     preview_seq: Cell<i64>,
     preview_dev: RefCell<String>,
     consent_asked: Cell<bool>,
+    /// the resolution picked for the next optimization (None: the default)
+    size: Cell<Option<(u32, u32)>>,
+    size_box: gtk::Box,
     lighting: RefCell<HashMap<String, Value>>,
     ba: RefCell<Vec<Pictures>>,
     ba_data: RefCell<Option<Rc<BaData>>>,
@@ -236,8 +242,8 @@ impl CameraOptimizerPage {
         let dp = adw::StatusPage::new();
         dp.set_icon_name(Some("camera-disabled-symbolic"));
         dp.set_title(&tr("Optimization is off"));
-        dp.set_description(Some(&tr("This tool changes hidden settings that were only tested on HBV OV2710 cameras, so it stays off for other cameras.")));
-        let b_yes = gtk::Button::with_label(&tr("I do use HBV OV2710 cameras"));
+        dp.set_description(Some(&tr("This tool changes hidden settings that were only tested on HBV cameras, so it stays off for other cameras.")));
+        let b_yes = gtk::Button::with_label(&tr("I do use HBV cameras"));
         b_yes.set_halign(gtk::Align::Center);
         b_yes.add_css_class("pill");
         dp.set_child(Some(&b_yes));
@@ -308,6 +314,9 @@ impl CameraOptimizerPage {
         btn_light.add_css_class("compact-btn");
         btn_light.set_tooltip_text(Some(&tr("Compare the brightness of every optimized camera with its calibration")));
         left.append(&btn_light);
+        let size_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        size_box.set_visible(false);
+        left.append(&size_box);
         let guide = gtk::Box::new(gtk::Orientation::Vertical, 4);
         guide.append(&caption("BEFORE YOU START", &["camopt-heading"], false));
         for t in ["Remove all darts from the board", "Turn the lights on the way you play", "Keep people and hands away from the board for about 3 minutes"] {
@@ -502,6 +511,8 @@ impl CameraOptimizerPage {
             preview_seq: Cell::new(-1),
             preview_dev: RefCell::new(String::new()),
             consent_asked: Cell::new(false),
+            size: Cell::new(None),
+            size_box,
             lighting: RefCell::new(HashMap::new()),
             ba: RefCell::new(vec![]),
             ba_data: RefCell::new(None),
@@ -661,6 +672,74 @@ impl CameraOptimizerPage {
         self.status.borrow().as_ref().and_then(|s| s.consent.as_ref().map(|c| c["hbv_confirmed"].as_bool().unwrap_or(false))).unwrap_or(false)
     }
 
+    /// Connected camera models with hidden settings the user has not confirmed yet.
+    fn unconfirmed_models(st: &Status) -> Vec<&'static str> {
+        let done = profiles::consented_models();
+        let mut v: Vec<&'static str> = st
+            .cams
+            .iter()
+            .filter_map(|c| c.s.model_key.as_deref().and_then(models::by_key))
+            .filter(|m| m.hidden_capable() && !done.iter().any(|k| k == m.key))
+            .map(|m| m.key)
+            .collect();
+        v.dedup();
+        v
+    }
+
+    /// The resolution the next optimization runs at.
+    fn chosen_size(&self) -> Option<(u32, u32)> {
+        let st = self.status.borrow();
+        let st = st.as_ref()?;
+        match self.size.get() {
+            Some(s) if st.sizes.contains(&s) => Some(s),
+            _ => oneclick::default_size(&st.sizes, st.ad_size),
+        }
+    }
+
+    fn render_sizes(self: &Rc<Self>, st: &Status, show: bool) {
+        super::helpers::clear_box(&self.size_box);
+        self.size_box.set_visible(show && !st.sizes.is_empty());
+        if st.sizes.is_empty() {
+            return;
+        }
+        self.size_box.append(&caption("RESOLUTION", &["camopt-heading"], false));
+        let cur = self.chosen_size().unwrap_or(st.sizes[0]);
+        let label = |s: (u32, u32)| {
+            let t = oneclick::size_label(s);
+            if s == st.ad_size { format!("{} ({})", t, tr("Autodarts now")) } else { t }
+        };
+        let m = Rc::downgrade(self);
+        let pick: Rc<dyn Fn((u32, u32))> = Rc::new(move |s| {
+            if let Some(m) = m.upgrade() {
+                m.size.set(Some(s));
+            }
+        });
+        if st.sizes.len() <= 4 {
+            let o: Vec<(String, String)> = st.sizes.iter().map(|s| (oneclick::size_label(*s), label(*s))).collect();
+            let sizes = st.sizes.clone();
+            let w = cw::segmented(&o, &oneclick::size_label(cur), Rc::new(move |k: String| {
+                if let Some(s) = sizes.iter().find(|s| oneclick::size_label(**s) == k) {
+                    pick(*s);
+                }
+            }));
+            self.size_box.append(&w);
+        } else {
+            let texts: Vec<String> = st.sizes.iter().map(|s| label(*s)).collect();
+            let tr_: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+            let w = gtk::DropDown::from_strings(&tr_);
+            w.set_halign(gtk::Align::Start);
+            w.set_selected(st.sizes.iter().position(|s| *s == cur).unwrap_or(0) as u32);
+            let sizes = st.sizes.clone();
+            w.connect_selected_notify(move |d| {
+                if let Some(s) = sizes.get(d.selected() as usize) {
+                    pick(*s);
+                }
+            });
+            self.size_box.append(&w);
+        }
+        self.size_box.append(&caption("Higher resolution shows more detail but needs more USB bandwidth. Autodarts is switched to this resolution when you apply.", &[], true));
+    }
+
     pub fn refresh_status(self: &Rc<Self>) {
         if self.status_busy.replace(true) {
             return;
@@ -668,7 +747,7 @@ impl CameraOptimizerPage {
         let m = self.clone();
         run_async(
             || {
-                let cams = cameras()
+                let cams: Vec<CamInfo> = cameras()
                     .iter()
                     .map(|d| {
                         let s = oneclick::support(d);
@@ -684,7 +763,10 @@ impl CameraOptimizerPage {
                         c
                     })
                     .collect();
+                let sup: Vec<String> = cams.iter().filter(|c: &&CamInfo| c.s.supported).map(|c| c.s.device.clone()).collect();
                 Status {
+                    sizes: oneclick::size_choices(&sup),
+                    ad_size: crate::core::hbvcal::autodarts::stream_size(),
                     cams,
                     consent: profiles::consent(),
                     autodarts: oneclick::systemctl("is-active", "autodarts"),
@@ -701,7 +783,8 @@ impl CameraOptimizerPage {
 
     fn render_status(self: &Rc<Self>) {
         let st = self.status.borrow().clone().unwrap();
-        if st.consent.is_none() && !self.consent_asked.replace(true) {
+        let declined = st.consent.is_some() && !self.consented();
+        if !declined && !Self::unconfirmed_models(&st).is_empty() && !self.consent_asked.replace(true) {
             self.ask_consent();
         }
         let on = self.consented();
@@ -755,7 +838,7 @@ impl CameraOptimizerPage {
             self.hero_text.set_label(&tr("Nothing has changed yet. Compare before and after, then apply it or discard it."));
         } else if sup.is_empty() {
             self.hero_title.set_label(&tr("No supported camera found"));
-            self.hero_text.set_label(&tr("Connect your HBV OV2710 cameras, then open this page again."));
+            self.hero_text.set_label(&tr("Connect your HBV cameras, then open this page again."));
         } else if !bad.is_empty() {
             self.hero_title.set_label(&tr("The light has changed"));
             self.hero_text.set_label(&tr("Optimize again to match the cameras to the new light."));
@@ -782,6 +865,7 @@ impl CameraOptimizerPage {
         self.btn_restore.set_visible(st.cams.iter().any(|c| c.s.optimized) && !running);
         self.btn_light.set_visible(done > 0 && !running);
         self.guide.set_visible(!running);
+        self.render_sizes(&st, !running && !st.pending && !sup.is_empty());
         self.banner.set_visible(!bad.is_empty() && !running);
         if let Some(first) = bad.first() {
             let names = bad.iter().map(|p| cw::cam_name(p)).collect::<Vec<_>>().join(", ");
@@ -793,13 +877,24 @@ impl CameraOptimizerPage {
 
     /// One table line; tapping it picks the camera (for Before & After and Controls).
     fn cam_row(self: &Rc<Self>, c: &CamInfo) -> gtk::Widget {
+        let mut about = vec![c.s.model.clone().unwrap_or_default()];
+        if !c.s.firmware.is_empty() {
+            about.push(trf("Firmware {fw}", &[("fw", &c.s.firmware)]));
+        }
+        if c.s.mode != "full" && !c.s.reason.is_empty() {
+            about.push(tr(&c.s.reason));
+        }
+        let about = about.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+        let jpeg = if c.s.mode == "full" { "–".to_string() } else { tr("own") };
         let (kind, cells, tip): (&str, Vec<String>, String) = if !c.s.supported {
             ("bad", vec![tr("Not supported"), String::new(), String::new(), String::new()], c.s.reason.clone())
+        } else if let Some(other) = &c.s.mismatch {
+            ("warn", vec![trf("Profile from {model}, not applied", &[("model", other)]), String::new(), String::new()], format!("{} · {}", about, tr("Optimize again, or remove it in Camera Controls.")))
         } else if c.s.optimized {
             let white = c.white.map(|w| format!("{:.0} / {:.0}", w, WHITE_TARGET)).unwrap_or_else(|| "–".into());
-            ("ok", vec![white, c.q.map(|q| q.to_string()).unwrap_or_else(|| "–".into()), when_text(c.when.as_deref())], trf("Firmware {fw}", &[("fw", &c.s.firmware)]))
+            ("ok", vec![white, c.q.map(|q| q.to_string()).unwrap_or(jpeg), when_text(c.when.as_deref())], about)
         } else {
-            ("warn", vec![tr("Not optimized"), String::new(), String::new()], trf("Firmware {fw}", &[("fw", &c.s.firmware)]))
+            ("warn", vec![tr("Not optimized"), String::new(), String::new()], about)
         };
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let name = status_dot_box(&cw::cam_name(&c.s.port), kind);
@@ -850,34 +945,45 @@ impl CameraOptimizerPage {
 
     fn ask_consent(self: &Rc<Self>) {
         let mut lines = vec![];
+        let mut keys: Vec<&'static str> = vec![];
+        let mut names: Vec<String> = vec![];
         if let Some(st) = self.status.borrow().as_ref() {
+            keys = Self::unconfirmed_models(st);
             for c in &st.cams {
-                let hbv = c.s.usb_id.as_deref() == Some(profiles::HBV_USB_ID);
-                let what = if hbv {
-                    tr("HBV camera detected")
-                } else {
-                    trf("other camera ({usb_id})", &[("usb_id", &c.s.usb_id.clone().unwrap_or_else(|| tr("unknown")))])
+                let model = c.s.model_key.as_deref().and_then(models::by_key);
+                let what = match model {
+                    Some(m) => trf("{model} detected", &[("model", &m.name)]),
+                    None => trf("other camera ({usb_id})", &[("usb_id", &c.s.usb_id.clone().unwrap_or_else(|| tr("unknown")))]),
                 };
-                lines.push(format!("{}  {}: {}", if hbv { "✓" } else { "✗" }, cw::cam_name(&c.s.port), what));
+                lines.push(format!("{}  {}: {}", if model.is_some() { "✓" } else { "✗" }, cw::cam_name(&c.s.port), what));
             }
+            names = keys.iter().filter_map(|k| models::by_key(k)).map(|m| m.name.to_string()).collect();
         }
-        let mut body = tr("The optimizer uses hidden camera settings (JPEG quality, sensor gain) that were verified on HBV OV2710 cameras only.");
+        let list = names.join(", ");
+        let mut body = trf("The optimizer uses hidden camera settings (sensor gain, JPEG quality) that were verified on these camera models: {models}.", &[("models", &list)]);
         if !lines.is_empty() {
             body += &format!("\n\n{}", lines.join("\n"));
         }
-        let d = alert(&tr("Are these HBV OV2710 cameras?"), &body, &[("no", &tr("No / Not Sure")), ("yes", &tr("Yes, Continue"))], Some("yes"), None);
+        let d = alert(&trf("Are these {models} cameras?", &[("models", &list)]), &body, &[("no", &tr("No / Not Sure")), ("yes", &tr("Yes, Continue"))], Some("yes"), None);
         let m = self.clone();
         ask(&self.win.window, d, move |r| {
             let yes = r == "yes";
-            let m2 = m.clone();
-            run_async(move || profiles::set_consent(yes), move |_| m2.refresh_status());
+            let (m2, keys) = (m.clone(), keys.clone());
+            run_async(move || profiles::set_consent(yes, &keys), move |_| m2.refresh_status());
         });
     }
 
     fn ask_prepare(self: &Rc<Self>) {
+        let Some(size) = self.chosen_size() else { return };
+        let ad = self.status.borrow().as_ref().map(|s| s.ad_size);
+        let mut body = tr("Autodarts stops for about 3 minutes and restarts by itself.\n\nDarts removed, lights on, hands away from the board?");
+        body += &format!("\n\n{}", trf("Resolution: {size}", &[("size", &oneclick::size_label(size))]));
+        if ad.is_some() && ad != Some(size) {
+            body += &format!(" · {}", tr("Autodarts is switched to it when you apply; the board must then be calibrated again."));
+        }
         let d = alert(
             &tr("Start the Optimization?"),
-            &tr("Autodarts stops for about 3 minutes and restarts by itself.\n\nDarts removed, lights on, hands away from the board?"),
+            &body,
             &[("cancel", &tr("Cancel")), ("start", &tr("Start"))],
             Some("start"),
             None,
@@ -885,6 +991,7 @@ impl CameraOptimizerPage {
         let m = self.clone();
         ask(&self.win.window, d, move |r| {
             if r == "start" {
+                m.size.set(Some(size));
                 m.start_job("optimize");
             }
         });
@@ -960,7 +1067,13 @@ impl CameraOptimizerPage {
     fn start_job(self: &Rc<Self>, name: &str) {
         live::stop_all();
         let started = match name {
-            "optimize" => JOB.start(name, |j| oneclick::optimize(j, 30)),
+            "optimize" => {
+                let Some(size) = self.chosen_size() else {
+                    self.win.show_toast("No resolution all cameras offer");
+                    return;
+                };
+                JOB.start(name, move |j| oneclick::optimize(j, 30, size))
+            }
             "apply" => JOB.start(name, oneclick::apply),
             _ => JOB.start(name, oneclick::restore),
         };
@@ -1117,8 +1230,8 @@ impl CameraOptimizerPage {
             }
             (n, "ok")
         } else if !j.running && !restoring && j.result.as_object().map(|o| !o.is_empty()).unwrap_or(false) {
-            let vals: Vec<&Value> = j.result.as_object().unwrap().values().collect();
-            let mut qs: Vec<String> = vals.iter().map(|r| r["mjpeg_q"].to_string()).collect();
+            let vals: Vec<&Value> = j.result.as_object().unwrap().values().filter(|v| v.is_object()).collect();
+            let mut qs: Vec<String> = vals.iter().filter(|r| r["mjpeg_q"].is_i64()).map(|r| r["mjpeg_q"].to_string()).collect();
             qs.sort();
             qs.dedup();
             let first = vals[0];
@@ -1133,6 +1246,12 @@ impl CameraOptimizerPage {
                 n += &format!(" · {}", trf("JPEG level {q}", &[("q", &qs[0])]));
             }
             n += &format!(".{} {}", change, tr("Review before & after, then apply."));
+            if let Some(w) = j.result["warning"].as_str() {
+                n += &format!(" {}", w);
+            }
+            if vals.iter().any(|r| r["white_short"].as_bool().unwrap_or(false)) {
+                n += &format!(" {}", tr("Some cameras stay darker than the target: more light on the board would help."));
+            }
             (n, "review")
         } else if !j.running && restoring {
             (tr("Original settings restored."), "")

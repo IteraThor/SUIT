@@ -58,6 +58,10 @@ fn main() {
             core::logger::setup_logging(None);
             std::process::exit(launcher::main());
         }
+        "hbv-probe" => {
+            core::logger::setup_console_logging();
+            std::process::exit(core::hbvcal::probe::main(rest));
+        }
         "exposure-lock" => {
             core::logger::setup_console_logging();
             core::hbvcal::service::exposure_lock_cleanup();

@@ -83,16 +83,23 @@ Optical calibration wizard to achieve razor-sharp focus across all 3 Autodarts c
 
 ---
 
-### 5. Camera Optimizer (HBV OV2710)
-One-click image calibration for HBV OV2710 cameras (USB ID `0bdc:2710`), found under **Camera Tools**.
+### 5. Camera Optimizer (HBV cameras)
+One-click image calibration for HBV cameras, found under **Camera Tools**.
 
+| Model | USB ID | What the optimizer sets |
+|---|---|---|
+| HBV OV2710 | `0bdc:2710` | exposure, 1× sensor gain + matched digital gain, MJPEG quality |
+| HBV OV9732 | `0bdc:8088` | exposure, matched sensor gain, MJPEG quality |
+| HBV IMX179 | `1e45:8025` | exposure, matched gain (UVC controls only; its JPEG quality is fixed in the firmware) |
+
+* **Resolution first**: pick the resolution before you start (every size all cameras offer, Autodarts' current one preselected). If the cameras can't stream it cleanly together, the run stops and suggests a lower one; applying switches Autodarts to it.
 * **One click**: stops Autodarts, calibrates every camera against the empty board, matches them, and starts Autodarts again (about 2 minutes).
 * **Hidden camera controls**: longest flicker-free exposure at 1× sensor gain, matched digital gain, low sharpening, and a high MJPEG quality picked by a bandwidth check across all cameras. About twice as visible darts in Autodarts' difference image on the reference rig.
 * **Stays applied**: the `suit-camera-keeper` user service writes the settings before Autodarts opens the cameras and re-applies them after restarts and standby. Nothing is flashed; settings live in camera RAM.
 * **Fine-tuning** afterwards on the **Camera Controls** page, with "Reset to calibrated" and a brightness check.
 * **Before and after** comparison per camera, and **Restore original settings** to undo everything.
 
-Only cameras with the HBV USB ID and a verified firmware build are touched; you confirm once that you use HBV OV2710 cameras. Profiles live in `~/.config/hbvcal`.
+Hidden settings are only used on a known HBV model with a verified firmware build, after you confirm that model once; other cameras of a known model get their standard controls calibrated. A saved profile is never applied to a different camera plugged into the same port. Profiles live in `~/.config/hbvcal`.
 
 <p align="center">
   <img src="docs/assets/screenshots/07-camera-before-after.png" alt="Camera Optimizer before (left) and after (right)" width="420">
@@ -103,7 +110,7 @@ Only cameras with the HBV USB ID and a verified firmware build are touched; you 
 ### 6. Camera Controls
 Live view and every setting of each camera, for any UVC camera, found under **Camera Tools**.
 
-* **Every control** grouped by Exposure / Tone / Detail / Color / Stream; on confirmed HBV OV2710 cameras also JPEG quality and sensor gain.
+* **Every control** grouped by Exposure / Tone / Detail / Color / Stream; on confirmed HBV cameras also JPEG quality and sensor gain.
 * **Keep these settings**: per camera, re-applied by the `suit-camera-keeper` service before Autodarts opens the cameras and after every restart or standby.
 * **Presets**: save the settings of all cameras under a name (e.g. day / evening light) and load them in one tap.
 * **Live view** that never takes a camera away from Autodarts: while Autodarts runs, it shows Autodarts' own picture.
