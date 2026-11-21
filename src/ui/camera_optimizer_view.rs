@@ -1,20 +1,20 @@
 //! Camera Optimizer page: one-click calibration of HBV cameras (core::hbvcal; models in core::hbvcal::models).
 //!
-//! Two tabs under the shared camera strip. Optimize: a table of the cameras with their calibration, a lighting
-//! check, the run with a progress bar and step checklist. Before & After: the pictures taken by the last run as
-//! split, side-by-side or difference view with zoom, and the measured change.
+//! One centred screen at a time, like the Wireless Screen wizard, picked from the status: Home (the cameras, the
+//! resolution, Optimize) -> Working (live picture, progress) -> Review (before & after, Apply or Discard) ->
+//! Result. Before & after of the last run stays reachable from Home.
 use super::camera_controls_view::ask_save_preset;
-use super::camera_widgets::{self as cw, caption, chip, opts, segmented, set_chip, wrap_label, AutodartsStatus, CameraStrip, StripEntry, ThumbPoller};
-use super::helpers::{alert, ask, run_async};
+use super::camera_widgets::{self as cw, segmented};
+use super::helpers::{alert, ask, clear_box, every, run_async};
 use super::{Page, Win};
 use crate::core::cvx;
-use crate::core::hbvcal::autocal::{PREVIEW, WHITE_TARGET};
+use crate::core::hbvcal::autocal::PREVIEW;
 use crate::core::hbvcal::daemon::cameras;
-use crate::core::hbvcal::oneclick::{self, Pictures, Support, JOB};
+use crate::core::hbvcal::oneclick::{self, JobView, Pictures, Support, JOB};
 use crate::core::hbvcal::{live, models, profiles};
 use crate::core::i18n::{get_language, tr, trf};
 use adw::prelude::*;
-use gtk::{glib, pango};
+use gtk::glib;
 use opencv::core::{Mat, Point, Scalar, Vector};
 use opencv::imgproc;
 use opencv::prelude::*;
@@ -29,8 +29,10 @@ const BA_VIEW: f64 = 960.0;
 const BA_ZOOMS: [i32; 4] = [1, 2, 3, 4];
 const PREVIEW_MS: u64 = 250;
 const PREVIEW_VIEW: i32 = 720;
-/// table: camera, white / target, JPEG, last run (the rest is "Now")
-const COLS: [i32; 4] = [130, 96, 52, 118];
+/// Screens in order; the progress dots follow it ("declined" shares the dot of "home").
+const SCREENS: [&str; 4] = ["home", "working", "review", "result"];
+/// width of the camera list and the resolution row
+const LIST_W: i32 = 500;
 
 fn eta_s(name: &str) -> f64 {
     match name {
@@ -58,7 +60,6 @@ pub fn when_text(stamp: Option<&str>) -> String {
 struct CamInfo {
     s: Support,
     white: Option<f64>,
-    q: Option<i64>,
     when: Option<String>,
 }
 
@@ -66,7 +67,6 @@ struct CamInfo {
 struct Status {
     cams: Vec<CamInfo>,
     consent: Option<Value>,
-    autodarts: String,
     pending: bool,
     /// resolutions every supported camera offers (largest first) and Autodarts' current one
     sizes: Vec<(u32, u32)>,
@@ -80,20 +80,72 @@ struct BaData {
     q: (Option<i64>, Option<i64>),
 }
 
-/// ● text with the dot coloured by kind (where the text is the camera's name).
-fn status_dot_box(text: &str, kind: &str) -> gtk::Box {
-    let b = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let d = gtk::Label::new(Some("●"));
-    d.add_css_class("camopt-dot");
-    d.add_css_class(&format!("camopt-{}", kind));
-    b.append(&d);
+/// Centred text line (wrapped).
+fn line(text: &str, classes: &[&str]) -> gtk::Label {
     let l = gtk::Label::new(Some(text));
-    l.set_xalign(0.0);
-    l.set_ellipsize(pango::EllipsizeMode::End);
-    l.add_css_class("camopt-cell");
-    l.add_css_class("heading");
+    l.set_wrap(true);
+    l.set_justify(gtk::Justification::Center);
+    l.set_max_width_chars(64);
+    for c in classes {
+        l.add_css_class(c);
+    }
+    l
+}
+
+/// Centred screen: big icon (hidden for ""), short title, one dim line; extra widgets go below.
+fn screen(icon: &str, title: &str) -> (gtk::Box, gtk::Image, gtk::Label, gtk::Label) {
+    let b = gtk::Box::new(gtk::Orientation::Vertical, 14);
+    b.set_valign(gtk::Align::Center);
+    b.set_halign(gtk::Align::Center);
+    b.set_margin_start(24);
+    b.set_margin_end(24);
+    b.set_margin_top(18);
+    b.set_margin_bottom(18);
+    let img = gtk::Image::from_icon_name(icon);
+    img.set_pixel_size(80);
+    img.add_css_class("dim-label");
+    img.set_visible(!icon.is_empty());
+    b.append(&img);
+    let t = line(&tr(title), &["title-1"]);
+    t.set_max_width_chars(36);
+    b.append(&t);
+    let l = line("", &["dim-label"]);
     b.append(&l);
+    (b, img, t, l)
+}
+
+/// The screen icon and its colour ("success", "warning", "error"; "" = dim).
+fn set_icon(img: &gtk::Image, icon: &str, tone: &str) {
+    img.set_icon_name(Some(icon));
+    for c in ["success", "warning", "error", "dim-label"] {
+        img.remove_css_class(c);
+    }
+    img.add_css_class(if tone.is_empty() { "dim-label" } else { tone });
+}
+
+fn big_button(label: &str) -> gtk::Button {
+    let b = gtk::Button::with_label(&tr(label));
+    b.add_css_class("suggested-action");
+    b.add_css_class("pill");
+    b.set_size_request(280, 52);
+    b.set_halign(gtk::Align::Center);
+    b.set_margin_top(6);
     b
+}
+
+fn flat(label: &str) -> gtk::Button {
+    let b = gtk::Button::with_label(&tr(label));
+    b.add_css_class("flat");
+    b.set_valign(gtk::Align::Center);
+    b
+}
+
+fn boxed() -> gtk::ListBox {
+    let l = gtk::ListBox::new();
+    l.add_css_class("boxed-list");
+    l.set_selection_mode(gtk::SelectionMode::None);
+    l.set_size_request(LIST_W, -1);
+    l
 }
 
 pub struct CameraOptimizerPage {
@@ -107,11 +159,18 @@ pub struct CameraOptimizerPage {
     preview_seq: Cell<i64>,
     preview_dev: RefCell<String>,
     consent_asked: Cell<bool>,
+    /// the result screen of the last job was closed with Done
+    job_seen: Cell<bool>,
+    /// Before & after opened from Home (not a calibration waiting for review)
+    browsing: Cell<bool>,
     /// the resolution picked for the next optimization (None: the default)
     size: Cell<Option<(u32, u32)>>,
-    size_box: gtk::Box,
+    /// the sizes the resolution row lists; true while the row is filled (its change handler waits)
+    sizes: RefCell<Vec<(u32, u32)>>,
+    sizes_sync: Cell<bool>,
     lighting: RefCell<HashMap<String, Value>>,
     ba: RefCell<Vec<Pictures>>,
+    ba_ports: RefCell<Vec<String>>,
     ba_data: RefCell<Option<Rc<BaData>>>,
     ba_key: RefCell<String>,
     ba_zoom: Cell<i32>,
@@ -120,46 +179,45 @@ pub struct CameraOptimizerPage {
     ba_comp: Cell<(i32, i32)>,
     ba_drag_center: Cell<(f64, f64)>,
     ba_pointer: Cell<Option<(f64, f64)>>,
-    strip: Rc<CameraStrip>,
-    autodarts: Rc<AutodartsStatus>,
-    thumbs: RefCell<Option<Rc<ThumbPoller>>>,
     stack: gtk::Stack,
-    tabs: gtk::Stack,
-    tab_toggle: adw::ToggleGroup,
-    hero_title: gtk::Label,
-    hero_text: gtk::Label,
-    banner: gtk::Box,
-    banner_title: gtk::Label,
-    cam_list: gtk::Box,
-    preview_box: gtk::Box,
+    dots_box: gtk::Box,
+    dots: Vec<gtk::Label>,
+    home_icon: gtk::Image,
+    home_title: gtk::Label,
+    home_line: gtk::Label,
+    cam_list: gtk::ListBox,
+    size_list: gtk::ListBox,
+    size_row: adw::ComboRow,
+    btn_optimize: gtk::Button,
+    btn_ba: gtk::Button,
+    btn_light: gtk::Button,
+    btn_restore: gtk::Button,
+    work_title: gtk::Label,
+    work_line: gtk::Label,
+    preview_frame: gtk::Overlay,
     preview_pic: gtk::Picture,
     preview_tag: gtk::Label,
-    preview_phase: gtk::Label,
-    btn_light: gtk::Button,
-    guide: gtk::Box,
-    btn_optimize: gtk::Button,
-    btn_restore: gtk::Button,
-    job_empty: gtk::Label,
-    job_box: gtk::Box,
     progress: gtk::ProgressBar,
     lbl_time: gtk::Label,
     steps_box: gtk::Box,
-    steps_scroll: gtk::ScrolledWindow,
-    job_note: gtk::Label,
-    btn_after: gtk::Button,
+    res_icon: gtk::Image,
+    res_title: gtk::Label,
+    res_line: gtk::Label,
     log_view: gtk::TextView,
+    rev_back: gtk::Button,
+    rev_title: gtk::Label,
+    rev_line: gtk::Label,
+    ba_cams: gtk::Box,
     ba_stack: gtk::Stack,
     ba_empty: gtk::Label,
     ba_picture: gtk::Picture,
     tag_before: gtk::Label,
     tag_after: gtk::Label,
     ba_zoom_toggle: adw::ToggleGroup,
-    ba_note: gtk::Label,
     ba_adj: gtk::Adjustment,
-    ba_title: gtk::Label,
-    ba_table: gtk::Grid,
-    ba_chip: gtk::Label,
-    ba_pending: gtk::Box,
+    ba_stats: gtk::Label,
+    rev_pending: gtk::Box,
+    rev_done: gtk::Box,
     btn_ba_preset: gtk::Button,
 }
 
@@ -170,18 +228,12 @@ impl Page for CameraOptimizerPage {
 
     fn on_opened(self: Rc<Self>) {
         self.refresh_status();
-        if let Some(t) = self.thumbs.borrow().as_ref() {
-            t.start();
-        }
         if JOB.running() {
             self.start_job_poll();
         }
     }
 
     fn on_closed(self: Rc<Self>) {
-        if let Some(t) = self.thumbs.borrow().as_ref() {
-            t.stop();
-        }
         if let Some(id) = self.job_timer.borrow_mut().take() {
             id.remove();
         }
@@ -193,109 +245,56 @@ impl Page for CameraOptimizerPage {
 
 impl CameraOptimizerPage {
     pub fn new(win: Win) -> Rc<dyn Page> {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        root.set_margin_top(8);
-        root.set_margin_bottom(10);
-        root.set_margin_start(12);
-        root.set_margin_end(12);
-        let nav = adw::NavigationPage::builder().title(tr("Camera Optimizer")).tag("camera_optimizer").child(&root).build();
-        let top = gtk::CenterBox::new();
-        top.set_vexpand(false);
-        top.set_valign(gtk::Align::Start);
-        let strip = CameraStrip::new(win.clone());
-        top.set_start_widget(Some(&strip.widget));
-        let side = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        side.set_halign(gtk::Align::End);
-        let navb = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        navb.set_halign(gtk::Align::End);
-        let tab_toggle = adw::ToggleGroup::new();
-        tab_toggle.set_valign(gtk::Align::Center);
-        for (n, l) in [("optimize", "Optimize"), ("compare", "Before & After")] {
-            let t = adw::Toggle::new();
-            t.set_name(Some(n));
-            t.set_label(Some(&tr(l)));
-            tab_toggle.add(t);
-        }
-        tab_toggle.set_active_name(Some("optimize"));
-        navb.append(&tab_toggle);
-        let btn_controls = gtk::Button::new();
-        let bc = adw::ButtonContent::new();
-        bc.set_icon_name("preferences-system-symbolic");
-        bc.set_label(&tr("Controls"));
-        btn_controls.set_child(Some(&bc));
-        btn_controls.set_tooltip_text(Some(&tr("Fine-tune every camera setting, keep settings, presets")));
-        let w = win.clone();
-        btn_controls.connect_clicked(move |_| w.open_camera_controls_page());
-        navb.append(&btn_controls);
-        side.append(&navb);
-        let autodarts = AutodartsStatus::new(win.clone());
-        autodarts.widget.set_halign(gtk::Align::End);
-        side.append(&autodarts.widget);
-        top.set_end_widget(Some(&side));
-        root.append(&top);
         let stack = gtk::Stack::new();
         stack.set_transition_type(gtk::StackTransitionType::Crossfade);
         stack.set_vexpand(true);
-        root.append(&stack);
+        // each screen as tall as it needs (a homogeneous stack would make short screens scroll like the longest)
+        stack.set_vhomogeneous(false);
+        stack.set_hhomogeneous(false);
 
-        // declined
-        let dp = adw::StatusPage::new();
-        dp.set_icon_name(Some("camera-disabled-symbolic"));
-        dp.set_title(&tr("Optimization is off"));
-        dp.set_description(Some(&tr("This tool changes hidden settings that were only tested on HBV cameras, so it stays off for other cameras.")));
-        let b_yes = gtk::Button::with_label(&tr("I do use HBV cameras"));
-        b_yes.set_halign(gtk::Align::Center);
-        b_yes.add_css_class("pill");
-        dp.set_child(Some(&b_yes));
-        stack.add_named(&dp, Some("declined"));
+        // Declined
+        let (b, _, _, l) = screen("camera-disabled-symbolic", "Optimization is off");
+        l.set_label(&tr("This tool changes hidden settings that were only tested on HBV cameras, so it stays off for other cameras."));
+        let b_yes = big_button("I do use HBV cameras");
+        b_yes.remove_css_class("suggested-action");
+        b.append(&b_yes);
+        stack.add_named(&b, Some("declined"));
 
-        let tabs = gtk::Stack::new();
-        tabs.set_vexpand(true);
-        tabs.set_transition_type(gtk::StackTransitionType::Crossfade);
-        stack.add_named(&tabs, Some("overview"));
-        stack.set_visible_child_name("overview");
+        // Home: the cameras, the resolution, Optimize
+        let (b, home_icon, home_title, home_line) = screen("camera-web-symbolic", "Loading…");
+        let cam_list = boxed();
+        cam_list.set_margin_top(6);
+        b.append(&cam_list);
+        let size_list = boxed();
+        let size_row = adw::ComboRow::new();
+        size_row.set_title(&tr("Resolution"));
+        size_list.append(&size_row);
+        b.append(&size_list);
+        let btn_optimize = big_button("Optimize cameras");
+        b.append(&btn_optimize);
+        b.append(&line(&tr("Remove all darts and turn the lights on the way you play. Keep hands away from the board while it runs."), &["caption", "dim-label"]));
+        let more = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        more.set_halign(gtk::Align::Center);
+        let btn_ba = flat("Before & After");
+        let btn_light = flat("Check lighting");
+        let btn_controls = flat("Camera Controls");
+        let btn_restore = flat("Restore…");
+        for w in [&btn_ba, &btn_light, &btn_controls, &btn_restore] {
+            more.append(w);
+        }
+        b.append(&more);
+        stack.add_named(&b, Some("home"));
 
-        // --- optimize tab ---
-        let cols = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        tabs.add_named(&cols, Some("optimize"));
-        let left = gtk::Box::new(gtk::Orientation::Vertical, 10);
-        left.set_size_request(440, -1);
-        left.set_hexpand(true);
-        left.add_css_class("card");
-        left.add_css_class("camopt-panel");
-        let hero_title = wrap_label("Loading…", &["camopt-title"]);
-        hero_title.set_max_width_chars(40);
-        let hero_text = caption("", &[], true);
-        hero_text.set_max_width_chars(60);
-        left.append(&hero_title);
-        left.append(&hero_text);
-        let banner = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-        banner.set_visible(false);
-        banner.add_css_class("camopt-note");
-        banner.add_css_class("camopt-note-warn");
-        let bt = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        bt.set_hexpand(true);
-        let banner_title = gtk::Label::new(None);
-        banner_title.set_xalign(0.0);
-        banner_title.set_wrap(true);
-        banner_title.add_css_class("heading");
-        bt.append(&banner_title);
-        bt.append(&caption("The light probably changed.", &[], false));
-        banner.append(&bt);
-        left.append(&banner);
-        let cam_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        left.append(&cam_list);
-        let preview_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        preview_box.set_visible(false);
-        preview_box.set_vexpand(true);
+        // Working: the live picture takes the icon's place
+        let (b, _, work_title, work_line) = screen("", "Optimizing…");
         let preview_pic = gtk::Picture::new();
         preview_pic.set_content_fit(gtk::ContentFit::Contain);
         preview_pic.set_can_shrink(true);
-        preview_pic.set_vexpand(true);
+        preview_pic.set_size_request(560, 315);
         preview_pic.add_css_class("camopt-frame");
-        preview_pic.set_size_request(-1, 220);
-        let pov = gtk::Overlay::new();
-        pov.set_child(Some(&preview_pic));
+        let preview_frame = gtk::Overlay::new();
+        preview_frame.set_child(Some(&preview_pic));
+        preview_frame.set_halign(gtk::Align::Center);
         let preview_tag = gtk::Label::new(None);
         preview_tag.set_halign(gtk::Align::Start);
         preview_tag.set_valign(gtk::Align::Start);
@@ -303,126 +302,77 @@ impl CameraOptimizerPage {
         preview_tag.set_visible(false);
         preview_tag.set_margin_top(10);
         preview_tag.set_margin_start(10);
-        pov.add_overlay(&preview_tag);
-        preview_box.append(&pov);
-        let preview_phase = caption("", &[], true);
-        preview_phase.set_max_width_chars(60);
-        preview_box.append(&preview_phase);
-        left.append(&preview_box);
-        let btn_light = gtk::Button::with_label(&tr("Check lighting"));
-        btn_light.set_halign(gtk::Align::Start);
-        btn_light.add_css_class("compact-btn");
-        btn_light.set_tooltip_text(Some(&tr("Compare the brightness of every optimized camera with its calibration")));
-        left.append(&btn_light);
-        let size_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        size_box.set_visible(false);
-        left.append(&size_box);
-        let guide = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        guide.append(&caption("BEFORE YOU START", &["camopt-heading"], false));
-        for t in ["Remove all darts from the board", "Turn the lights on the way you play", "Keep people and hands away from the board for about 3 minutes"] {
-            guide.append(&caption(&format!("☑  {}", tr(t)), &[], false));
-        }
-        left.append(&guide);
-        let sp = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        sp.set_vexpand(true);
-        left.append(&sp);
-        let acts = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let btn_optimize = gtk::Button::with_label(&tr("Optimize cameras"));
-        btn_optimize.set_sensitive(false);
-        btn_optimize.set_hexpand(true);
-        btn_optimize.add_css_class("pill");
-        acts.append(&btn_optimize);
-        let btn_restore = gtk::Button::with_label(&tr("Restore…"));
-        btn_restore.set_visible(false);
-        btn_restore.add_css_class("compact-btn");
-        btn_restore.set_tooltip_text(Some(&tr("Back to the settings Autodarts uses")));
-        acts.append(&btn_restore);
-        left.append(&acts);
-        left.append(&caption(
-            "Autodarts is stopped and restarted automatically. Nothing is flashed: settings live in camera memory and are re-applied by the keeper.",
-            &[],
-            true,
-        ));
-        cols.append(&left);
-        let right = gtk::Box::new(gtk::Orientation::Vertical, 10);
-        right.set_size_request(380, -1);
-        right.set_hexpand(false);
-        right.add_css_class("card");
-        right.add_css_class("camopt-panel");
-        right.append(&caption("PROGRESS", &["camopt-heading"], false));
-        let job_empty = gtk::Label::new(Some(&tr("Steps and progress of an optimization appear here.")));
-        job_empty.set_wrap(true);
-        job_empty.set_vexpand(true);
-        job_empty.add_css_class("camopt-empty");
-        right.append(&job_empty);
-        let job_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        job_box.set_visible(false);
-        job_box.set_vexpand(true);
+        preview_frame.add_overlay(&preview_tag);
+        b.prepend(&preview_frame);
         let progress = gtk::ProgressBar::new();
-        progress.set_hexpand(true);
-        progress.set_valign(gtk::Align::Center);
-        let lbl_time = caption("", &[], false);
-        let pr = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-        pr.append(&progress);
-        pr.append(&lbl_time);
-        job_box.append(&pr);
+        progress.set_size_request(360, -1);
+        progress.set_halign(gtk::Align::Center);
+        b.append(&progress);
+        let lbl_time = line("", &["caption", "dim-label"]);
+        b.append(&lbl_time);
+        b.append(&line(&tr("Please don't touch the board or the cameras."), &["caption"]));
         let steps_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        let steps_scroll = gtk::ScrolledWindow::new();
-        steps_scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
-        steps_scroll.set_vexpand(true);
-        steps_scroll.set_child(Some(&steps_box));
-        job_box.append(&steps_scroll);
-        let job_note = caption("", &["camopt-note"], true);
-        job_note.set_visible(false);
-        job_box.append(&job_note);
-        let ja = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let btn_after = gtk::Button::with_label(&tr("See before & after"));
-        btn_after.set_visible(false);
-        btn_after.add_css_class("compact-btn");
-        ja.append(&btn_after);
-        let sp2 = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        sp2.set_hexpand(true);
-        ja.append(&sp2);
+        steps_box.set_margin_top(6);
+        let exp = gtk::Expander::new(Some(&tr("Details")));
+        exp.set_child(Some(&steps_box));
+        exp.set_halign(gtk::Align::Center);
+        b.append(&exp);
+        stack.add_named(&b, Some("working"));
+
+        // Result of apply / restore / a failed run
+        let (b, res_icon, res_title, res_line) = screen("object-select-symbolic", "");
         let log_view = gtk::TextView::new();
         log_view.set_editable(false);
         log_view.set_monospace(true);
         log_view.set_wrap_mode(gtk::WrapMode::WordChar);
         log_view.add_css_class("camopt-log");
         let ls = gtk::ScrolledWindow::new();
-        ls.set_min_content_width(480);
-        ls.set_min_content_height(260);
+        ls.set_min_content_width(560);
+        ls.set_min_content_height(220);
         ls.set_child(Some(&log_view));
-        let lp = gtk::Popover::new();
-        lp.set_child(Some(&ls));
-        let btn_log = gtk::MenuButton::new();
-        btn_log.set_label(&tr("Log"));
-        btn_log.set_popover(Some(&lp));
-        btn_log.set_tooltip_text(Some(&tr("Details of the last run")));
-        btn_log.add_css_class("flat");
-        btn_log.add_css_class("compact-btn");
-        ja.append(&btn_log);
-        job_box.append(&ja);
-        right.append(&job_box);
-        cols.append(&right);
+        let exp = gtk::Expander::new(Some(&tr("Details")));
+        exp.set_child(Some(&ls));
+        exp.set_halign(gtk::Align::Center);
+        b.append(&exp);
+        let btn_done = big_button("Done");
+        b.append(&btn_done);
+        stack.add_named(&b, Some("result"));
 
-        // --- compare tab ---
-        let ccols = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        tabs.add_named(&ccols, Some("compare"));
-        let cl = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        cl.set_hexpand(true);
+        // Review: before & after, Apply or Discard (or back to Home when opened from there)
+        let b = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        b.set_margin_start(24);
+        b.set_margin_end(24);
+        b.set_margin_top(6);
+        b.set_margin_bottom(12);
+        let rev_back = gtk::Button::new();
+        rev_back.set_child(Some(&adw::ButtonContent::builder().icon_name("go-previous-symbolic").label(tr("Back")).build()));
+        rev_back.add_css_class("flat");
+        rev_back.set_halign(gtk::Align::Start);
+        b.append(&rev_back);
+        let rev_title = line("", &["title-2"]);
+        b.append(&rev_title);
+        let rev_line = line("", &["dim-label"]);
+        rev_line.set_max_width_chars(90);
+        b.append(&rev_line);
+        let bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        bar.set_halign(gtk::Align::Center);
+        let ba_cams = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        bar.append(&ba_cams);
+        b.append(&bar);
         let ba_stack = gtk::Stack::new();
         ba_stack.set_vexpand(true);
-        let ba_empty = gtk::Label::new(Some(&tr("Before and after pictures appear here after an optimization.")));
-        ba_empty.set_wrap(true);
-        ba_empty.add_css_class("camopt-empty");
+        let ba_empty = line(&tr("Before and after pictures appear here after an optimization."), &["dim-label"]);
         ba_stack.add_named(&ba_empty, Some("empty"));
         let ba_picture = gtk::Picture::new();
         ba_picture.set_content_fit(gtk::ContentFit::Contain);
         ba_picture.set_can_shrink(true);
+        ba_picture.set_size_request(-1, 360);
         ba_picture.set_tooltip_text(Some(&tr("Double-tap or scroll to zoom into a spot; drag to move around when zoomed")));
         ba_picture.add_css_class("camopt-frame");
         let bov = gtk::Overlay::new();
         bov.set_child(Some(&ba_picture));
+        // as wide as the picture: the tags sit on its corners, no black bars beside it
+        bov.set_halign(gtk::Align::Center);
         let tag_before = gtk::Label::new(Some(&tr("BEFORE")));
         tag_before.set_halign(gtk::Align::Start);
         let tag_after = gtk::Label::new(Some(&tr("AFTER")));
@@ -451,54 +401,44 @@ impl CameraOptimizerPage {
         ba_zoom_toggle.set_active_name(Some("1"));
         bov.add_overlay(&ba_zoom_toggle);
         ba_stack.add_named(&bov, Some("picture"));
-        cl.append(&ba_stack);
-        let bar = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-        cl.append(&bar);
-        let ba_note = caption("", &[], false);
-        ba_note.set_hexpand(true);
-        ba_note.set_halign(gtk::Align::End);
-        ba_note.set_xalign(1.0);
+        b.append(&ba_stack);
+        let ba_stats = line("", &["caption", "dim-label"]);
+        ba_stats.set_max_width_chars(120);
+        b.append(&ba_stats);
         let ba_adj = gtk::Adjustment::new(50.0, 0.0, 100.0, 1.0, 10.0, 0.0);
-        ccols.append(&cl);
-        let cr = gtk::Box::new(gtk::Orientation::Vertical, 10);
-        cr.set_size_request(340, -1);
-        cr.set_hexpand(false);
-        cr.add_css_class("card");
-        cr.add_css_class("camopt-panel");
-        let ba_title = caption("RESULT", &["camopt-heading"], false);
-        cr.append(&ba_title);
-        let ba_table = gtk::Grid::new();
-        ba_table.set_column_spacing(14);
-        ba_table.set_row_spacing(8);
-        cr.append(&ba_table);
-        let ba_chip = chip("", "neutral");
-        ba_chip.set_halign(gtk::Align::Start);
-        ba_chip.set_visible(false);
-        cr.append(&ba_chip);
-        let sp3 = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        sp3.set_vexpand(true);
-        cr.append(&sp3);
-        let ba_pending = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        ba_pending.set_visible(false);
-        ba_pending.append(&caption("Not applied yet: the cameras still run their previous settings.", &[], true));
-        let btn_apply = gtk::Button::with_label(&tr("Apply now & set as default"));
-        btn_apply.add_css_class("pill");
-        btn_apply.add_css_class("suggested-action");
-        btn_apply.set_tooltip_text(Some(&tr("Keep this calibration, save it as a preset and load that preset at every start")));
-        ba_pending.append(&btn_apply);
-        let btn_discard = gtk::Button::with_label(&tr("Discard"));
-        btn_discard.add_css_class("flat");
+        let rev_pending = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        rev_pending.set_halign(gtk::Align::Center);
+        let btn_discard = flat("Discard");
         btn_discard.set_tooltip_text(Some(&tr("Forget this calibration and keep the previous settings")));
-        ba_pending.append(&btn_discard);
-        cr.append(&ba_pending);
+        let btn_apply = big_button("Apply now & set as default");
+        btn_apply.set_margin_top(0);
+        btn_apply.set_tooltip_text(Some(&tr("Keep this calibration, save it as a preset and load that preset at every start")));
+        rev_pending.append(&btn_discard);
+        rev_pending.append(&btn_apply);
+        b.append(&rev_pending);
+        let rev_done = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        rev_done.set_halign(gtk::Align::Center);
         let btn_ba_preset = gtk::Button::with_label(&tr("Save as Preset…"));
-        cr.append(&btn_ba_preset);
-        let btn_fine = gtk::Button::with_label(&tr("Fine-tune in Camera Controls →"));
-        btn_fine.add_css_class("flat");
-        let w = win.clone();
-        btn_fine.connect_clicked(move |_| w.open_camera_controls_page());
-        cr.append(&btn_fine);
-        ccols.append(&cr);
+        btn_ba_preset.add_css_class("pill");
+        let btn_fine = flat("Fine-tune in Camera Controls →");
+        rev_done.append(&btn_ba_preset);
+        rev_done.append(&btn_fine);
+        b.append(&rev_done);
+        stack.add_named(&b, Some("review"));
+
+        let dots_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        dots_box.set_halign(gtk::Align::Center);
+        dots_box.set_margin_top(8);
+        dots_box.set_margin_bottom(14);
+        let dots: Vec<gtk::Label> = SCREENS.iter().map(|_| gtk::Label::new(Some("●"))).collect();
+        for d in &dots {
+            dots_box.append(d);
+        }
+        let scrolled = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).child(&stack).build();
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.append(&scrolled);
+        root.append(&dots_box);
+        let nav = adw::NavigationPage::builder().title(tr("Camera Optimizer")).tag("camera_optimizer").child(&root).build();
 
         let me = Rc::new(CameraOptimizerPage {
             nav,
@@ -511,10 +451,14 @@ impl CameraOptimizerPage {
             preview_seq: Cell::new(-1),
             preview_dev: RefCell::new(String::new()),
             consent_asked: Cell::new(false),
+            job_seen: Cell::new(false),
+            browsing: Cell::new(false),
             size: Cell::new(None),
-            size_box,
+            sizes: RefCell::new(vec![]),
+            sizes_sync: Cell::new(false),
             lighting: RefCell::new(HashMap::new()),
             ba: RefCell::new(vec![]),
+            ba_ports: RefCell::new(vec![]),
             ba_data: RefCell::new(None),
             ba_key: RefCell::new(String::new()),
             ba_zoom: Cell::new(1),
@@ -523,88 +467,90 @@ impl CameraOptimizerPage {
             ba_comp: Cell::new((1, 1)),
             ba_drag_center: Cell::new((0.5, 0.5)),
             ba_pointer: Cell::new(None),
-            strip,
-            autodarts,
-            thumbs: RefCell::new(None),
             stack,
-            tabs,
-            tab_toggle,
-            hero_title,
-            hero_text,
-            banner,
-            banner_title,
+            dots_box,
+            dots,
+            home_icon,
+            home_title,
+            home_line,
             cam_list,
-            preview_box,
+            size_list,
+            size_row,
+            btn_optimize,
+            btn_ba,
+            btn_light,
+            btn_restore,
+            work_title,
+            work_line,
+            preview_frame,
             preview_pic,
             preview_tag,
-            preview_phase,
-            btn_light,
-            guide,
-            btn_optimize,
-            btn_restore,
-            job_empty,
-            job_box,
             progress,
             lbl_time,
             steps_box,
-            steps_scroll,
-            job_note,
-            btn_after,
+            res_icon,
+            res_title,
+            res_line,
             log_view,
+            rev_back,
+            rev_title,
+            rev_line,
+            ba_cams,
             ba_stack,
             ba_empty,
             ba_picture,
             tag_before,
             tag_after,
             ba_zoom_toggle,
-            ba_note,
             ba_adj,
-            ba_title,
-            ba_table,
-            ba_chip,
-            ba_pending,
+            ba_stats,
+            rev_pending,
+            rev_done,
             btn_ba_preset,
-        });
-        let m = Rc::downgrade(&me);
-        me.strip.set_callbacks(
-            Rc::new(move || {
-                if let Some(m) = m.upgrade() {
-                    m.render_cams();
-                    m.on_ba_pick();
-                }
-            }),
-            None,
-        );
-        let m = Rc::downgrade(&me);
-        let dev = Rc::new(move || {
-            m.upgrade()
-                .and_then(|m| m.status.borrow().as_ref().map(|s| s.cams.iter().map(|c| (c.s.port.clone(), c.s.device.clone())).collect()))
-                .unwrap_or_default()
-        });
-        *me.thumbs.borrow_mut() = Some(ThumbPoller::new(me.strip.clone(), dev, Rc::new(|| None)));
-        let m = me.clone();
-        me.tab_toggle.connect_active_name_notify(move |t| {
-            m.tabs.set_visible_child_name(&t.active_name().map(|s| s.to_string()).unwrap_or_else(|| "optimize".into()));
         });
         let m = me.clone();
         b_yes.connect_clicked(move |_| m.ask_consent());
         let m = me.clone();
-        me.btn_light.connect_clicked(move |_| m.check_lighting());
-        let m = me.clone();
         me.btn_optimize.connect_clicked(move |_| m.ask_prepare());
+        let m = me.clone();
+        me.btn_ba.connect_clicked(move |_| {
+            m.browsing.set(true);
+            m.render_screen();
+        });
+        let m = me.clone();
+        me.btn_light.connect_clicked(move |_| m.check_lighting());
+        let w = win.clone();
+        btn_controls.connect_clicked(move |_| w.open_camera_controls_page());
         let m = me.clone();
         me.btn_restore.connect_clicked(move |_| m.ask_restore());
         let m = me.clone();
-        me.btn_after.connect_clicked(move |_| m.tab_toggle.set_active_name(Some("compare")));
+        me.size_row.connect_selected_notify(move |r| {
+            if !m.sizes_sync.get() {
+                let s = m.sizes.borrow().get(r.selected() as usize).copied();
+                m.size.set(s);
+            }
+        });
+        let m = me.clone();
+        btn_done.connect_clicked(move |_| {
+            m.job_seen.set(true);
+            m.render_screen();
+        });
+        let m = me.clone();
+        me.rev_back.connect_clicked(move |_| {
+            m.browsing.set(false);
+            m.render_screen();
+        });
         let m = me.clone();
         btn_apply.connect_clicked(move |_| m.start_job("apply"));
         let m = me.clone();
         btn_discard.connect_clicked(move |_| m.ask_discard());
         let w = win.clone();
         me.btn_ba_preset.connect_clicked(move |_| ask_save_preset(&w, &trf("Optimized {when}", &[("when", &chrono::Local::now().format("%Y-%m-%d %H:%M"))])));
+        let w = win.clone();
+        btn_fine.connect_clicked(move |_| w.open_camera_controls_page());
         let m = Rc::downgrade(&me);
         let seg = segmented(
-            &opts(&[("split", "Split"), ("side", "Side by side"), ("diff", "Difference")]),
+            &cw::opts(&[("split", "Split"), ("side", "Side by side"), ("diff", "Difference")]),
             "split",
             Rc::new(move |mode: String| {
                 if let Some(m) = m.upgrade() {
@@ -614,7 +560,6 @@ impl CameraOptimizerPage {
             }),
         );
         bar.append(&seg);
-        bar.append(&me.ba_note);
         let m = me.clone();
         me.ba_adj.connect_value_changed(move |_| m.render_ba());
         let m = me.clone();
@@ -660,12 +605,12 @@ impl CameraOptimizerPage {
         let m = me.clone();
         motion.connect_motion(move |_, x, y| m.ba_pointer.set(Some((x, y))));
         me.ba_picture.add_controller(motion);
+        me.render_screen();
         me
     }
 
-    fn cam(&self, port: Option<&str>) -> Option<CamInfo> {
-        let p = port.map(String::from).or_else(|| self.strip.active())?;
-        self.status.borrow().as_ref()?.cams.iter().find(|c| c.s.port == p).cloned()
+    fn cam(&self, port: &str) -> Option<CamInfo> {
+        self.status.borrow().as_ref()?.cams.iter().find(|c| c.s.port == port).cloned()
     }
 
     fn consented(&self) -> bool {
@@ -696,48 +641,13 @@ impl CameraOptimizerPage {
         }
     }
 
-    fn render_sizes(self: &Rc<Self>, st: &Status, show: bool) {
-        super::helpers::clear_box(&self.size_box);
-        self.size_box.set_visible(show && !st.sizes.is_empty());
-        if st.sizes.is_empty() {
-            return;
+    /// The camera the before & after view shows: the selected one when it has pictures, else the first.
+    fn active_port(&self) -> Option<String> {
+        let ba = self.ba.borrow();
+        match cw::selected() {
+            Some(s) if ba.iter().any(|b| b.port == s) => Some(s),
+            _ => ba.first().map(|b| b.port.clone()),
         }
-        self.size_box.append(&caption("RESOLUTION", &["camopt-heading"], false));
-        let cur = self.chosen_size().unwrap_or(st.sizes[0]);
-        let label = |s: (u32, u32)| {
-            let t = oneclick::size_label(s);
-            if s == st.ad_size { format!("{} ({})", t, tr("Autodarts now")) } else { t }
-        };
-        let m = Rc::downgrade(self);
-        let pick: Rc<dyn Fn((u32, u32))> = Rc::new(move |s| {
-            if let Some(m) = m.upgrade() {
-                m.size.set(Some(s));
-            }
-        });
-        if st.sizes.len() <= 4 {
-            let o: Vec<(String, String)> = st.sizes.iter().map(|s| (oneclick::size_label(*s), label(*s))).collect();
-            let sizes = st.sizes.clone();
-            let w = cw::segmented(&o, &oneclick::size_label(cur), Rc::new(move |k: String| {
-                if let Some(s) = sizes.iter().find(|s| oneclick::size_label(**s) == k) {
-                    pick(*s);
-                }
-            }));
-            self.size_box.append(&w);
-        } else {
-            let texts: Vec<String> = st.sizes.iter().map(|s| label(*s)).collect();
-            let tr_: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-            let w = gtk::DropDown::from_strings(&tr_);
-            w.set_halign(gtk::Align::Start);
-            w.set_selected(st.sizes.iter().position(|s| *s == cur).unwrap_or(0) as u32);
-            let sizes = st.sizes.clone();
-            w.connect_selected_notify(move |d| {
-                if let Some(s) = sizes.get(d.selected() as usize) {
-                    pick(*s);
-                }
-            });
-            self.size_box.append(&w);
-        }
-        self.size_box.append(&caption("Higher resolution shows more detail but needs more USB bandwidth. Autodarts is switched to this resolution when you apply.", &[], true));
     }
 
     pub fn refresh_status(self: &Rc<Self>) {
@@ -751,12 +661,11 @@ impl CameraOptimizerPage {
                     .iter()
                     .map(|d| {
                         let s = oneclick::support(d);
-                        let mut c = CamInfo { s, white: None, q: None, when: None };
+                        let mut c = CamInfo { s, white: None, when: None };
                         if c.s.supported && c.s.optimized {
                             if let Some(p) = profiles::get(d) {
                                 let meta = &p["meta"];
                                 c.white = meta["reference"]["white"].as_f64();
-                                c.q = meta["mjpeg_q"].as_i64();
                                 c.when = meta["calibrated"].as_str().map(String::from);
                             }
                         }
@@ -769,7 +678,6 @@ impl CameraOptimizerPage {
                     ad_size: crate::core::hbvcal::autodarts::stream_size(),
                     cams,
                     consent: profiles::consent(),
-                    autodarts: oneclick::systemctl("is-active", "autodarts"),
                     pending: !oneclick::load_pending().is_empty(),
                 }
             },
@@ -787,162 +695,153 @@ impl CameraOptimizerPage {
         if !declined && !Self::unconfirmed_models(&st).is_empty() && !self.consent_asked.replace(true) {
             self.ask_consent();
         }
-        let on = self.consented();
-        self.stack.set_visible_child_name(if st.consent.is_some() && !on { "declined" } else { "overview" });
-        self.autodarts.show(&st.autodarts);
-        let entries: Vec<StripEntry> = st
-            .cams
-            .iter()
-            .map(|c| StripEntry { port: c.s.port.clone(), kind: (if !c.s.supported { "bad" } else if c.s.optimized { "ok" } else { "warn" }).into() })
-            .collect();
-        self.strip.sync(&entries);
-        self.render_cams();
+        self.render_home();
         self.render_job();
+        self.render_screen();
         self.load_before_after();
-        if let Some(t) = self.thumbs.borrow().as_ref() {
-            t.kick();
+    }
+
+    /// The screen for the current state.
+    fn screen_name(&self) -> &'static str {
+        let Some(st) = self.status.borrow().clone() else { return "home" };
+        if st.consent.is_some() && !self.consented() {
+            return "declined";
+        }
+        if JOB.running() {
+            return "working";
+        }
+        let j = JOB.view();
+        // a finished optimization goes on to its review; apply, restore and errors show their result
+        if !j.steps.is_empty() && !self.job_seen.get() && !(j.name == "optimize" && j.error.is_empty()) {
+            return "result";
+        }
+        if st.pending || self.browsing.get() {
+            return "review";
+        }
+        "home"
+    }
+
+    fn render_screen(&self) {
+        let name = self.screen_name();
+        if self.stack.visible_child_name().as_deref() != Some(name) {
+            self.stack.set_visible_child_name(name);
+        }
+        let browsing = name == "review" && !self.status.borrow().as_ref().is_some_and(|s| s.pending);
+        self.dots_box.set_visible(name != "declined" && !browsing);
+        let at = SCREENS.iter().position(|s| *s == name).unwrap_or(0);
+        for (i, d) in self.dots.iter().enumerate() {
+            d.set_opacity(if i == at { 1.0 } else { 0.3 });
         }
     }
 
-    fn render_cams(self: &Rc<Self>) {
+    fn render_home(self: &Rc<Self>) {
         let Some(st) = self.status.borrow().clone() else { return };
-        super::helpers::clear_box(&self.cam_list);
-        let sup: Vec<&CamInfo> = st.cams.iter().filter(|c| c.s.supported).collect();
-        if !st.cams.is_empty() {
-            let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            head.set_margin_start(14); // the rows are buttons with this padding
-            for (t, w) in ["CAMERA", "WHITE / TARGET", "JPEG", "LAST RUN", "NOW"].iter().zip(COLS.iter().chain([-1].iter())) {
-                let h = gtk::Label::new(Some(&tr(t)));
-                h.set_xalign(0.0);
-                h.add_css_class("camopt-table-head");
-                h.set_hexpand(*w < 0);
-                h.set_size_request(*w, -1);
-                head.append(&h);
-            }
-            self.cam_list.append(&head);
-        }
+        self.cam_list.remove_all();
         for c in &st.cams {
             self.cam_list.append(&self.cam_row(c));
         }
-        if st.cams.is_empty() {
-            self.cam_list.append(&caption("No cameras connected", &[], false));
-        }
+        self.cam_list.set_visible(!st.cams.is_empty());
+        let sup: Vec<&CamInfo> = st.cams.iter().filter(|c| c.s.supported).collect();
         let done = sup.iter().filter(|c| c.s.optimized).count();
         let light = self.lighting.borrow();
         let bad: Vec<String> = light.iter().filter(|(_, r)| r["verdict"].as_str().map(|v| v != "ok").unwrap_or(false)).map(|(p, _)| p.clone()).collect();
-        let running = JOB.running();
-        if running {
-            // render_job owns the headline
-        } else if st.pending {
-            self.hero_title.set_label(&tr("Calibration ready to review"));
-            self.hero_text.set_label(&tr("Nothing has changed yet. Compare before and after, then apply it or discard it."));
-        } else if sup.is_empty() {
-            self.hero_title.set_label(&tr("No supported camera found"));
-            self.hero_text.set_label(&tr("Connect your HBV cameras, then open this page again."));
-        } else if !bad.is_empty() {
-            self.hero_title.set_label(&tr("The light has changed"));
-            self.hero_text.set_label(&tr("Optimize again to match the cameras to the new light."));
+        let (icon, tone, title, text) = if sup.is_empty() {
+            ("camera-disabled-symbolic", "", tr("No supported camera found"), tr("Connect your HBV cameras, then open this page again."))
+        } else if let Some(first) = bad.first() {
+            let names = bad.iter().map(|p| cw::cam_name(p)).collect::<Vec<_>>().join(", ");
+            let pct = light[first]["deviation_pct"].as_f64().unwrap_or(0.0);
+            let t = if pct > 0.0 { "{names}: {pct:.0f} % brighter than calibrated" } else { "{names}: {pct:.0f} % darker than calibrated" };
+            let what = trf(t, &[("names", &names), ("pct", &format!("{:.0}", pct.abs()))]);
+            ("dialog-warning-symbolic", "warning", tr("The light has changed"), format!("{}. {}", what, tr("Optimize again to match the cameras to the new light.")))
         } else if done == sup.len() {
-            self.hero_title.set_label(&if sup.len() == 1 { tr("Your camera is optimized") } else { trf("All {n} cameras are optimized", &[("n", &sup.len())]) });
-            self.hero_text.set_label(&tr("Settings stay applied, also after Autodarts restarts. Run it again after changing the lights or moving the board."));
+            let t = if sup.len() == 1 { tr("Your camera is optimized") } else { trf("All {n} cameras are optimized", &[("n", &sup.len())]) };
+            ("object-select-symbolic", "success", t, tr("Settings stay applied, also after Autodarts restarts. Run it again after changing the lights or moving the board."))
         } else {
-            self.hero_title.set_label(&tr("Ready to optimize"));
-            self.hero_text.set_label(&if sup.len() == 1 {
-                tr("Calibrates exposure, gain and JPEG quality for 1 camera. Takes about 3 minutes.")
-            } else {
-                trf("Calibrates exposure, gain and JPEG quality for {n} cameras and matches them. Takes about 3 minutes.", &[("n", &sup.len())])
-            });
-        }
+            // JPEG quality only where a camera lets us set it (full mode)
+            let jpeg = sup.iter().any(|c| c.s.mode == "full");
+            let t = match (sup.len() == 1, jpeg) {
+                (true, true) => tr("Calibrates exposure, gain and JPEG quality for 1 camera. Takes about 3 minutes."),
+                (true, false) => tr("Calibrates exposure and gain for 1 camera. Takes about 3 minutes."),
+                (false, true) => trf("Calibrates exposure, gain and JPEG quality for {n} cameras and matches them. Takes about 3 minutes.", &[("n", &sup.len())]),
+                (false, false) => trf("Calibrates exposure and gain for {n} cameras and matches them. Takes about 3 minutes.", &[("n", &sup.len())]),
+            };
+            ("camera-web-symbolic", "", tr("Ready to optimize"), t)
+        };
+        set_icon(&self.home_icon, icon, tone);
+        self.home_title.set_label(&title);
+        self.home_line.set_label(&text);
         let need = !sup.is_empty() && (done < sup.len() || !bad.is_empty());
         let base = if sup.len() > 1 { trf("Optimize {n} cameras", &[("n", &sup.len())]) } else { tr("Optimize camera") };
-        self.btn_optimize.set_label(&if need { format!("{} · {}", base, tr("about 3 min")) } else { tr("Optimize again") });
+        self.btn_optimize.set_label(&if need { base } else { tr("Optimize again") });
         if need {
             self.btn_optimize.add_css_class("suggested-action");
         } else {
             self.btn_optimize.remove_css_class("suggested-action");
         }
-        self.btn_optimize.set_sensitive(!sup.is_empty() && !running);
-        self.btn_restore.set_visible(st.cams.iter().any(|c| c.s.optimized) && !running);
-        self.btn_light.set_visible(done > 0 && !running);
-        self.guide.set_visible(!running);
-        self.render_sizes(&st, !running && !st.pending && !sup.is_empty());
-        self.banner.set_visible(!bad.is_empty() && !running);
-        if let Some(first) = bad.first() {
-            let names = bad.iter().map(|p| cw::cam_name(p)).collect::<Vec<_>>().join(", ");
-            let pct = light[first]["deviation_pct"].as_f64().unwrap_or(0.0);
-            let t = if pct > 0.0 { "{names}: {pct:.0f} % brighter than calibrated" } else { "{names}: {pct:.0f} % darker than calibrated" };
-            self.banner_title.set_label(&trf(t, &[("names", &names), ("pct", &format!("{:.0}", pct.abs()))]));
-        }
+        self.btn_optimize.set_visible(!sup.is_empty());
+        self.btn_optimize.set_sensitive(!JOB.running());
+        self.btn_restore.set_visible(st.cams.iter().any(|c| c.s.optimized));
+        self.btn_light.set_visible(done > 0);
+        self.btn_ba.set_visible(!self.ba.borrow().is_empty());
+        self.render_sizes(&st);
     }
 
-    /// One table line; tapping it picks the camera (for Before & After and Controls).
-    fn cam_row(self: &Rc<Self>, c: &CamInfo) -> gtk::Widget {
-        let mut about = vec![c.s.model.clone().unwrap_or_default()];
-        if !c.s.firmware.is_empty() {
-            about.push(trf("Firmware {fw}", &[("fw", &c.s.firmware)]));
+    fn render_sizes(&self, st: &Status) {
+        self.size_list.set_visible(!st.sizes.is_empty());
+        if st.sizes.is_empty() {
+            return;
         }
-        if c.s.mode != "full" && !c.s.reason.is_empty() {
-            about.push(tr(&c.s.reason));
+        let cur = self.chosen_size().unwrap_or(st.sizes[0]);
+        self.sizes_sync.set(true);
+        if *self.sizes.borrow() != st.sizes {
+            *self.sizes.borrow_mut() = st.sizes.clone();
+            let texts: Vec<String> = st.sizes.iter().map(|s| oneclick::size_label(*s)).collect();
+            let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+            self.size_row.set_model(Some(&gtk::StringList::new(&refs)));
         }
-        let about = about.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
-        let jpeg = if c.s.mode == "full" { "–".to_string() } else { tr("own") };
-        let (kind, cells, tip): (&str, Vec<String>, String) = if !c.s.supported {
-            ("bad", vec![tr("Not supported"), String::new(), String::new(), String::new()], c.s.reason.clone())
+        self.size_row.set_selected(st.sizes.iter().position(|s| *s == cur).unwrap_or(0) as u32);
+        self.sizes_sync.set(false);
+        self.size_row.set_subtitle(&trf("Autodarts now: {size}", &[("size", &oneclick::size_label(st.ad_size))]));
+    }
+
+    /// One camera: name, model and state; the lighting check result on the right.
+    fn cam_row(&self, c: &CamInfo) -> adw::ActionRow {
+        let model = c.s.model.clone().unwrap_or_default();
+        let with_model = |s: String| if model.is_empty() { s } else { format!("{} · {}", model, s) };
+        let (icon, tone, sub) = if !c.s.supported {
+            ("dialog-error-symbolic", "error", if c.s.reason.is_empty() { tr("Not supported") } else { tr(&c.s.reason) })
         } else if let Some(other) = &c.s.mismatch {
-            ("warn", vec![trf("Profile from {model}, not applied", &[("model", other)]), String::new(), String::new()], format!("{} · {}", about, tr("Optimize again, or remove it in Camera Controls.")))
+            // name the connected model too: the old profile's model alone reads as if the camera were that one
+            ("dialog-warning-symbolic", "warning", trf("{model} detected · old profile from {other} not applied", &[("model", &c.s.model.as_deref().unwrap_or("?")), ("other", other)]))
         } else if c.s.optimized {
-            let white = c.white.map(|w| format!("{:.0} / {:.0}", w, WHITE_TARGET)).unwrap_or_else(|| "–".into());
-            ("ok", vec![white, c.q.map(|q| q.to_string()).unwrap_or(jpeg), when_text(c.when.as_deref())], about)
+            ("object-select-symbolic", "success", with_model(trf("Optimized {when}", &[("when", &when_text(c.when.as_deref()))])))
         } else {
-            ("warn", vec![tr("Not optimized"), String::new(), String::new()], about)
+            ("camera-web-symbolic", "", with_model(tr("Not optimized")))
         };
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let name = status_dot_box(&cw::cam_name(&c.s.port), kind);
-        name.set_size_request(COLS[0], -1);
-        row.append(&name);
-        for (t, w) in cells.iter().zip(COLS[1..].iter()) {
-            let l = gtk::Label::new(Some(t));
-            l.set_xalign(0.0);
-            l.add_css_class("camopt-cell");
-            l.set_ellipsize(pango::EllipsizeMode::End);
-            l.set_size_request(*w, -1);
-            row.append(&l);
-        }
-        let now = gtk::Label::new(None);
-        now.set_xalign(0.0);
-        now.set_hexpand(true);
-        now.add_css_class("camopt-cell");
+        let row = adw::ActionRow::new();
+        row.set_use_markup(false);
+        row.set_title(&cw::cam_name(&c.s.port));
+        row.set_subtitle(&sub);
+        let img = gtk::Image::new();
+        img.set_pixel_size(22);
+        set_icon(&img, icon, tone);
+        row.add_prefix(&img);
         if let (Some(r), true) = (self.lighting.borrow().get(&c.s.port), c.s.supported && c.s.optimized) {
             let pct = r["deviation_pct"].as_f64().unwrap_or(0.0);
-            if r["verdict"].as_str() == Some("ok") {
-                now.set_label(&trf("✓ OK ({pct:+.0f} %)", &[("pct", &format!("{:+.0}", pct))]));
-                now.add_css_class("camopt-ok");
+            let ok = r["verdict"].as_str() == Some("ok");
+            let text = if ok {
+                trf("✓ OK ({pct:+.0f} %)", &[("pct", &format!("{:+.0}", pct))])
             } else {
-                now.set_label(&trf(if pct > 0.0 { "{pct:.0f} % brighter" } else { "{pct:.0f} % darker" }, &[("pct", &format!("{:.0}", pct.abs()))]));
-                now.add_css_class("camopt-warn");
-            }
+                trf(if pct > 0.0 { "{pct:.0f} % brighter" } else { "{pct:.0f} % darker" }, &[("pct", &format!("{:.0}", pct.abs()))])
+            };
+            let l = gtk::Label::new(Some(&text));
+            l.add_css_class(if ok { "success" } else { "warning" });
+            row.add_suffix(&l);
         }
-        row.append(&now);
-        let btn = gtk::Button::new();
-        btn.add_css_class("flat");
-        btn.set_child(Some(&row));
-        if !tip.is_empty() {
-            btn.set_tooltip_text(Some(&tr(&tip)));
-        }
-        let (m, p) = (self.clone(), c.s.port.clone());
-        btn.connect_clicked(move |_| {
-            if Some(&p) != m.strip.active().as_ref() {
-                cw::set_selected(Some(p.clone()));
-                m.strip.sync(&m.status.borrow().as_ref().unwrap().cams.iter().map(|c| StripEntry { port: c.s.port.clone(), kind: (if !c.s.supported { "bad" } else if c.s.optimized { "ok" } else { "warn" }).into() }).collect::<Vec<_>>());
-                m.render_cams();
-                m.on_ba_pick();
-            }
-        });
-        btn.upcast()
+        row
     }
 
     // --- dialogs ---
-
     fn ask_consent(self: &Rc<Self>) {
         let mut lines = vec![];
         let mut keys: Vec<&'static str> = vec![];
@@ -1057,7 +956,7 @@ impl CameraOptimizerPage {
                     m.win.show_toast("No picture to compare yet, try again");
                 }
                 *m.lighting.borrow_mut() = res;
-                m.render_cams();
+                m.render_home();
             },
         );
     }
@@ -1083,30 +982,28 @@ impl CameraOptimizerPage {
         }
         *self.job_t0.borrow_mut() = Some(Instant::now());
         self.lighting.borrow_mut().clear();
-        self.tab_toggle.set_active_name(Some("optimize"));
+        self.job_seen.set(false);
+        self.browsing.set(false);
         self.start_job_poll();
     }
 
     fn start_job_poll(self: &Rc<Self>) {
-        self.btn_optimize.set_sensitive(false);
-        self.btn_restore.set_visible(false);
-        self.btn_light.set_visible(false);
-        self.banner.set_visible(false);
         if self.job_t0.borrow().is_none() {
             *self.job_t0.borrow_mut() = Some(Instant::now());
         }
         if self.job_timer.borrow().is_none() {
             let m = self.clone();
-            let id = super::helpers::every(1000, move || m.poll_job());
+            let id = every(1000, move || m.poll_job());
             *self.job_timer.borrow_mut() = Some(id);
         }
         if self.preview_timer.borrow().is_none() {
             self.preview_seq.set(-1);
             let m = self.clone();
-            let id = super::helpers::every(PREVIEW_MS, move || m.poll_preview());
+            let id = every(PREVIEW_MS, move || m.poll_preview());
             *self.preview_timer.borrow_mut() = Some(id);
         }
         self.render_job();
+        self.render_screen();
     }
 
     fn poll_preview(&self) -> bool {
@@ -1115,7 +1012,9 @@ impl CameraOptimizerPage {
             return false;
         }
         let (dev, phase, jpeg, seq) = PREVIEW.get();
-        self.preview_phase.set_label(&tr(if phase.is_empty() { "Waiting for the cameras…" } else { &phase }));
+        if self.preview_frame.is_visible() {
+            self.work_line.set_label(&tr(if phase.is_empty() { "Waiting for the cameras…" } else { &phase }));
+        }
         match jpeg {
             None => {
                 self.preview_pic.set_paintable(None::<&gtk::gdk::Paintable>);
@@ -1144,36 +1043,32 @@ impl CameraOptimizerPage {
         }
         *self.job_timer.borrow_mut() = None;
         *self.job_t0.borrow_mut() = None;
-        let j = JOB.view();
-        if j.name == "optimize" && j.result.as_object().map(|o| !o.is_empty()).unwrap_or(false) && j.error.is_empty() {
-            self.tab_toggle.set_active_name(Some("compare")); // fills once refresh_status reloads the pictures
-        }
         self.refresh_status();
         false
     }
 
+    /// The working screen while a job runs, the result screen once it ended.
     fn render_job(&self) {
         let j = JOB.view();
         if j.steps.is_empty() {
             return;
         }
-        self.job_empty.set_visible(false);
-        self.job_box.set_visible(true);
         let restoring = j.name == "restore";
         let applying = j.name == "apply";
-        let watching = j.running && j.name == "optimize";
-        self.cam_list.set_visible(!watching);
-        self.preview_box.set_visible(watching);
         if j.running {
-            self.hero_title.set_label(&tr(if restoring {
+            self.work_title.set_label(&tr(if restoring {
                 "Restoring original settings…"
             } else if applying {
                 "Applying the calibration…"
             } else {
                 "Optimizing…"
             }));
-            self.hero_text.set_label(&tr("Please don't touch the board or the cameras."));
-            self.guide.set_visible(false);
+            // the live picture only while optimizing; otherwise the line names the current step
+            let watching = j.name == "optimize";
+            self.preview_frame.set_visible(watching);
+            if !watching {
+                self.work_line.set_label(&j.steps.last().map(|s| tr(&s.title)).unwrap_or_default());
+            }
             let el = self.job_t0.borrow().map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
             let eta = eta_s(&j.name);
             self.progress.set_fraction((el / eta).min(0.97));
@@ -1185,13 +1080,10 @@ impl CameraOptimizerPage {
                 e % 60,
                 if left > 0 { trf("about {time} left", &[("time", &format!("{}:{:02}", left / 60, left % 60))]) } else { tr("almost done") }
             ));
-        } else {
-            self.progress.set_fraction(if j.error.is_empty() { 1.0 } else { 0.0 });
-            self.lbl_time.set_label("");
         }
-        super::helpers::clear_box(&self.steps_box);
+        clear_box(&self.steps_box);
         for st in &j.steps {
-            let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             let icon: gtk::Widget = if st.state == "running" {
                 adw::Spinner::new().upcast()
             } else {
@@ -1206,18 +1098,23 @@ impl CameraOptimizerPage {
             };
             icon.set_size_request(16, 16);
             icon.set_valign(gtk::Align::Start);
-            line.append(&icon);
-            let l = caption(&st.title, &[], true);
+            row.append(&icon);
+            let l = gtk::Label::new(Some(&tr(&st.title)));
+            l.set_xalign(0.0);
+            l.set_wrap(true);
             l.set_max_width_chars(60);
-            line.append(&l);
-            self.steps_box.append(&line);
+            l.add_css_class("caption");
+            row.append(&l);
+            self.steps_box.append(&row);
         }
-        let adj = self.steps_scroll.vadjustment();
-        glib::idle_add_local_once(move || adj.set_value(adj.upper()));
         self.log_view.buffer().set_text(&j.log.join("\n"));
-        let (note, kind) = if !j.error.is_empty() {
-            (trf("Something went wrong: {error}. Your previous settings are still in place.", &[("error", &tr(&j.error))]), "bad")
-        } else if !j.running && applying && j.result.as_object().map(|o| !o.is_empty()).unwrap_or(false) {
+        if j.running {
+            return;
+        }
+        let (icon, tone, title, text) = if !j.error.is_empty() {
+            let t = trf("Something went wrong: {error}. Your previous settings are still in place.", &[("error", &tr(&j.error))]);
+            ("dialog-warning-symbolic", "warning", tr("That did not work"), t)
+        } else if applying {
             let r = &j.result;
             let mut n = trf("Applied. Saved as “{preset}”, loaded at every start.", &[("preset", &r["preset"].as_str().unwrap_or(""))]);
             if let Some(res) = r["resolution"].as_str() {
@@ -1228,45 +1125,41 @@ impl CameraOptimizerPage {
                 Some("needed") => n += &format!(" {}", tr("Calibrate the board in Autodarts at it.")),
                 _ => {}
             }
-            (n, "ok")
-        } else if !j.running && !restoring && j.result.as_object().map(|o| !o.is_empty()).unwrap_or(false) {
-            let vals: Vec<&Value> = j.result.as_object().unwrap().values().filter(|v| v.is_object()).collect();
-            let mut qs: Vec<String> = vals.iter().filter(|r| r["mjpeg_q"].is_i64()).map(|r| r["mjpeg_q"].to_string()).collect();
-            qs.sort();
-            qs.dedup();
-            let first = vals[0];
-            let res = first["resolution"].as_str().unwrap_or("");
-            let change = if first["resolution_change"].as_bool().unwrap_or(false) {
-                format!(" {}", trf("Applying sets Autodarts to {resolution} (needs a new board calibration if it has none at it).", &[("resolution", &res)]))
-            } else {
-                String::new()
-            };
-            let mut n = if !res.is_empty() { trf("All cameras calibrated and matched at {resolution}", &[("resolution", &res)]) } else { tr("All cameras calibrated and matched") };
-            if qs.len() == 1 {
-                n += &format!(" · {}", trf("JPEG level {q}", &[("q", &qs[0])]));
-            }
-            n += &format!(".{} {}", change, tr("Review before & after, then apply."));
-            if let Some(w) = j.result["warning"].as_str() {
-                n += &format!(" {}", w);
-            }
-            if vals.iter().any(|r| r["white_short"].as_bool().unwrap_or(false)) {
-                n += &format!(" {}", tr("Some cameras stay darker than the target: more light on the board would help."));
-            }
-            (n, "review")
-        } else if !j.running && restoring {
-            (tr("Original settings restored."), "")
+            ("object-select-symbolic", "success", tr("Calibration applied"), n)
+        } else if restoring {
+            ("object-select-symbolic", "success", tr("Original settings restored"), tr("Your cameras are back on the settings Autodarts uses."))
         } else {
-            (String::new(), "")
+            return; // a finished optimization goes on to its review
         };
-        self.job_note.set_label(&note);
-        self.job_note.set_visible(!note.is_empty());
-        self.btn_after.set_visible(kind == "ok" || kind == "review");
-        self.btn_after.set_label(&tr(if kind == "review" { "Review & apply" } else { "See before & after" }));
-        self.job_note.remove_css_class("camopt-note-ok");
-        self.job_note.remove_css_class("camopt-note-bad");
-        if !kind.is_empty() {
-            self.job_note.add_css_class(&format!("camopt-note-{}", if kind == "review" { "ok" } else { kind }));
+        set_icon(&self.res_icon, icon, tone);
+        self.res_title.set_label(&title);
+        self.res_line.set_label(&text);
+    }
+
+    /// What the last optimization found, for the review screen ("" when it is not the last job).
+    fn review_note(j: &JobView) -> String {
+        let Some(o) = j.result.as_object().filter(|o| j.name == "optimize" && !o.is_empty()) else { return String::new() };
+        let vals: Vec<&Value> = o.values().filter(|v| v.is_object()).collect();
+        let Some(first) = vals.first() else { return String::new() };
+        let mut qs: Vec<String> = vals.iter().filter(|r| r["mjpeg_q"].is_i64()).map(|r| r["mjpeg_q"].to_string()).collect();
+        qs.sort();
+        qs.dedup();
+        let res = first["resolution"].as_str().unwrap_or("");
+        let mut n = if !res.is_empty() { trf("All cameras calibrated and matched at {resolution}", &[("resolution", &res)]) } else { tr("All cameras calibrated and matched") };
+        if qs.len() == 1 {
+            n += &format!(" · {}", trf("JPEG level {q}", &[("q", &qs[0])]));
         }
+        n += ".";
+        if first["resolution_change"].as_bool().unwrap_or(false) {
+            n += &format!(" {}", trf("Applying sets Autodarts to {resolution} (needs a new board calibration if it has none at it).", &[("resolution", &res)]));
+        }
+        if let Some(w) = j.result["warning"].as_str() {
+            n += &format!(" {}", w);
+        }
+        if vals.iter().any(|r| r["white_short"].as_bool().unwrap_or(false)) {
+            n += &format!(" {}", tr("Some cameras stay darker than the target: more light on the board would help."));
+        }
+        n
     }
 
     // --- before / after ---
@@ -1279,33 +1172,60 @@ impl CameraOptimizerPage {
         });
     }
 
+    /// The camera buttons above the picture (when more than one camera has pictures).
+    fn render_ba_cams(self: &Rc<Self>, active: &Option<String>) {
+        let ports: Vec<String> = self.ba.borrow().iter().map(|b| b.port.clone()).collect();
+        if ports == *self.ba_ports.borrow() {
+            return;
+        }
+        *self.ba_ports.borrow_mut() = ports.clone();
+        clear_box(&self.ba_cams);
+        if ports.len() < 2 {
+            return;
+        }
+        let o: Vec<(String, String)> = ports.iter().map(|p| (p.clone(), cw::cam_name(p))).collect();
+        let m = Rc::downgrade(self);
+        self.ba_cams.append(&segmented(
+            &o,
+            active.as_deref().unwrap_or(""),
+            Rc::new(move |p: String| {
+                if let Some(m) = m.upgrade() {
+                    cw::set_selected(Some(p));
+                    m.on_ba_pick();
+                }
+            }),
+        ));
+    }
+
     fn on_ba_pick(self: &Rc<Self>) {
         let ba = self.ba.borrow().clone();
         let pending = ba.iter().any(|b| b.pending);
-        self.ba_pending.set_visible(pending && !JOB.running());
-        self.btn_ba_preset.set_visible(!pending);
-        let name = self.strip.active();
+        self.btn_ba.set_visible(!ba.is_empty() && !pending);
+        self.rev_pending.set_visible(pending && !JOB.running());
+        self.rev_done.set_visible(!pending);
+        self.rev_back.set_visible(!pending);
+        let name = self.active_port();
+        self.render_ba_cams(&name);
         let info = name.as_ref().and_then(|n| ba.iter().find(|b| &b.port == n).cloned());
+        if pending {
+            self.rev_title.set_label(&tr("Calibration ready to review"));
+            let note = Self::review_note(&JOB.view());
+            let ask = tr("Nothing has changed yet. Compare before and after, then apply it or discard it.");
+            self.rev_line.set_label(&if note.is_empty() { ask } else { format!("{} {}", note, ask) });
+        } else {
+            self.rev_title.set_label(&tr("Before & After"));
+            let when = info.as_ref().and_then(|i| i.meta["after"]["time"].as_str().map(String::from));
+            self.rev_line.set_label(&when.map(|t| trf("Optimized {when}", &[("when", &t)])).unwrap_or_default());
+        }
+        self.render_screen();
         let Some(info) = info else {
             self.ba_stack.set_visible_child_name("empty");
-            self.ba_empty.set_label(&if ba.is_empty() {
-                tr("Before and after pictures appear here after an optimization.")
-            } else if let Some(n) = &name {
-                trf("No before and after pictures for {camera} yet.", &[("camera", &cw::cam_name(n))])
-            } else {
-                String::new()
-            });
+            self.ba_empty.set_label(&tr("Before and after pictures appear here after an optimization."));
             *self.ba_data.borrow_mut() = None;
             self.ba_key.borrow_mut().clear();
-            self.ba_note.set_label("");
             self.render_stats();
             return;
         };
-        let mut stamp = String::new();
-        if let Some(t) = info.meta["after"]["time"].as_str() {
-            stamp = format!("{} · ", trf(if info.pending { "Calibrated {when}" } else { "Optimized {when}" }, &[("when", &t)]));
-        }
-        self.ba_note.set_label(&format!("{}{}", stamp, tr("drag the handle · double-tap or scroll to zoom")));
         // the meta time is per minute: the file times tell a rerun within the same minute apart
         let stamps: Vec<u128> = ["before", "after"]
             .iter()
@@ -1346,65 +1266,40 @@ impl CameraOptimizerPage {
         );
     }
 
+    /// One line of numbers under the picture, how close it is to the other cameras, and the gestures.
     fn render_stats(&self) {
-        let t = &self.ba_table;
-        while let Some(c) = t.first_child() {
-            t.remove(&c);
-        }
         let data = self.ba_data.borrow().clone();
-        self.ba_chip.set_visible(false);
         self.btn_ba_preset.set_sensitive(data.is_some());
-        let name = self.strip.active().map(|p| cw::cam_name(&p)).unwrap_or_default();
-        self.ba_title.set_label(&if data.is_some() { format!("{} · {}", tr("RESULT"), name.to_uppercase()) } else { tr("RESULT") });
-        let Some(d) = data else { return };
+        let Some(d) = data else {
+            self.ba_stats.set_label("");
+            return;
+        };
         let (b, a) = (d.stats[0], d.stats[1]);
-        let q = |v: Option<i64>| v.map(|v| v.to_string()).unwrap_or_else(|| "–".into());
-        let rows: [(&str, String, String, Option<bool>); 4] = [
-            ("White level", format!("{:.0}", b.0), format!("{:.0}", a.0), Some(a.0 >= b.0)),
-            ("Clipped", format!("{:.1} %", b.1), format!("{:.1} %", a.1), Some(a.1 <= b.1.max(1.0))),
-            ("JPEG level", q(d.q.0), q(d.q.1), Some(true)),
-            ("Size / frame", format!("{:.0} KB", d.kb.0), format!("{:.0} KB", d.kb.1), None),
+        let mut parts = vec![
+            format!("{} {:.0} → {:.0}", tr("White level"), b.0, a.0),
+            format!("{} {:.1} → {:.1} %", tr("Clipped"), b.1, a.1),
         ];
-        for (c, h) in ["", "BEFORE", "AFTER"].iter().enumerate() {
-            let l = gtk::Label::new(Some(&tr(h)));
-            l.set_xalign(if c > 0 { 1.0 } else { 0.0 });
-            l.add_css_class("camopt-table-head");
-            t.attach(&l, c as i32, 0, 1, 1);
+        if d.q.0.is_some() || d.q.1.is_some() {
+            let q = |v: Option<i64>| v.map(|v| v.to_string()).unwrap_or_else(|| "–".into());
+            parts.push(format!("{} {} → {}", tr("JPEG level"), q(d.q.0), q(d.q.1)));
         }
-        for (r, (lab, bf, af, good)) in rows.iter().enumerate() {
-            let r = r as i32 + 1;
-            let l = gtk::Label::new(Some(&tr(lab)));
-            l.set_xalign(0.0);
-            l.add_css_class("camopt-cell");
-            t.attach(&l, 0, r, 1, 1);
-            let lb = gtk::Label::new(Some(bf));
-            lb.set_xalign(1.0);
-            lb.set_hexpand(true);
-            lb.add_css_class("camopt-cell");
-            t.attach(&lb, 1, r, 1, 1);
-            let la = gtk::Label::new(Some(af));
-            la.set_xalign(1.0);
-            la.add_css_class("camopt-cell");
-            if good == &Some(true) {
-                la.add_css_class("camopt-ok");
-            }
-            t.attach(&la, 2, r, 1, 1);
-        }
-        let active = self.strip.active();
-        let st = self.status.borrow();
-        let reference = self.cam(None).and_then(|c| c.white);
-        if let (Some(st), Some(rf)) = (st.as_ref(), reference) {
+        parts.push(format!("{} {:.0} → {:.0} KB", tr("Size / frame"), d.kb.0, d.kb.1));
+        let mut lines = vec![parts.join("   ·   ")];
+        let active = self.active_port();
+        let reference = active.as_deref().and_then(|p| self.cam(p)).and_then(|c| c.white);
+        if let (Some(st), Some(rf)) = (self.status.borrow().as_ref(), reference) {
             let diffs: Vec<f64> = st.cams.iter().filter(|c| c.s.optimized && Some(&c.s.port) != active.as_ref()).filter_map(|c| c.white).map(|w| (rf - w).abs() / rf).collect();
             if !diffs.is_empty() {
                 let worst = diffs.iter().cloned().fold(0.0, f64::max) * 100.0;
-                if worst < 5.0 {
-                    set_chip(&self.ba_chip, &trf("✓ Matches the other cameras within {pct:.0f} %", &[("pct", &format!("{:.0}", worst.max(1.0)))]), "ok");
+                lines.push(if worst < 5.0 {
+                    trf("✓ Matches the other cameras within {pct:.0f} %", &[("pct", &format!("{:.0}", worst.max(1.0)))])
                 } else {
-                    set_chip(&self.ba_chip, &trf("Differs from another camera by {pct:.0f} %", &[("pct", &format!("{:.0}", worst))]), "warn");
-                }
-                self.ba_chip.set_visible(true);
+                    trf("Differs from another camera by {pct:.0f} %", &[("pct", &format!("{:.0}", worst))])
+                });
             }
         }
+        lines.push(tr("drag the handle · double-tap or scroll to zoom"));
+        self.ba_stats.set_label(&lines.join("\n"));
     }
 
     /// (x0, y0, w, h) of the zoomed view in full-picture pixels.

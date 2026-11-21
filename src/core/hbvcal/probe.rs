@@ -502,6 +502,20 @@ fn code_dump(out: &std::path::Path) -> i32 {
 }
 
 pub fn main(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--status") {
+        // what the Camera Optimizer and Camera Controls pages see (read-only)
+        for d in daemon::cameras() {
+            let s = oneclick::support(&d);
+            println!("{} usb={:?} model={:?} supported={} mode={} reason={:?} mismatch={:?}", s.port, s.usb_id, s.model, s.supported, s.mode, s.reason, s.mismatch);
+            let i = super::live::camera_info(&d);
+            println!("   camera_info model={} hbv={} hidden={} error={}", i["model"], i["hbv"], i["hidden"], i["error"]);
+        }
+        println!("cameras() = {:?}", daemon::cameras());
+        let sup: Vec<String> = daemon::cameras().into_iter().filter(|d| oneclick::support(d).supported).collect();
+        println!("size_choices = {:?}", oneclick::size_choices(&sup));
+        println!("autodarts stream_size = {:?}", super::autodarts::stream_size());
+        return 0;
+    }
     if let Some(i) = args.iter().position(|a| a == "--poke") {
         // --poke DEV ADDR BYTE: one unlocked XDATA write (RAM/registers, gone after a power cycle)
         let p = |s: &String| u32::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0);
