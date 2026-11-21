@@ -1,16 +1,16 @@
 //! One-click workflow behind the Camera Optimizer page: support check, optimize and restore.
 //!
-//! Safety: the tuning back door (XU unlock + memory writes) is only ever used on cameras that pass `support()`:
-//! USB ID 0bdc:2710 (HBV OV2710 / Realtek bridge) AND a firmware build whose memory layout we verified. Other
-//! cameras are never touched. The user must also confirm once that they use HBV OV2710 cameras.
-use super::autocal::{calibrate_all, start_clean, CalError, CalResult, CalibrateAllOpts, PREVIEW};
+//! Safety: the tuning back door (XU unlock + memory writes) is only ever used on cameras of a known HBV model
+//! (models.rs) running a firmware build whose memory layout we verified, after the user confirmed that model.
+//! Other cameras of a known model are optimized with their standard controls only; unknown cameras not at all.
+use super::autocal::{calibrate_all, hidden_for, start_clean, CalError, CalResult, CalibrateAllOpts, PREVIEW};
 use super::autodarts::{calibrate_board, set_stream_size, stream_size};
 use super::capture::burst;
-use super::daemon::{cameras, is_streaming, tick};
-use super::settings::{apply_streaming, q_addr, q_addr_table, q_default, Settings, Q_LEVELS};
+use super::daemon::{cameras, tick};
+use super::settings::{apply_streaming, q_addr, q_levels, write_stock_q, Settings};
 use super::v4l2::Camera;
 use super::xu::Xu;
-use super::{board, live, profiles, service};
+use super::{board, live, models, profiles, service};
 use crate::core::i18n::{tr, trf};
 use crate::core::util::{run, write_atomic};
 use anyhow::{anyhow, bail, Result};
@@ -21,9 +21,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub const AUTODARTS_START_TIMEOUT: f64 = 60.0;
-/// Resolutions the optimizer tries, best picture first.
-pub const RESOLUTIONS: [(u32, u32); 2] = [(1280, 960), (1280, 720)];
-pub const STEP_DOWN_Q: i64 = 11;
+/// smallest resolution offered (Autodarts' own lower limit)
+pub const MIN_SIZE: (u32, u32) = (640, 480);
 
 pub fn before_after_dir() -> PathBuf {
     profiles::store().parent().unwrap().join("beforeafter")
@@ -44,39 +43,97 @@ pub struct Support {
     pub reason: String,
     pub firmware: String,
     pub optimized: bool,
+    /// model name and key (models.rs) for a known HBV camera
+    pub model: Option<String>,
+    pub model_key: Option<String>,
+    /// "full" (extension unit: sensor gain, JPEG quality where mapped) or "standard" (standard controls only)
+    pub mode: String,
+    /// the saved profile on this port was made for this other camera (it is not applied)
+    pub mismatch: Option<String>,
 }
 
-/// Is this camera one we can safely optimize? Never sends XU commands to non-HBV cameras.
+/// Can we optimize this camera, and how? Sends extension-unit commands only to a known HBV model the user
+/// confirmed (to read its firmware build); every other camera is only looked up by its USB ID.
 pub fn support(dev: &str) -> Support {
     let uid = profiles::usb_id(dev);
-    let mut out = Support { device: dev.into(), port: profiles::port_key(dev), usb_id: uid.clone(), ..Default::default() };
-    if uid.as_deref() != Some(profiles::HBV_USB_ID) {
-        out.reason = trf(
-            "not an HBV OV2710 camera (USB ID {uid}, expected {expected})",
-            &[("uid", &uid.unwrap_or_else(|| "None".into())), ("expected", &profiles::HBV_USB_ID)],
-        );
-        return out;
-    }
-    let build = (|| -> std::io::Result<String> {
-        let xu = Xu::open(dev)?;
-        xu.unlock()?;
-        xu.firmware_build()
-    })();
-    let build = match build {
-        Ok(b) => b,
-        Err(e) => {
-            out.reason = trf("camera did not answer the tuning interface ({error})", &[("error", &e)]);
-            return out;
-        }
+    let mut out = Support {
+        device: dev.into(),
+        port: profiles::port_key(dev),
+        usb_id: uid.clone(),
+        mode: "standard".into(),
+        mismatch: profiles::mismatch(dev),
+        ..Default::default()
     };
-    out.firmware = build.clone();
-    if q_addr_table(&build).is_none() {
-        out.reason = trf("unknown firmware build {build}: memory layout not verified", &[("build", &build)]);
+    let Some(m) = uid.as_deref().and_then(models::by_usb_id) else {
+        out.reason = trf("not a supported HBV camera (USB ID {uid})", &[("uid", &uid.unwrap_or_else(|| "None".into()))]);
         return out;
-    }
+    };
+    out.model = Some(m.name.into());
+    out.model_key = Some(m.key.into());
     out.supported = true;
     out.optimized = profiles::is_calibrated(profiles::get(dev).as_ref());
+    if !m.hidden_capable() {
+        out.reason = tr("standard controls only: hidden settings not verified for this model yet");
+        return out;
+    }
+    if !profiles::hidden_ok(dev) {
+        out.reason = tr("standard controls only until you confirm this camera model");
+        return out;
+    }
+    let r = (|| -> std::io::Result<String> {
+        let xu = Xu::open(dev)?;
+        let build = xu.firmware_build()?;
+        if xu.build_info().is_err() {
+            return Err(std::io::Error::other(trf("firmware {build} not verified: standard controls only", &[("build", &build)])));
+        }
+        xu.unlock()?;
+        Ok(build)
+    })();
+    match r {
+        Ok(b) => {
+            out.firmware = b;
+            out.mode = "full".into();
+        }
+        Err(e) => out.reason = trf("standard controls only ({error})", &[("error", &e)]),
+    }
     out
+}
+
+/// MJPEG sizes every camera offers, at least MIN_SIZE, largest first.
+pub fn size_choices(devs: &[String]) -> Vec<(u32, u32)> {
+    let mut common: Option<Vec<(u32, u32)>> = None;
+    for d in devs {
+        // the optimizer calibrates and Autodarts streams at 30 fps: larger sizes that only do 15-20 fps are left out
+        let s: Vec<(u32, u32)> =
+            super::v4l2::frame_sizes(d, "MJPG").into_iter().filter(|&(w, h)| super::v4l2::max_fps(d, "MJPG", w, h) >= 29.5).collect();
+        common = Some(match common {
+            None => s,
+            Some(c) => c.into_iter().filter(|x| s.contains(x)).collect(),
+        });
+    }
+    let mut v: Vec<(u32, u32)> =
+        common.unwrap_or_default().into_iter().filter(|&(w, h)| w * h >= MIN_SIZE.0 * MIN_SIZE.1).collect();
+    v.sort_by_key(|&(w, h)| std::cmp::Reverse((w * h, w)));
+    v
+}
+
+/// Autodarts' current resolution if it is one of the choices, else the largest.
+pub fn default_size(choices: &[(u32, u32)], autodarts: (u32, u32)) -> Option<(u32, u32)> {
+    if choices.contains(&autodarts) { Some(autodarts) } else { choices.first().copied() }
+}
+
+/// The next smaller choice (choices largest first).
+pub fn next_lower(choices: &[(u32, u32)], size: (u32, u32)) -> Option<(u32, u32)> {
+    choices.iter().copied().find(|&(w, h)| w * h < size.0 * size.1)
+}
+
+/// One of the two coarsest steps of the camera's scale (on the OV2710 above Q11): a lower resolution would look sharper.
+pub fn strong_compression(levels: &[i64], q: i64) -> bool {
+    levels.len() >= 2 && q >= levels[levels.len() - 2]
+}
+
+pub fn size_label(s: (u32, u32)) -> String {
+    format!("{}x{}", s.0, s.1)
 }
 
 pub fn systemctl(action: &str, unit: &str) -> String {
@@ -244,13 +301,13 @@ fn wait(cond: impl Fn() -> bool, timeout: f64, poll: f64) -> bool {
     cond()
 }
 
-fn wait_cameras_free(devs: &[String], timeout: f64) -> bool {
+fn wait_cameras_free(devs: &[String], size: (u32, u32), timeout: f64) -> bool {
     wait(
         || {
             devs.iter().all(|d| {
                 (|| -> std::io::Result<()> {
                     let mut cam = Camera::open(d)?;
-                    let (w, h) = stream_size();
+                    let (w, h) = size;
                     cam.configure(w, h, "MJPG", 30)?;
                     cam.start(4)?;
                     cam.stop()
@@ -264,7 +321,7 @@ fn wait_cameras_free(devs: &[String], timeout: f64) -> bool {
 }
 
 fn wait_streaming(devs: &[String], timeout: f64) -> bool {
-    wait(|| devs.iter().all(|d| Xu::open(d).map(|xu| is_streaming(&xu)).unwrap_or(false)), timeout, 1.0)
+    wait(|| devs.iter().all(|d| models::streaming(d)), timeout, 1.0)
 }
 
 /// One complete camera frame (raw JPEG). With `s`, the settings are applied first (as the keeper would).
@@ -272,15 +329,22 @@ pub fn snapshot_frame(dev: &str, s: Option<&Settings>, say: &(dyn Fn(&str) + Syn
     let (width, height) = size.unwrap_or_else(stream_size);
     let xu = Xu::open(dev)?;
     let mut cam = Camera::open(dev)?;
-    xu.unlock()?;
-    let q = match s.and_then(|s| s.mjpeg_q) {
-        Some(q) => q,
-        None => xu.mem_read(q_addr(&xu, width)?, 1)?[0] as i64,
-    };
+    let hidden = hidden_for(dev);
+    let mut q = None;
+    if hidden {
+        xu.unlock()?;
+        if let Some(a) = q_addr(&xu, width)? {
+            q = Some(match s.and_then(|s| s.mjpeg_q) {
+                Some(q) => q,
+                None => xu.mem_read(a, 1)?[0] as i64,
+            });
+        }
+    }
     start_clean(&mut cam, &xu, q, width, height, 30, say)?;
     let r = (|| -> std::io::Result<Vec<u8>> {
         if let Some(s) = s {
-            apply_streaming(&mut cam, &xu, s, 0)?;
+            let s = if hidden { s.clone() } else { profiles::uvc_only(s) };
+            apply_streaming(&mut cam, &xu, &s, 0)?;
         }
         Ok(burst(&mut cam, 1, 20, 2.0, 0)?.frames.pop().unwrap().data)
     })();
@@ -375,77 +439,79 @@ pub fn discard() {
     log::info!("pending calibration discarded");
 }
 
-/// MJPEG Q of the previous profile (stock without one) for the next stream start.
-fn put_back(dev: &str) -> std::io::Result<()> {
+/// MJPEG Q of the previous profile (stock without one) for the next stream start. Only on cameras whose
+/// extension unit the optimizer uses: the others were never changed there.
+fn put_back(dev: &str, width: u32) -> std::io::Result<()> {
+    if !hidden_for(dev) {
+        return Ok(());
+    }
     let prev = profiles::get_settings(dev);
     let xu = Xu::open(dev)?;
     xu.unlock()?;
-    let build = xu.firmware_build()?;
-    match prev.and_then(|p| p.mjpeg_q) {
-        Some(q) if profiles::hidden_ok(dev) => xu.mem_write(q_addr(&xu, stream_size().0)?, &[q as u8])?,
-        _ => {
-            if let Some(t) = q_addr_table(&build) {
-                for (cls, addr) in t {
-                    xu.mem_write(addr, &[q_default(cls) as u8])?;
-                }
-            }
-        }
+    match (prev.and_then(|p| p.mjpeg_q), q_addr(&xu, width)?) {
+        (Some(q), Some(a)) => xu.mem_write(a, &[q as u8]),
+        _ => write_stock_q(&xu),
     }
-    Ok(())
 }
 
-/// calibrate_all at the first of RESOLUTIONS that streams cleanly within STEP_DOWN_Q (the last one at any Q).
-fn calibrate_best(job: &Job, devs: &[String], fps: u32) -> Result<(BTreeMap<String, CalResult>, (u32, u32))> {
+/// calibrate_all at exactly the chosen size. When the cameras cannot stream it, stop and name a lower size.
+fn calibrate_at(job: &Job, devs: &[String], fps: u32, size: (u32, u32)) -> Result<BTreeMap<String, CalResult>> {
     let mut previous = BTreeMap::new();
     let say = |m: &str| job.say(m);
     let step = |m: &str| job.step(m);
     let skip = |m: &str| job.skip(m);
-    for (i, &(w, h)) in RESOLUTIONS.iter().enumerate() {
-        let last = i == RESOLUTIONS.len() - 1;
-        job.say(&format!(
-            "calibrating at {}x{}{}",
-            w,
-            h,
-            if last { String::new() } else { format!(", compression up to level {}", STEP_DOWN_Q) }
-        ));
-        let o = CalibrateAllOpts {
-            fps,
-            width: w,
-            height: h,
-            q_candidates: Q_LEVELS.to_vec(),
-            check_s: 20.0,
-            confirm_s: 60.0,
-            q_margin: 1,
-            q_max: if last { None } else { Some(STEP_DOWN_Q) },
-            save: false,
-            log: &say,
-            step: &step,
-            skipped: &skip,
-        };
-        match calibrate_all(devs, &o, &mut previous) {
-            Ok(r) => return Ok((r, (w, h))),
-            Err(e @ (CalError::UsbBandwidth(_) | CalError::CompressionLimit(_) | CalError::Other(_))) if !last => {
-                let (nw, nh) = RESOLUTIONS[i + 1];
-                job.say(&format!("{}x{} not usable: {}", w, h, e));
-                job.skip(&trf("not possible at {size}, see the log", &[("size", &format!("{}x{}", w, h))]));
-                job.step(&trf("Stepping down to {size}", &[("size", &format!("{}x{}", nw, nh))]));
-                for d in devs {
-                    let _ = put_back(d); // the failed attempt may have left its Q in camera memory
-                }
+    job.say(&format!("calibrating at {}", size_label(size)));
+    let o = CalibrateAllOpts {
+        fps,
+        width: size.0,
+        height: size.1,
+        q_candidates: Vec::new(), // each camera's own scale (models.rs)
+        check_s: 20.0,
+        confirm_s: 60.0,
+        q_margin: 1,
+        q_max: None,
+        save: false,
+        log: &say,
+        step: &step,
+        skipped: &skip,
+    };
+    match calibrate_all(devs, &o, &mut previous) {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            for d in devs {
+                let _ = put_back(d, size.0); // the failed attempt may have left its Q in camera memory
             }
-            Err(e) => bail!("{}", e),
+            match e {
+                CalError::UsbBandwidth(_) | CalError::CompressionLimit(_) | CalError::Other(_) => {
+                    let lower = next_lower(&size_choices(devs), size);
+                    let why = e.to_string();
+                    match lower {
+                        Some(l) => bail!(
+                            "{}",
+                            trf(
+                                "{size} did not work: {why} Choose a lower resolution, for example {lower}, and start again.",
+                                &[("size", &size_label(size)), ("why", &why), ("lower", &size_label(l))],
+                            )
+                        ),
+                        None => bail!("{}", trf("{size} did not work: {why}", &[("size", &size_label(size)), ("why", &why)])),
+                    }
+                }
+                e => bail!("{}", e),
+            }
         }
     }
-    unreachable!()
 }
 
 /// Calibrate and take before/after pictures. Nothing is kept: the result waits in PENDING for apply() or
 /// discard(), and the cameras go back to their previous settings meanwhile.
-pub fn optimize(job: &Job, fps: u32) -> Result<()> {
+pub fn optimize(job: &Job, fps: u32, size: (u32, u32)) -> Result<()> {
     let ad_size = stream_size();
     let devs: Vec<String> = cameras().iter().map(|d| support(d)).filter(|s| s.supported).map(|s| s.device).collect();
     if devs.is_empty() {
-        bail!("no supported HBV OV2710 camera found");
+        bail!("no supported HBV camera found");
+    }
+    if !size_choices(&devs).contains(&size) {
+        bail!("{}", trf("not every camera offers {size}", &[("size", &size_label(size))]));
     }
     let was_running = autodarts_active();
     service::migrate_legacy();
@@ -460,13 +526,15 @@ pub fn optimize(job: &Job, fps: u32) -> Result<()> {
         if was_running {
             systemctl("stop", "autodarts");
         }
-        if !wait_cameras_free(&devs, 20.0) {
+        if !wait_cameras_free(&devs, size, 20.0) {
             bail!("cameras are still in use by another program");
         }
         job.step("Taking 'before' pictures");
         let mut before: BTreeMap<String, Vec<u8>> = BTreeMap::new();
         for d in &devs {
-            match snapshot_frame(d, None, &say, None) {
+            // the settings Autodarts used, at the chosen size so before and after compare
+            let prev = profiles::get_settings(d);
+            match snapshot_frame(d, prev.as_ref(), &say, Some(size)) {
                 Ok(b) => {
                     PREVIEW.set(Some(d), Some("Before: the settings Autodarts used"), Some(&b));
                     before.insert(d.clone(), b);
@@ -477,23 +545,9 @@ pub fn optimize(job: &Job, fps: u32) -> Result<()> {
         if before.len() < devs.len() {
             job.skip("not every camera, see the log");
         }
-        job.say(&format!("resolution in Autodarts: {}x{}", ad_size.0, ad_size.1));
-        let (mut results, size) = calibrate_best(job, &devs, fps)?;
-        job.say(&format!("calibrated at {}x{}", size.0, size.1));
-        if size != ad_size {
-            job.step(&trf("Taking 'before' pictures again at {size}", &[("size", &format!("{}x{}", size.0, size.1))]));
-            for (d, r) in &results {
-                match snapshot_frame(d, Some(&Settings::from_json(&r.meta["previous"])), &say, Some(size)) {
-                    Ok(b) => {
-                        before.insert(d.clone(), b);
-                    }
-                    Err(e) => {
-                        before.remove(d);
-                        job.say(&format!("no 'before' picture of {} at {}x{}: {}", profiles::port_key(d), size.0, size.1, e));
-                    }
-                }
-            }
-        }
+        job.say(&format!("resolution in Autodarts: {}, chosen: {}", size_label(ad_size), size_label(size)));
+        let mut results = calibrate_at(job, &devs, fps, size)?;
+        job.say(&format!("calibrated at {}", size_label(size)));
         job.step("Taking 'after' pictures");
         for (d, r) in &results {
             let after = match snapshot_frame(d, Some(&r.settings), &say, Some(size)) {
@@ -519,7 +573,27 @@ pub fn optimize(job: &Job, fps: u32) -> Result<()> {
         )?;
         job.step("Previous settings back until you apply");
         for d in &devs {
-            let _ = put_back(d);
+            let _ = put_back(d, size.0);
+            // the standard controls too: a camera without a profile keeps them until the next Autodarts start
+            if let (Some(r), Ok(cam)) = (results.get(d), Camera::open(d)) {
+                let prev = Settings::from_json(&r.meta["previous"]);
+                if !prev.uvc.is_empty() {
+                    let _ = super::settings::apply_uvc(&cam, &prev.uvc, false);
+                }
+            }
+        }
+        let soft = results.iter().any(|(d, r)| match (r.meta["mjpeg_q"].as_i64(), Xu::open(d).map(|x| q_levels(&x))) {
+            (Some(q), Ok(l)) => strong_compression(l, q),
+            _ => false,
+        });
+        if let (true, Some(l)) = (soft, next_lower(&size_choices(&devs), size)) {
+            job.result_set(
+                "warning",
+                json!(trf(
+                    "The cameras only stream {size} with strong JPEG compression; {lower} would give a sharper picture.",
+                    &[("size", &size_label(size)), ("lower", &size_label(l))]
+                )),
+            );
         }
         let res: Map<String, Value> = results
             .iter_mut()
@@ -528,11 +602,18 @@ pub fn optimize(job: &Job, fps: u32) -> Result<()> {
                     d.clone(),
                     json!({"port": profiles::port_key(d), "settings": r.settings.label(),
                            "white": r.meta["reference"]["white"], "noise": r.meta["reference"]["tnoise"],
-                           "mjpeg_q": r.meta["mjpeg_q"], "resolution": format!("{}x{}", size.0, size.1),
-                           "resolution_change": size != ad_size, "pending": true}),
+                           "mjpeg_q": r.meta["mjpeg_q"], "resolution": size_label(size),
+                           "resolution_change": size != ad_size, "pending": true,
+                           "model": r.meta["model"], "strategy": r.meta["strategy"], "gain": r.meta["gain"],
+                           "white_short": r.meta.get("white_short").is_some()}),
                 )
             })
             .collect();
+        let warning = job.view().result.get("warning").cloned();
+        let mut res = res;
+        if let Some(w) = warning {
+            res.insert("warning".into(), w);
+        }
         job.set_result(Value::Object(res));
         job.finish();
         Ok(())
@@ -588,7 +669,7 @@ pub fn apply(job: &Job) -> Result<()> {
             set_stream_size(w, h)?;
             job.result_set("resolution", json!(format!("{}x{}", w, h)));
         }
-        wait_cameras_free(&devs, 20.0);
+        wait_cameras_free(&devs, size.unwrap_or_else(stream_size), 20.0);
         job.step("Applying the settings");
         tick(&mut Default::default()); // cameras not streaming: writes the MJPEG Q for the next stream start
         service::enable();
@@ -632,10 +713,12 @@ pub fn restore(job: &Job) -> Result<()> {
         if was_running {
             systemctl("stop", "autodarts");
         }
-        wait_cameras_free(&devs, 20.0);
+        wait_cameras_free(&devs, stream_size(), 20.0);
         job.step("Restoring stock JPEG quality and controls");
         for d in &devs {
-            live::write_stock_q(d).map_err(|e| anyhow!("{}: {}", d, e))?;
+            if hidden_for(d) {
+                live::write_stock_q(d).map_err(|e| anyhow!("{}: {}", d, e))?;
+            }
             if let Some(prev) = profiles::get(d).and_then(|p| p["meta"].get("previous").cloned()).filter(|v| v.is_object()) {
                 let cam = Camera::open(d)?;
                 for (name, v) in Settings::from_json(&prev).uvc {

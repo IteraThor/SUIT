@@ -5,7 +5,7 @@
 //!
 //! At its first start of a boot it makes the default preset (if one is set) the kept profiles.
 //!
-//! Per camera with a saved profile (matched by USB port):
+//! Per camera with a saved profile (matched by USB port; a profile made for another camera model is not applied):
 //!   * HBV camera with hidden layers (optimized), only after the user confirmed HBV cameras:
 //!     - as soon as the device appears: unlock + write the MJPEG Q byte (before the stream starts)
 //!     - while it is streaming: if any UVC control or sensor register differs from the profile, re-apply all
@@ -13,9 +13,9 @@
 //!       Q is raised two levels and written.
 //!   * any other profile (standard controls only): whenever a UVC control differs, re-apply the standard
 //!     controls. No extension-unit command is ever sent to these cameras.
-use super::autodarts::{autodarts_index, camera_fps};
-use super::profiles;
-use super::settings::{apply_prestream, apply_streaming, apply_uvc, inactive, q_above, q_addr, Settings};
+use super::autodarts::{autodarts_index, camera_fps, stream_size};
+use super::{models, profiles};
+use super::settings::{apply_prestream, apply_streaming, apply_uvc, inactive, q_above, q_addr, q_levels, Settings};
 use super::v4l2::{monotonic, Camera};
 use super::xu::Xu;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -33,9 +33,10 @@ pub fn cameras() -> Vec<String> {
     v
 }
 
-/// The sensor is only powered (and its ID readable) while some process streams.
+/// The sensor is only powered (and its ID readable) while some process streams. Needs an unlocked camera.
 pub fn is_streaming(xu: &Xu) -> bool {
-    matches!((xu.sensor_read(0x300B), xu.sensor_read(0x300A)), (Ok(0x10), Ok(0x27)))
+    let Some(m) = xu.model else { return false };
+    m.chip_id.iter().all(|(reg, id)| xu.sensor_read(*reg).ok() == Some(*id))
 }
 
 pub fn differences(
@@ -81,6 +82,7 @@ pub struct Tracker {
     pub refused: HashMap<String, String>,
     pub stall_since: Option<f64>,
     pub stall_warned: bool,
+    pub mismatch_warned: bool,
 }
 
 fn inode(dev: &str) -> Option<u64> {
@@ -126,9 +128,23 @@ pub fn tick(trackers: &mut HashMap<String, Tracker>) {
     let mut devs: Vec<&String> = present.iter().collect();
     devs.sort();
     for dev in devs {
-        let Some(s) = profiles::get_settings(dev) else { continue };
+        let Some(s) = profiles::get_settings(dev) else {
+            if let Some(other) = profiles::mismatch(dev) {
+                let t = trackers.entry(dev.clone()).or_insert_with(|| Tracker::new(dev));
+                if !t.mismatch_warned {
+                    t.mismatch_warned = true;
+                    log::warn!(
+                        "{}: the saved profile was made for {} but {} is connected: not applied (optimize again or remove it)",
+                        dev,
+                        other,
+                        models::name_of(profiles::usb_id(dev).as_deref())
+                    );
+                }
+            }
+            continue;
+        };
         let ino = inode(dev);
-        let fresh = trackers.get(dev).map(|t| t.inode != ino).unwrap_or(true);
+        let fresh = trackers.get(dev).map(|t| t.inode != ino || t.mismatch_warned).unwrap_or(true);
         if fresh {
             // new or re-enumerated device
             trackers.insert(dev.clone(), Tracker::new(dev));
@@ -142,15 +158,9 @@ pub fn tick(trackers: &mut HashMap<String, Tracker>) {
         let r = (|| -> std::io::Result<()> {
             let xu = Xu::open(dev)?;
             xu.unlock()?;
-            let width: u32 = profiles::get(dev)
-                .and_then(|p| p["meta"]["resolution"].as_str().map(String::from))
-                .unwrap_or_else(|| "1280x960".into())
-                .split('x')
-                .next()
-                .and_then(|w| w.parse().ok())
-                .unwrap_or(1280);
-            if let Some(q) = s.mjpeg_q {
-                let have = xu.mem_read(q_addr(&xu, width)?, 1)?[0] as i64;
+            let width = profiles::get(dev).and_then(|p| profiles::size_of(&p)).unwrap_or_else(stream_size).0;
+            if let (Some(q), Some(qa)) = (s.mjpeg_q, q_addr(&xu, width)?) {
+                let have = xu.mem_read(qa, 1)?[0] as i64;
                 if have != q {
                     let streaming = is_streaming(&xu);
                     apply_prestream(&xu, &s, width)?;
@@ -164,7 +174,7 @@ pub fn tick(trackers: &mut HashMap<String, Tracker>) {
                 }
                 let fps = fps_cache.get_or_insert_with(camera_fps).clone();
                 if stalled(dev, t, &fps) {
-                    let new = q_above(q, 2);
+                    let new = q_above(q_levels(&xu), q, 2);
                     if new != q {
                         profiles::set_q(dev, new, &format!("Autodarts got no frames at Q{} for {:.0} s", q, STALL_S));
                         apply_prestream(&xu, &Settings { mjpeg_q: Some(new), ..Default::default() }, width)?;

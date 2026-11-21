@@ -2,7 +2,7 @@
 //!
 //! Camera strip on top (shared with the Camera Optimizer), live view with metric chips and overlays on the left,
 //! collapsible control sections on the right. Every row has - / + steppers, a tappable value and a revert button.
-//! Changes apply immediately; a camera's settings are kept once it has a profile. On confirmed HBV OV2710 cameras
+//! Changes apply immediately; a camera's settings are kept once it has a profile. On confirmed HBV cameras
 //! the hidden JPEG quality and sensor gain are adjustable too.
 use super::camera_widgets::{self as cw, ask_rename, caption, chip, port_no, segmented, set_chip, to_texture, AutodartsStatus, CameraStrip, StripEntry, ThumbPoller, THUMB_PX};
 use super::helpers::{alert, ask, esc, run_async};
@@ -22,8 +22,10 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Instant;
 
-/// Sensor analog gain register 0x350B: bits 4-6 = x2 steps, bits 0-3 = n/16
+/// OV2710 sensor analog gain register 0x350B: bits 4-6 = x2 steps, bits 0-3 = n/16
 const SENSOR_STEPS: [i64; 10] = [0x00, 0x04, 0x08, 0x0C, 0x10, 0x14, 0x18, 0x30, 0x38, 0x70];
+/// gains offered for a sensor with a linear gain register (code = gain x unity)
+const LINEAR_STEPS: [f64; 9] = [1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0];
 const GROUPS: [(&str, &str); 5] = [("exposure", "Exposure"), ("tone", "Tone"), ("detail", "Detail"), ("color", "Color"), ("stream", "Stream")];
 /// a select with this many options or fewer is shown as one-tap segments, else as a dropdown
 const SEGMENT_MAX: usize = 4;
@@ -88,14 +90,35 @@ fn disabled(n: &str, vals: &HashMap<String, i64>) -> bool {
     }
 }
 
-pub fn sensor_gain(code: i64) -> f64 {
-    let c = (code >> 4) & 7;
-    (1i64 << c.count_ones()) as f64 * (1.0 + (code & 15) as f64 / 16.0)
+/// Gain of a sensor gain code, by the camera model's encoding (camera_info()["model"]).
+pub fn sensor_gain(c: &Value, code: i64) -> f64 {
+    if c["model"]["gain_kind"].as_str() == Some("linear") {
+        return code as f64 / c["model"]["gain_unity"].as_f64().unwrap_or(16.0).max(1.0);
+    }
+    let k = (code >> 4) & 7;
+    (1i64 << k.count_ones()) as f64 * (1.0 + (code & 15) as f64 / 16.0)
 }
 
-pub fn gain_label(code: i64) -> String {
-    let s = format!("{:.2}", sensor_gain(code));
+pub fn gain_label(c: &Value, code: i64) -> String {
+    let s = format!("{:.2}", sensor_gain(c, code));
     format!("{}×", s.trim_end_matches('0').trim_end_matches('.'))
+}
+
+/// The gain codes offered for this camera.
+fn sensor_steps(c: &Value) -> Vec<i64> {
+    if c["model"]["gain_kind"].as_str() == Some("linear") {
+        let unity = c["model"]["gain_unity"].as_i64().unwrap_or(16);
+        let max = c["model"]["gain_max"].as_i64().unwrap_or(255);
+        let mut v: Vec<i64> = LINEAR_STEPS.iter().map(|g| ((g * unity as f64).round() as i64).min(max)).collect();
+        v.dedup();
+        return v;
+    }
+    SENSOR_STEPS.to_vec()
+}
+
+/// Sensor gain register of this camera, as the hex name set_control takes ("350B").
+fn gain_reg(c: &Value) -> String {
+    c["model"]["gain_reg"].as_str().unwrap_or("350B").to_string()
 }
 
 /// Ask for a name and save every camera's settings as a preset (also used after an optimization).
@@ -145,7 +168,7 @@ fn calibrated_value(info: &Value, n: &str) -> Option<i64> {
     }
     match n {
         "q" => k["mjpeg_q"].as_i64(),
-        "sensor_gain" => k["sensor"]["0x350B"].as_i64(),
+        "sensor_gain" => k["sensor"][format!("0x{}", gain_reg(info))].as_i64(),
         _ => k["uvc"][n].as_i64(),
     }
 }
@@ -155,7 +178,10 @@ fn is_hbv(c: &Value) -> bool {
 }
 
 fn exposure_text(c: &Value, v: i64) -> String {
-    if is_hbv(c) { format!("{:.1} ms", v as f64 * 0.05) } else { v.to_string() } // HBV: 50 µs units (measured)
+    match c["model"]["exposure_unit_ms"].as_f64() {
+        Some(u) => format!("{:.1} ms", v as f64 * u), // HBV models: measured units
+        None => v.to_string(),
+    }
 }
 
 type PendingArgs = (String, String, i64, Rc<Cell<i64>>);
@@ -784,6 +810,11 @@ impl CameraControlsPage {
 
     /// HBV camera without its hidden controls: say why, and how to get them.
     fn hidden_hint(&self, c: &Value) -> Option<gtk::Box> {
+        if let Some(other) = c["mismatch"].as_str() {
+            let b = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            b.append(&caption(&trf("The saved profile on this port is for {model}, not this camera: it is not applied.", &[("model", &other)]), &[], true));
+            return Some(b);
+        }
         if !is_hbv(c) || c["hidden"].as_bool().unwrap_or(false) {
             return None;
         }
@@ -878,7 +909,7 @@ impl CameraControlsPage {
         }
         if matches!(sp.kind, Kind::Select | Kind::Sensor | Kind::Switch) {
             let st = Rc::new(Cell::new(v));
-            let (layer, cname) = if sp.kind == Kind::Sensor { ("sensor", "350B".to_string()) } else { ("uvc", n.to_string()) };
+            let (layer, cname) = if sp.kind == Kind::Sensor { ("sensor", gain_reg(c)) } else { ("uvc", n.to_string()) };
             let commit: Rc<dyn Fn(i64)> = {
                 let (m, st, sd) = (Rc::downgrade(self), st.clone(), set_differs.clone());
                 Rc::new(move |new: i64| {
@@ -906,12 +937,12 @@ impl CameraControlsPage {
                 set_ctl = Rc::new(move |x| w.set_active(x != 0));
             } else {
                 let (keys, texts): (Vec<i64>, Vec<String>) = if sp.kind == Kind::Sensor {
-                    let mut steps = SENSOR_STEPS.to_vec();
+                    let mut steps = sensor_steps(c);
                     if !steps.contains(&v) {
                         steps.push(v);
-                        steps.sort_by(|a, b| sensor_gain(*a).partial_cmp(&sensor_gain(*b)).unwrap());
+                        steps.sort_by(|a, b| sensor_gain(c, *a).partial_cmp(&sensor_gain(c, *b)).unwrap());
                     }
-                    let t = steps.iter().map(|k| gain_label(*k)).collect();
+                    let t = steps.iter().map(|k| gain_label(c, *k)).collect();
                     (steps, t)
                 } else {
                     let mut k: Vec<i64> = sp.options.iter().map(|(k, _)| *k).collect();
@@ -965,8 +996,8 @@ impl CameraControlsPage {
         let (lo, hi, step): (f64, f64, f64);
         let fmt: Rc<dyn Fn(i64) -> String>;
         if sp.kind == Kind::Q {
-            lo = 1.0;
-            hi = 30.0;
+            lo = c["q_range"][0].as_f64().unwrap_or(1.0);
+            hi = c["q_range"][1].as_f64().unwrap_or(30.0);
             step = 1.0;
             fmt = Rc::new(|x| x.to_string());
             lbl.set_tooltip_text(Some(&tr("Lower is sharper and uses more USB bandwidth. Applies when the stream restarts.")));
@@ -1181,8 +1212,10 @@ impl CameraControlsPage {
                                 skipped += 1; // e.g. temperature while automatic white balance is on
                             }
                         }
-                        if c["hidden"].as_bool().unwrap_or(false) && o["hidden"].as_bool().unwrap_or(false) {
-                            for (layer, name, key) in [("q", "q", "q"), ("sensor", "350B", "sensor_gain")] {
+                        let same_model = c["model"]["key"].is_string() && c["model"]["key"] == o["model"]["key"];
+                        if same_model && c["hidden"].as_bool().unwrap_or(false) && o["hidden"].as_bool().unwrap_or(false) {
+                            let reg = gain_reg(&c);
+                            for (layer, name, key) in [("q", "q", "q"), ("sensor", reg.as_str(), "sensor_gain")] {
                                 if let Some(want) = c[key].as_i64() {
                                     if o[key].as_i64() != Some(want) && live::set_control(dev, layer, name, want).is_err() {
                                         skipped += 1;
@@ -1549,18 +1582,17 @@ impl CameraControlsPage {
         live::stop_all();
     }
 
-    /// 255 outside the board area of the scores, at the size of the shown picture (only known at 1280x960).
+    /// 255 outside the board area of the scores, at the size of the shown picture (where Autodarts has a board
+    /// calibration at the frame's size).
     fn mask(&self, dev: &str, rows: i32, cols: i32, full: (i32, i32)) -> Option<Mat> {
         let key = (dev.to_string(), rows, cols);
         if let Some(m) = self.masks.borrow().get(&key) {
             return m.clone();
         }
         let m = (|| -> Option<Mat> {
-            if full != (960, 1280) {
-                return None;
-            }
-            let h = board::load_homography(dev, 1280, 960, None)?;
-            let fm = board::board_mask_image(&h, 960, 1280, board::BOARD_R).ok()?;
+            let (fr, fc) = full;
+            let h = board::load_homography(dev, fc as u32, fr as u32, None)?;
+            let fm = board::board_mask_image(&h, fr, fc, board::BOARD_R).ok()?;
             let inside = cvx::resize(&fm, cols, rows, imgproc::INTER_NEAREST).ok()?;
             cvx::not(&inside).ok()
         })();

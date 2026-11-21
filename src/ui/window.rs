@@ -114,6 +114,12 @@ impl Win {
         if std::env::var_os("SUIT_SMOKE_PAGES").is_some() {
             w.smoke_pages();
         }
+        // SUIT_OPEN_PAGE=camera_optimizer|camera_controls: open that page at start (testing without clicks)
+        match std::env::var("SUIT_OPEN_PAGE").as_deref() {
+            Ok("camera_optimizer") => w.open_camera_optimizer_page(),
+            Ok("camera_controls") => w.open_camera_controls_page(),
+            _ => {}
+        }
         w
     }
 

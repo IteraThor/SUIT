@@ -1,6 +1,6 @@
 //! Unit tests for the pure helpers ported from Python.
 use crate::core::{autodarts, power, util, wireless_screen as ws};
-use crate::core::hbvcal::{autocal, profiles, settings::{self, Settings}};
+use crate::core::hbvcal::{autocal, models, oneclick, profiles, settings::{self, Settings}};
 
 #[test]
 fn fmt_named_and_specs() {
@@ -29,9 +29,15 @@ fn analog_gain_codes() {
 
 #[test]
 fn q_levels() {
-    assert_eq!(settings::q_above(5, 1), 6);
-    assert_eq!(settings::q_above(8, 2), 16);
-    assert_eq!(settings::q_above(22, 1), 22);
+    let l = models::OV2710.build("07/28/26").unwrap().q_levels;
+    assert_eq!(settings::q_above(l, 5, 1), 6);
+    assert_eq!(settings::q_above(l, 8, 2), 16);
+    assert_eq!(settings::q_above(l, 22, 1), 22);
+    let o = models::OV9732.build("02/26/25").unwrap().q_levels;
+    assert_eq!(settings::q_above(o, 8, 1), 9);
+    assert_eq!(settings::q_above(o, 20, 2), 20);
+    assert!(oneclick::strong_compression(l, 16) && !oneclick::strong_compression(l, 11));
+    assert!(oneclick::strong_compression(o, 16) && !oneclick::strong_compression(o, 14));
     assert_eq!(settings::q_class(1280), "mid");
     assert_eq!(settings::q_class(1920), "large");
     assert_eq!(settings::q_class(640), "small");
@@ -47,6 +53,55 @@ fn settings_json_roundtrip() {
     assert_eq!(j["sensor"]["0x350B"], 0);
     assert_eq!(Settings::from_json(&j), s);
     assert_eq!(s.label(), "gain=53 Q=8 s350B=0x00");
+}
+
+#[test]
+fn camera_models() {
+    assert_eq!(models::by_usb_id("0bdc:2710").map(|m| m.key), Some("ov2710"));
+    assert_eq!(models::by_usb_id("0bdc:8088").map(|m| m.key), Some("ov9732"));
+    assert!(models::by_usb_id("046d:0825").is_none());
+    // IMX179: standard mode (no verified build), line time per sensor mode, UVC gain 1x at 40
+    assert_eq!(models::by_usb_id("1e45:8025").map(|m| m.key), Some("imx179"));
+    assert!(!models::IMX179.hidden_capable());
+    assert!((models::IMX179.exposure_unit(1080) * 1e6 - 17.92).abs() < 0.01);
+    assert!((models::IMX179.exposure_unit(720) * 1e6 - 21.56).abs() < 0.01);
+    assert_eq!(models::OV9732.exposure_unit(720), 6.25e-6);
+    let b = models::OV2710.build("07/28/26").unwrap();
+    assert_eq!(b.q_slots.iter().find(|(c, _, _)| *c == settings::q_class(1280)).map(|(_, a, s)| (*a, *s)), Some((0xC095, 22)));
+    assert_eq!(models::OV2710.build("02/15/25").unwrap().frame_limit(720), Some(215.0));
+    assert_eq!(models::OV2710.build("02/15/25").unwrap().frame_limit(600), Some(215.0));
+    assert_eq!(b.frame_limit(720), None);
+    let o = models::OV9732.build("02/26/25").unwrap();
+    assert!(o.q_slots.iter().all(|(_, a, s)| *a == 0xD104 && *s == 0x14) && o.lock_flag.is_none());
+    assert_eq!((o.q_committed, o.q_range.0, *o.q_levels.last().unwrap()), (Some(0xD102), 4, 0x14));
+    assert_eq!(o.frame_limit(480), Some(175.0));
+    assert!(models::OV9732.build("01/01/24").is_none());
+    assert_eq!(models::OV9732.exp_units(0.01), 1600);
+    assert_eq!(models::OV2710.exp_units(0.01), 200);
+}
+
+#[test]
+fn profile_made_for_other_camera() {
+    let new = serde_json::json!({"usb_id": "0bdc:2710", "serial": "HB20250300001"});
+    assert!(!profiles::saved_for_other(&new, Some("0bdc:2710"), Some("x")));
+    assert!(profiles::saved_for_other(&new, Some("0bdc:8088"), Some("HB20250300001")));
+    // older profiles have only the serial (shared by every camera of an HBV model)
+    let old = serde_json::json!({"serial": "HB20250300001"});
+    assert!(profiles::saved_for_other(&old, Some("0bdc:8088"), Some("HB202400001")));
+    assert!(!profiles::saved_for_other(&old, Some("0bdc:2710"), Some("HB20250300001")));
+    assert!(!profiles::saved_for_other(&serde_json::json!({}), Some("0bdc:8088"), Some("HB202400001")));
+    assert!(profiles::preset_entry_fits(&serde_json::json!({"uvc": {}}), None, None));
+}
+
+#[test]
+fn resolution_choices() {
+    let c = [(1280, 720), (848, 480), (800, 600), (640, 480)];
+    assert_eq!(oneclick::default_size(&c, (800, 600)), Some((800, 600)));
+    assert_eq!(oneclick::default_size(&c, (1280, 960)), Some((1280, 720)));
+    assert_eq!(oneclick::default_size(&[], (1280, 960)), None);
+    assert_eq!(oneclick::next_lower(&c, (1280, 720)), Some((848, 480)));
+    assert_eq!(oneclick::next_lower(&c, (640, 480)), None);
+    assert_eq!(oneclick::size_label((1280, 720)), "1280x720");
 }
 
 #[test]

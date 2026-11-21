@@ -11,7 +11,8 @@ use super::autocal::{percentile, WHITE_TARGET};
 use super::autodarts::{autodarts_index, get_bytes, get_json, AUTODARTS_API};
 use super::capture::{luma, valid_jpeg, START_DISCARD};
 use super::daemon::{cameras, is_streaming};
-use super::settings::{apply_prestream, apply_streaming, apply_uvc, q_addr, q_addr_table, q_default, set_uvc, Settings};
+use super::models::{self, Gain};
+use super::settings::{apply_prestream, apply_streaming, apply_uvc, q_addr, set_uvc, Settings};
 use super::v4l2::Camera;
 use super::xu::Xu;
 use super::{board, oneclick, profiles, service};
@@ -26,8 +27,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Q factor committed at the last stream start (same address on both firmware builds)
-pub const Q_COMMITTED: u32 = 0xC102;
 pub const UVC_CONTROLS: [&str; 13] = [
     "exposure_time_absolute",
     "gain",
@@ -79,6 +78,24 @@ pub fn hbv(dev: &str) -> bool {
 }
 pub fn hidden_ok(dev: &str) -> bool {
     profiles::hidden_ok(dev)
+}
+
+/// The sensor gain register of this camera's model.
+pub fn gain_reg(dev: &str) -> u32 {
+    match models::of_device(dev).map(|m| m.gain) {
+        Some(Gain::Sensor { reg, .. }) => reg,
+        _ => 0x350B,
+    }
+}
+
+/// The stream size this camera runs at in Autodarts (its profile's, else Autodarts' configured size).
+pub fn size(dev: &str) -> (u32, u32) {
+    profiles::get(dev).and_then(|p| profiles::size_of(&p)).unwrap_or_else(super::autodarts::stream_size)
+}
+
+/// Q byte the running stream uses, where the firmware build has it mapped.
+fn q_committed(xu: &Xu) -> Option<u32> {
+    xu.build_info().ok().and_then(|b| b.q_committed)
 }
 
 // --- image readouts ---
@@ -280,7 +297,7 @@ impl Live {
 
     fn own_stream(&self) -> std::io::Result<()> {
         let mut s = profiles::get_settings(&self.dev);
-        let width = 1280;
+        let (width, height) = size(&self.dev);
         let hidden = s.is_some() && hidden_ok(&self.dev);
         if let (Some(p), false) = (&s, hidden) {
             s = Some(profiles::uvc_only(p));
@@ -290,7 +307,7 @@ impl Live {
         if hidden {
             apply_prestream(&xu, s.as_ref().unwrap(), width)?;
         }
-        cam.configure(width, 960, "MJPG", 30)?;
+        cam.configure(width, height, "MJPG", 30)?;
         cam.start(4)?; // EBUSY when Autodarts streams
         let r = (|| -> std::io::Result<()> {
             self.set_source("own stream");
@@ -366,7 +383,7 @@ impl Live {
             return json!({"source": source});
         }
         let (w, h) = (fr[0].w, fr[0].h);
-        let hm = if (w, h) == (1280, 960) { board::load_homography(&self.dev, w as u32, h as u32, None) } else { None };
+        let hm = board::load_homography(&self.dev, w as u32, h as u32, None);
         let mask: Vec<bool> = hm
             .as_ref()
             .and_then(|hm| board::board_mask_image(hm, h as i32, w as i32, board::BOARD_R).ok())
@@ -443,7 +460,18 @@ pub fn camera_info(dev: &str) -> Value {
         "device": dev, "port": profiles::port_key(dev), "autodarts_index": autodarts_index(dev),
         "profile": prof, "controls": {}, "usb_id": profiles::usb_id(dev), "hbv": hbv(dev),
         "hidden": false, "optimized": profiles::is_calibrated(prof.as_ref()),
+        "mismatch": profiles::mismatch(dev),
     });
+    if let Some(m) = models::of_device(dev) {
+        let (kind, unity, max) = match m.gain {
+            Gain::Uvc => ("ov2710", 0x10, 0x70),
+            Gain::Sensor { unity, max, .. } => ("linear", unity, max),
+            Gain::UvcScaled { .. } => ("uvc", 0, 0),
+        };
+        info["model"] = json!({"key": m.key, "name": m.name, "exposure_unit_ms": m.exposure_unit(size(dev).1) * 1000.0,
+                               "gain_reg": format!("{:04X}", gain_reg(dev)), "gain_kind": kind,
+                               "gain_unity": unity, "gain_max": max});
+    }
     match Camera::open(dev) {
         Ok(cam) => {
             let mut ctrls = Map::new();
@@ -477,12 +505,18 @@ pub fn camera_info(dev: &str) -> Value {
         let xu = Xu::open(dev)?;
         xu.unlock()?;
         info["firmware"] = json!(xu.firmware_build()?);
-        info["q"] = json!(xu.mem_read(q_addr(&xu, 1280)?, 1)?[0]); // applies at the next stream start
-        info["q_active"] = json!(xu.mem_read(Q_COMMITTED, 1)?[0]); // what the running stream uses
+        let b = xu.build_info()?;
+        if let Some(a) = q_addr(&xu, size(dev).0)? {
+            info["q"] = json!(xu.mem_read(a, 1)?[0]); // applies at the next stream start
+            info["q_range"] = json!([b.q_range.0, b.q_range.1]);
+        }
+        if let Some(a) = q_committed(&xu) {
+            info["q_active"] = json!(xu.mem_read(a, 1)?[0]); // what the running stream uses
+        }
         let st = is_streaming(&xu);
         info["streaming"] = json!(st);
         if st {
-            info["sensor_gain"] = json!(xu.sensor_read(0x350B)?);
+            info["sensor_gain"] = json!(xu.sensor_read(gain_reg(dev))?);
         }
         info["hidden"] = json!(true);
         Ok(())
@@ -509,7 +543,7 @@ pub fn current_settings(dev: &str) -> Settings {
         if s.uvc.get("auto_exposure").copied().unwrap_or(1) != 1 {
             // auto exposure drives the sensor gain itself: keeping a value would fight it
         } else if let Some(g) = info["sensor_gain"].as_i64() {
-            s.sensor.insert(0x350B, g);
+            s.sensor.insert(gain_reg(dev), g);
         } else if info["profile"].is_object() {
             s.sensor = Settings::from_json(&info["profile"]["settings"]).sensor;
         }
@@ -532,7 +566,7 @@ fn save_edit(dev: &str, prof: &Value, s: &Settings, extra: &[(&str, Value)]) {
 /// Set one control now. If the camera has a profile, the change is saved into it, so the keeper keeps it.
 pub fn set_control(dev: &str, layer: &str, name: &str, value: i64) -> Result<Value> {
     if layer != "uvc" && !hidden_ok(dev) {
-        bail!("JPEG quality and sensor gain are only used on confirmed HBV OV2710 cameras");
+        bail!("JPEG quality and sensor gain are only used on confirmed HBV cameras");
     }
     let mut out = json!({"ok": true});
     let prof = profiles::get(dev);
@@ -558,10 +592,15 @@ pub fn set_control(dev: &str, layer: &str, name: &str, value: i64) -> Result<Val
         let xu = Xu::open(dev)?;
         xu.unlock()?;
         if layer == "q" {
+            let (lo, hi) = xu.build_info()?.q_range;
+            if !(lo..=hi).contains(&value) {
+                bail!("JPEG compression {} is outside {}..{} for this camera (it would send only broken frames)", value, lo, hi);
+            }
             if let Some(s) = s.as_mut() {
                 s.mjpeg_q = Some(value);
             }
-            xu.mem_write(q_addr(&xu, 1280)?, &[value as u8])?;
+            let a = q_addr(&xu, size(dev).0)?.ok_or_else(|| anyhow!("JPEG quality is not mapped for this camera"))?;
+            xu.mem_write(a, &[value as u8])?;
             match live_get(dev) {
                 Some(lv) if lv.source() == "own stream" => {
                     // restart our own stream so the new Q applies
@@ -598,14 +637,7 @@ pub fn keep(dev: &str) {
 }
 
 pub fn write_stock_q(dev: &str) -> std::io::Result<()> {
-    let xu = Xu::open(dev)?;
-    xu.unlock()?;
-    let build = xu.firmware_build()?;
-    let t = q_addr_table(&build).ok_or_else(|| std::io::Error::other(format!("unknown firmware build {}", build)))?;
-    for (cls, addr) in t {
-        xu.mem_write(addr, &[q_default(cls) as u8])?;
-    }
-    Ok(())
+    super::settings::write_stock_q(&Xu::open(dev)?)
 }
 
 /// Stop keeping this camera's settings. An optimized camera also gets its stock JPEG quality and its control
@@ -686,7 +718,9 @@ pub fn save_preset(name: &str) -> Result<()> {
     let mut entry = Map::new();
     for d in cameras() {
         let s = profiles::get_settings(&d).unwrap_or_else(|| current_settings(&d));
-        entry.insert(profiles::port_key(&d), s.to_json());
+        let mut js = s.to_json();
+        js["usb_id"] = json!(profiles::usb_id(&d)); // the preset is only loaded onto the same kind of camera
+        entry.insert(profiles::port_key(&d), js);
     }
     presets.insert(name.into(), Value::Object(entry));
     profiles::save_presets(&presets);
@@ -719,6 +753,10 @@ pub fn load_preset(name: &str) -> Result<Value> {
     let mut n = 0;
     for dev in cameras() {
         let Some(js) = entry.get(profiles::port_key(&dev)) else { continue };
+        if !profiles::preset_entry_fits(js, profiles::get_raw(&dev).as_ref(), Some(&dev)) {
+            log::warn!("preset {:?}: entry for {} was made for another camera, not loaded", name, dev);
+            continue;
+        }
         let mut s = Settings::from_json(js);
         let hidden = hidden_ok(&dev);
         if !hidden {
@@ -726,16 +764,18 @@ pub fn load_preset(name: &str) -> Result<Value> {
         }
         match profiles::get(&dev) {
             Some(p) => save_edit(&dev, &p, &s, &[("preset", json!(name))]),
-            None => profiles::put(&dev, &s, Some(json!({"source": "preset", "preset": name}))),
+            None => profiles::put(&dev, &s, Some(json!({"source": "preset", "preset": name, "resolution": js_size(&dev)}))),
         }
         let cam = Camera::open(&dev)?;
         apply_uvc(&cam, &s.uvc, false)?;
         drop(cam);
         if hidden && s.mjpeg_q.is_some() {
             let xu = Xu::open(&dev)?;
-            apply_prestream(&xu, &s, 1280)?;
-            if is_streaming(&xu) && Some(xu.mem_read(Q_COMMITTED, 1)?[0] as i64) != s.mjpeg_q {
-                out["needs_restart"] = json!(true);
+            apply_prestream(&xu, &s, size(&dev).0)?;
+            if let Some(a) = q_committed(&xu) {
+                if is_streaming(&xu) && Some(xu.mem_read(a, 1)?[0] as i64) != s.mjpeg_q {
+                    out["needs_restart"] = json!(true);
+                }
             }
         }
         n += 1;
@@ -743,6 +783,11 @@ pub fn load_preset(name: &str) -> Result<Value> {
     out["cameras"] = json!(n);
     service::sync();
     Ok(out)
+}
+
+fn js_size(dev: &str) -> String {
+    let (w, h) = size(dev);
+    format!("{}x{}", w, h)
 }
 
 /// The default preset's stored name, even when no preset has it (any more).
@@ -803,10 +848,30 @@ pub fn recheck(dev: &str, trim: bool) -> Result<Value> {
     let verdict = if dev_pct.abs() < 6.0 { "ok" } else if dev_pct.abs() > 20.0 { "recalibrate" } else { "trim gain" };
     let mut out = json!({"white": white, "reference": reference, "deviation_pct": (dev_pct * 10.0).round() / 10.0, "verdict": verdict});
     if trim && verdict != "ok" {
-        let g = profiles::get_settings(dev).and_then(|s| s.uvc.get("gain").copied()).unwrap_or(44);
-        let new = (g as f64 * reference / white.max(1.0)).clamp(0.0, 128.0).round() as i64;
-        set_control(dev, "uvc", "gain", new)?; // saves it into the profile
-        out["gain"] = json!([g, new]);
+        let s = profiles::get_settings(dev).unwrap_or_default();
+        let f = reference / white.max(1.0);
+        match models::of_device(dev).map(|m| m.gain) {
+            Some(Gain::Sensor { reg, unity, max }) if hidden_ok(dev) => {
+                let g = s.sensor.get(&reg).copied().unwrap_or(unity);
+                let new = (g as f64 * f).round().clamp(unity as f64, max as f64) as i64;
+                set_control(dev, "sensor", &format!("{:04X}", reg), new)?;
+                out["sensor_gain"] = json!([g, new]);
+            }
+            Some(Gain::Sensor { .. }) => {
+                // no gain without the extension unit: trim the exposure
+                let e = s.uvc.get("exposure_time_absolute").copied().unwrap_or(0);
+                let mx = Camera::open(dev).and_then(|c| c.query("exposure_time_absolute")).map(|q| q.max as i64).unwrap_or(e);
+                let new = (e as f64 * f).round().clamp(1.0, mx as f64) as i64;
+                set_control(dev, "uvc", "exposure_time_absolute", new)?;
+                out["exposure"] = json!([e, new]);
+            }
+            _ => {
+                let g = s.uvc.get("gain").copied().unwrap_or(44);
+                let new = (g as f64 * f).clamp(0.0, 128.0).round() as i64;
+                set_control(dev, "uvc", "gain", new)?; // saves it into the profile
+                out["gain"] = json!([g, new]);
+            }
+        }
     }
     Ok(out)
 }

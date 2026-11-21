@@ -1,6 +1,6 @@
 //! Automatic calibration of one camera for a new setup (needs exclusive access: stop Autodarts first).
 //!
-//! Strategy (all measured on a 3-camera HBV rig):
+//! Strategy for the HBV OV2710 (all measured on a 3-camera HBV rig):
 //!   * Exposure is sensor-referred: the OV2710 output saturates at a fixed level (~145 DN at digital gain 0).
 //!     The best picture uses the longest exposure the frame rate allows with analog gain 1x, as long as the
 //!     white sisal stays at ~92 % of that ceiling. Brightness is then raised with the ISP's digital gain
@@ -10,8 +10,15 @@
 //!     half-period (10 ms for 50 Hz, 8.33 ms for 60 Hz; the better one is detected).
 //!   * MJPEG Q is chosen by a bandwidth check over all cameras (calibrate_all).
 //!   * Measuring runs at MEASURE_Q, never at the Q the camera happens to hold.
+//!
+//! Other models (calibrate_generic, e.g. HBV OV9732, which has no UVC gain): the longest exposure the frame rate
+//! allows (quantised against flicker) at gain 1x, shortened while the white sisal is above the target; then the
+//! model's gain (sensor analog gain, models.rs) raises the white level to the common target. Without the
+//! extension unit (unconfirmed model or unknown firmware) only the exposure is set. The MJPEG Q is only chosen
+//! where the firmware build has it mapped; elsewhere the camera keeps its own.
 use super::capture::{burst, luma, START_DISCARD};
-use super::settings::{apply_prestream, apply_streaming, frame_budget_kb, q_above, q_addr, snapshot, Settings, Q_LEVELS};
+use super::models::{self, Gain, Model};
+use super::settings::{apply_prestream, apply_streaming, frame_budget_kb, q_above, q_addr, q_levels, snapshot, Settings};
 use super::v4l2::Camera;
 use super::xu::Xu;
 use super::{board, profiles};
@@ -21,7 +28,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::sync::{Arc, Mutex};
 
-/// UVC exposure_time_absolute unit on these cameras (measured, not the 100 µs of the spec)
+/// UVC exposure_time_absolute unit of the OV2710 (measured, not the 100 µs of the spec); see models.rs
 pub const EXPOSURE_UNIT_S: f64 = 50e-6;
 pub const WHITE_FRACTION: f64 = 0.92;
 pub const WHITE_TARGET: f64 = 232.0;
@@ -84,7 +91,7 @@ pub fn usb_bandwidth_error(devices: &[String], refused: &[String], width: u32, h
     };
     let n = devices.len();
     CalError::UsbBandwidth(format!(
-        "Not enough USB bandwidth to stream {} camera{} at once at {}x{}: port {} could not start.{} Plug the cameras into separate USB ports, ideally on different USB controllers, or use a lower resolution in Autodarts, then optimize again.",
+        "Not enough USB bandwidth to stream {} camera{} at once at {}x{}: port {} could not start.{} Plug the cameras into separate USB ports, ideally on different USB controllers, or choose a lower resolution, then optimize again.",
         n,
         if n > 1 { "s" } else { "" },
         width,
@@ -112,26 +119,39 @@ pub fn analog_gain(code: i64) -> f64 {
 }
 
 /// Start the stream at MJPEG Q `q`, stepping to coarser levels while the camera only sends broken frames.
-/// Leaves the stream running; returns the Q in use.
-pub fn start_clean(cam: &mut Camera, xu: &Xu, mut q: i64, width: u32, height: u32, fps: u32, log: Log) -> io::Result<i64> {
+/// Leaves the stream running; returns the Q in use. q None: the camera's own Q (no extension-unit command).
+pub fn start_clean(cam: &mut Camera, xu: &Xu, q: Option<i64>, width: u32, height: u32, fps: u32, log: Log) -> io::Result<Option<i64>> {
+    let Some(mut q) = q else {
+        cam.configure(width, height, "MJPG", fps)?;
+        cam.start(4)?;
+        return match burst(cam, 3, START_DISCARD, 2.0, 30) {
+            Ok(_) => Ok(None),
+            Err(e) if e.kind() == io::ErrorKind::Other => {
+                let _ = cam.stop();
+                Err(io::Error::other(format!("{}: only broken frames at {}x{} ({})", cam.device, width, height, e)))
+            }
+            Err(e) => Err(e),
+        };
+    };
     loop {
         apply_prestream(xu, &Settings { mjpeg_q: Some(q), ..Default::default() }, width)?;
         cam.configure(width, height, "MJPG", fps)?;
         cam.start(4)?;
         match burst(cam, 3, START_DISCARD, 2.0, 30) {
-            Ok(_) => return Ok(q),
+            Ok(_) => return Ok(Some(q)),
             Err(e) if e.kind() == io::ErrorKind::Other => {
                 let _ = cam.stop();
-                if q >= *Q_LEVELS.last().unwrap() {
+                let levels = q_levels(xu);
+                if q >= levels.last().copied().unwrap_or(q) {
                     return Err(e);
                 }
                 log(&format!(
                     "  {}: only broken frames at Q{} (frames too big for the camera), trying Q{}",
                     cam.device,
                     q,
-                    q_above(q, 1)
+                    q_above(levels, q, 1)
                 ));
-                q = q_above(q, 1);
+                q = q_above(levels, q, 1);
             }
             Err(e) => return Err(e),
         }
@@ -210,18 +230,25 @@ pub struct Session<'a> {
     pub xu: Xu,
     pub homography: Option<Mat>,
     mask: Vec<bool>,
-    pub q_before: i64,
-    pub q: i64,
+    pub q_before: Option<i64>,
+    pub q: Option<i64>,
 }
 
 impl<'a> Session<'a> {
-    pub fn open(device: &str, width: u32, height: u32, fps: u32, log: Log<'a>) -> Result<Session<'a>, CalError> {
+    pub fn open(device: &str, width: u32, height: u32, fps: u32, log: Log<'a>, hidden: bool) -> Result<Session<'a>, CalError> {
         let xu = Xu::open(device)?;
         let mut cam = Camera::open(device)?;
         let hm = board::load_homography(device, width, height, None);
-        xu.unlock()?;
-        let q_before = xu.mem_read(q_addr(&xu, width)?, 1)?[0] as i64;
-        let q = start_clean(&mut cam, &xu, MEASURE_Q, width, height, fps, log)?;
+        let mut q_before = None;
+        let mut measure_q = None;
+        if hidden {
+            xu.unlock()?;
+            if let Some(a) = q_addr(&xu, width)? {
+                q_before = Some(xu.mem_read(a, 1)?[0] as i64);
+                measure_q = Some(xu.build_info().map(|b| b.q_measure).unwrap_or(MEASURE_Q));
+            }
+        }
+        let q = start_clean(&mut cam, &xu, measure_q, width, height, fps, log)?;
         let mask = match &hm {
             Some(h) => {
                 let m = board::board_mask_image(h, height as i32, width as i32, board::BOARD_R)?;
@@ -326,6 +353,16 @@ pub fn exposure_max(fps: u32) -> i64 {
     (0.98 / fps as f64 / EXPOSURE_UNIT_S) as i64
 }
 
+/// May the calibration use this camera's extension unit (confirmed model, verified firmware build)?
+pub fn hidden_for(device: &str) -> bool {
+    profiles::hidden_ok(device) && Xu::open(device).map(|x| x.build_info().is_ok()).unwrap_or(false)
+}
+
+/// Does the calibration pick an MJPEG Q for this camera at this width?
+pub fn q_capable(device: &str, width: u32) -> bool {
+    hidden_for(device) && Xu::open(device).ok().and_then(|x| q_addr(&x, width).ok().flatten()).is_some()
+}
+
 fn uvc(pairs: &[(&str, i64)]) -> Settings {
     Settings { uvc: pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect(), ..Default::default() }
 }
@@ -366,19 +403,25 @@ pub fn calibrate(
     fps: u32,
     width: u32,
     height: u32,
-    q: i64,
+    q: Option<i64>,
     log: Log,
     previous: Option<&Settings>,
 ) -> Result<CalResult, CalError> {
     let t0 = std::time::Instant::now();
+    let model = models::of_device(device);
+    let hidden = hidden_for(device);
+    if !(hidden && model.map(|m| m.gain == Gain::Uvc).unwrap_or(false)) {
+        return calibrate_generic(device, fps, width, height, q, log, previous, model, hidden);
+    }
+    let q = q.unwrap_or(DEFAULT_Q);
     let mut base_pairs = vec![("auto_exposure", 1), ("power_line_frequency", 1), ("gain", 0)];
     base_pairs.extend_from_slice(&TONE);
     let base = uvc_sensor(&base_pairs, &[(0x350B, 0)]);
-    let mut ses = Session::open(device, width, height, fps, log)?;
+    let mut ses = Session::open(device, width, height, fps, log, true)?;
     let before = match previous {
         None => {
             let mut b = snapshot(&ses.cam, Some(&ses.xu), width);
-            b.mjpeg_q = Some(ses.q_before);
+            b.mjpeg_q = ses.q_before;
             b
         }
         Some(p) => p.clone(),
@@ -471,7 +514,204 @@ pub fn calibrate(
         "seconds": r1(t0.elapsed().as_secs_f64()),
         "previous": before.to_json(),
         "board_homography": has_h,
+        "model": models::OV2710.key,
+        "strategy": "exposure, digital gain",
     });
+    Ok(CalResult { device: device.into(), settings: s, meta })
+}
+
+/// Settings for this camera: only controls it has, each clamped to its range.
+fn fit_controls(cam: &Camera, pairs: &[(&str, i64)]) -> Settings {
+    let mut s = Settings::default();
+    for (k, v) in pairs {
+        if let Ok(q) = cam.query(k) {
+            s.uvc.insert(k.to_string(), (*v).clamp(q.min as i64, q.max as i64));
+        }
+    }
+    s
+}
+
+/// Exposure first, then the model's gain (see the module doc). `model` None: standard controls only.
+#[allow(clippy::too_many_arguments)]
+fn calibrate_generic(
+    device: &str,
+    fps: u32,
+    width: u32,
+    height: u32,
+    q: Option<i64>,
+    log: Log,
+    previous: Option<&Settings>,
+    model: Option<&'static Model>,
+    hidden: bool,
+) -> Result<CalResult, CalError> {
+    let t0 = std::time::Instant::now();
+    let unit_s = model.map(|m| m.exposure_unit(height)).unwrap_or(100e-6);
+    let units = |s: f64| (s / unit_s).round() as i64;
+    let mut ses = Session::open(device, width, height, fps, log, hidden)?;
+    let q = if ses.q.is_some() { q } else { None };
+    let before = match previous {
+        None => {
+            let mut b = snapshot(&ses.cam, if hidden { Some(&ses.xu) } else { None }, width);
+            if ses.q_before.is_some() {
+                b.mjpeg_q = ses.q_before;
+            }
+            b
+        }
+        Some(p) => p.clone(),
+    };
+    // the brightness knob after the exposure: sensor gain (extension unit) or the UVC gain control
+    let sensor_gain = match model.map(|m| m.gain) {
+        Some(Gain::Sensor { reg, unity, max }) if hidden => Some((reg, unity, max)),
+        _ => None,
+    };
+    let uvc_gain = if sensor_gain.is_none() { ses.cam.query("gain").ok() } else { None };
+    let gain_at = |rel: f64| -> Settings {
+        if let Some((reg, unity, max)) = sensor_gain {
+            let mut s = Settings::default();
+            s.sensor.insert(reg, ((unity as f64 * rel).round() as i64).clamp(unity, max));
+            s
+        } else if let (Some(g), Some(Gain::UvcScaled { unity, per_x })) = (uvc_gain, model.map(|m| m.gain)) {
+            uvc(&[("gain", ((unity as f64 + per_x * (rel - 1.0)).round() as i64).clamp(unity.max(g.min as i64), g.max as i64))])
+        } else if let Some(g) = uvc_gain {
+            uvc(&[("gain", (g.min as f64 + (g.max - g.min) as f64 * (rel - 1.0) / 15.0).round() as i64)])
+        } else {
+            Settings::default()
+        }
+    };
+    let mut pairs = vec![("auto_exposure", 1), ("power_line_frequency", 1)];
+    pairs.extend_from_slice(&TONE);
+    let sharp = TONE[0].1 + SHARPEN;
+    pairs.push(("sharpness", sharp));
+    let base = fit_controls(&ses.cam, &pairs).merged(&gain_at(1.0));
+    let exp_ctrl = ses.cam.query("exposure_time_absolute")?;
+    let (emin, emax) = (exp_ctrl.min.max(1) as i64, (units(0.98 / fps as f64)).min(exp_ctrl.max as i64));
+    let exp = |e: i64| uvc(&[("exposure_time_absolute", e.clamp(emin, emax))]);
+
+    PREVIEW.set(Some(device), Some("Checking the light for flicker (short exposure, grainy on purpose)"), None);
+    ses.apply(&base.merged(&exp(units(0.015))), 8)?;
+    let cv_at = |ses: &mut Session, e: i64, g: &Settings| -> Result<f64, CalError> {
+        ses.apply(&base.merged(&exp(e)).merged(g), 4)?;
+        let fm = ses.frame_means(45)?;
+        let mu = fm.iter().sum::<f64>() / fm.len() as f64;
+        let sd = (fm.iter().map(|v| (v - mu).powi(2)).sum::<f64>() / fm.len() as f64).sqrt();
+        Ok(sd / mu.max(1e-3))
+    };
+    let round4 = |v: f64| (v * 10000.0).round() / 10000.0;
+    let cv = cv_at(&mut ses, units(0.001), &gain_at(8.0))?;
+    let mut fl = json!({"flicker_cv_1ms": round4(cv), "flicker": cv > FLICKER_CV, "step": 1});
+    if cv > FLICKER_CV {
+        let cv50 = cv_at(&mut ses, units(0.01), &gain_at(4.0))?;
+        let cv60 = cv_at(&mut ses, units(1.0 / 120.0), &gain_at(4.0))?;
+        fl["cv_10ms"] = json!(round4(cv50));
+        fl["cv_8ms"] = json!(round4(cv60));
+        let hz = if cv50 <= cv60 { 50 } else { 60 };
+        fl["mains_hz"] = json!(hz);
+        fl["step"] = json!(units(1.0 / (2.0 * hz as f64)));
+    }
+    log(&format!("  flicker: {}", fl));
+    let step = fl["step"].as_i64().unwrap_or(1).max(1);
+    let quant = |e: i64| -> i64 {
+        let e = e.min(emax);
+        if step > 1 { step.max((e / step) * step).min(emax.max(step)) } else { e.max(emin) }
+    };
+    // exposure: the longest (quantised) one that keeps the white at or below the target at gain 1x
+    PREVIEW.set(None, Some("Searching the exposure"), None);
+    ses.apply(&base.merged(&exp(quant(emax))), 8)?;
+    let w_max = ses.white_level(6)?;
+    let e = if w_max <= WHITE_TARGET {
+        quant(emax)
+    } else {
+        let unit = if step > 1 { step } else { units(0.0002).max(1) };
+        let (mut lo, mut hi) = (1i64, (quant(emax) / unit).max(1));
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            ses.apply(&base.merged(&exp(mid * unit)), 5)?;
+            if ses.white_level(6)? <= WHITE_TARGET {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        (lo * unit).clamp(emin, emax)
+    };
+    let mut s = base.merged(&exp(e));
+    ses.apply(&s, 8)?;
+    let w_exp = ses.white_level(6)?;
+    // gain: bisection to the common white target
+    let mut rel = 1.0;
+    let knob = if let Some((_, unity, max)) = sensor_gain {
+        Some((1.0, max as f64 / unity as f64))
+    } else {
+        uvc_gain.map(|g| match model.map(|m| m.gain) {
+            Some(Gain::UvcScaled { unity, per_x }) => (1.0, 1.0 + (g.max as f64 - unity as f64).max(0.0) / per_x),
+            _ => (1.0, 16.0),
+        })
+    };
+    if let Some((mut lo, mut hi)) = knob {
+        PREVIEW.set(None, Some("Matching the brightness"), None);
+        let g_hi = gain_at(hi);
+        ses.apply(&s.merged(&g_hi), 6)?;
+        if ses.white_level(6)? < WHITE_TARGET {
+            lo = hi; // too dark even at the highest gain: take it
+        } else {
+            for _ in 0..8 {
+                let mid = (lo + hi) / 2.0;
+                ses.apply(&s.merged(&gain_at(mid)), 6)?;
+                if ses.white_level(6)? < WHITE_TARGET {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+        }
+        rel = lo;
+        s = s.merged(&gain_at(rel));
+    }
+    if let Some(q) = q {
+        s.mjpeg_q = Some(q);
+    }
+    ses.apply(&s, 8)?;
+    PREVIEW.set(None, Some("Calibrated"), None);
+    let st = ses.stats(10)?;
+    let gain_label = match sensor_gain {
+        Some((reg, _, _)) => format!("sensor gain {:.2}x (0x{:04X}={:#04x})", rel, reg, s.sensor.get(&reg).copied().unwrap_or(0)),
+        None if uvc_gain.is_some() => format!("gain {}", s.uvc.get("gain").copied().unwrap_or(0)),
+        None => "no gain control".into(),
+    };
+    log(&format!(
+        "  exposure {} ({:.1} ms), white {:.1} at gain 1x -> {} -> white {:.1} black {:.1} mean {:.1} tnoise {:.2}",
+        e,
+        e as f64 * unit_s * 1000.0,
+        w_exp,
+        gain_label,
+        st["white"],
+        st["black"],
+        st["mean"],
+        st["tnoise"]
+    ));
+    let has_h = ses.homography.is_some();
+    drop(ses);
+    let r1 = |v: f64| (v * 10.0).round() / 10.0;
+    let r2 = |v: f64| (v * 100.0).round() / 100.0;
+    let mut meta = json!({
+        "fps": fps,
+        "resolution": format!("{}x{}", width, height),
+        "ceiling": null,
+        "white_sensor": r1(w_exp),
+        "reference": st.iter().map(|(k, v)| (k.clone(), json!(r2(*v)))).collect::<serde_json::Map<_, _>>(),
+        "flicker": fl,
+        "calibrated": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        "seconds": r1(t0.elapsed().as_secs_f64()),
+        "previous": before.to_json(),
+        "board_homography": has_h,
+        "model": model.map(|m| m.key),
+        "strategy": if sensor_gain.is_some() { "exposure, sensor gain" } else if uvc_gain.is_some() { "exposure, gain" } else { "exposure only" },
+        "gain": r2(rel),
+    });
+    if st["white"] < WHITE_TARGET - 15.0 {
+        meta["white_short"] = json!({"white": r1(st["white"]), "target": WHITE_TARGET});
+        log(&format!("  the board stays darker than the target ({:.0} of {:.0}): more light would help", st["white"], WHITE_TARGET));
+    }
     Ok(CalResult { device: device.into(), settings: s, meta })
 }
 
@@ -493,6 +733,18 @@ pub struct CalibrateAllOpts<'a> {
 /// Calibrate every camera, then pick the lowest MJPEG Q at which all cameras stream together cleanly
 /// (short check per level, lowest first, then a longer confirmation run). The saved level is q_margin levels
 /// above the first clean one. `previous` is filled in on the first run and handed to the next one.
+/// Q steps of a camera's firmware build, None where Q is not mapped or the camera can't be asked.
+fn levels_of(dev: &str) -> Option<&'static [i64]> {
+    let l = q_levels(&Xu::open(dev).ok()?);
+    (!l.is_empty()).then_some(l)
+}
+
+/// Q a calibration result starts with (replaced by the bandwidth check): DEFAULT_Q or the next step of the
+/// camera's scale at or above it.
+fn first_q(dev: &str) -> i64 {
+    levels_of(dev).and_then(|l| l.iter().copied().find(|&q| q >= DEFAULT_Q).or(l.last().copied())).unwrap_or(DEFAULT_Q)
+}
+
 pub fn calibrate_all(
     devices: &[String],
     o: &CalibrateAllOpts,
@@ -503,7 +755,8 @@ pub fn calibrate_all(
     for d in devices {
         (o.step)(&format!("Calibrating exposure and gain: port {}", port_no(d)));
         log(&format!("calibrating {}", d));
-        match calibrate(d, o.fps, o.width, o.height, DEFAULT_Q, log, previous.get(d)) {
+        let q0 = if q_capable(d, o.width) { Some(first_q(d)) } else { None };
+        match calibrate(d, o.fps, o.width, o.height, q0, log, previous.get(d)) {
             Ok(r) => {
                 previous.entry(d.clone()).or_insert_with(|| Settings::from_json(&r.meta["previous"]));
                 results.insert(d.clone(), r);
@@ -514,7 +767,33 @@ pub fn calibrate_all(
             Err(e) => return Err(e),
         }
     }
-    let levels: Vec<i64> = o.q_candidates.clone();
+    // one Q for all cameras: only cameras sharing the first Q-capable camera's scale take part
+    let levels: Vec<i64> = if o.q_candidates.is_empty() {
+        results.keys().filter(|d| q_capable(d, o.width)).find_map(|d| levels_of(d)).map(|l| l.to_vec()).unwrap_or_default()
+    } else {
+        o.q_candidates.clone()
+    };
+    let with_q: Vec<String> = results
+        .keys()
+        .filter(|d| q_capable(d, o.width) && levels_of(d).map(|l| l == levels.as_slice()).unwrap_or(false))
+        .cloned()
+        .collect();
+    if with_q.is_empty() {
+        // no camera has a mapped Q: one check that they stream together cleanly with their own quality
+        PREVIEW.set(None, Some("Testing all cameras together · preview paused so the test is not disturbed"), None);
+        (o.step)(&format!("Testing all cameras together ({:.0} s)", o.check_s));
+        let (ok, why) = check_bandwidth(&results, None, o.width, o.height, o.fps, o.check_s, log)?;
+        if !ok {
+            return Err(CalError::Other(format!("the cameras do not stream cleanly together at {}x{}: {}", o.width, o.height, why)));
+        }
+        if o.save {
+            for (d, r) in &results {
+                profiles::put(d, &r.settings, Some(r.meta.clone()));
+            }
+        }
+        log("done (cameras keep their own JPEG quality)");
+        return Ok(results);
+    }
     let candidates: Vec<i64> = match o.q_max {
         Some(qm) => levels
             .iter()
@@ -527,7 +806,7 @@ pub fn calibrate_all(
     let mut chosen = None;
     PREVIEW.set(None, Some("Testing all cameras together · preview paused so the test is not disturbed"), None);
     for (i, &q) in candidates.iter().enumerate() {
-        let which = if i == 0 { "lowest" } else if q == *Q_LEVELS.last().unwrap() { "stock" } else { "next" };
+        let which = if i == 0 { "lowest" } else if Some(&q) == levels.last() { "stock" } else { "next" };
         (o.step)(&format!("Testing compression stability: level {} ({}, {:.0} s)", q, which, o.check_s));
         log(&format!(
             "bandwidth check: {} cameras at Q{}, {}x{}, {} fps, {:.0} s",
@@ -538,11 +817,11 @@ pub fn calibrate_all(
             o.fps,
             o.check_s
         ));
-        let (mut ok, mut why) = check_bandwidth(&results, q, o.width, o.height, o.fps, o.check_s, log)?;
+        let (mut ok, mut why) = check_bandwidth(&results, Some(q), o.width, o.height, o.fps, o.check_s, log)?;
         if ok {
             (o.step)(&format!("Confirming level {} ({:.0} s)", q, o.confirm_s));
             log(&format!("  Q{} clean; confirming for {:.0} s", q, o.confirm_s));
-            let r = check_bandwidth(&results, q, o.width, o.height, o.fps, o.confirm_s, log)?;
+            let r = check_bandwidth(&results, Some(q), o.width, o.height, o.fps, o.confirm_s, log)?;
             ok = r.0;
             why = r.1;
         }
@@ -570,6 +849,14 @@ pub fn calibrate_all(
         log(&format!("  Q{} was the lowest clean level; using Q{} as margin for busier scenes", clean, chosen));
     }
     for (d, r) in results.iter_mut() {
+        if !with_q.contains(d) {
+            // a Q-capable camera on another Q scale than the others: keeps its own quality
+            r.settings.mjpeg_q = None;
+            if o.save {
+                profiles::put(d, &r.settings, Some(r.meta.clone()));
+            }
+            continue;
+        }
         r.settings = r.settings.merged(&Settings { mjpeg_q: Some(chosen), ..Default::default() });
         r.meta["mjpeg_q"] = json!(chosen);
         if o.save {
@@ -587,7 +874,7 @@ pub fn calibrate_all(
 /// check_together, retried once if a camera got no USB bandwidth; UsbBandwidth error if it stays so.
 fn check_bandwidth(
     results: &BTreeMap<String, CalResult>,
-    q: i64,
+    q: Option<i64>,
     width: u32,
     height: u32,
     fps: u32,
@@ -621,11 +908,11 @@ pub fn port_no(device: &str) -> String {
     }
 }
 
-/// Stream all cameras at once, each with its own calibrated settings at MJPEG Q `q`.
+/// Stream all cameras at once, each with its own calibrated settings at MJPEG Q `q` (None: each camera's own).
 /// (clean?, why not, cameras that got no USB bandwidth)
 fn check_together(
     results: &BTreeMap<String, CalResult>,
-    q: i64,
+    q: Option<i64>,
     width: u32,
     height: u32,
     fps: u32,
@@ -635,20 +922,21 @@ fn check_together(
     use super::multistream::{kernel_error_lines, run_all};
     let mut budgets = BTreeMap::new();
     for d in results.keys() {
-        let xu = Xu::open(d)?;
-        budgets.insert(d.clone(), frame_budget_kb(&xu, height));
+        let b = if hidden_for(d) { frame_budget_kb(&Xu::open(d)?, height) } else { f64::INFINITY };
+        budgets.insert(d.clone(), b);
     }
     let k0 = kernel_error_lines();
     let jobs: Vec<(String, Settings)> = results
         .iter()
-        .map(|(d, r)| (d.clone(), r.settings.merged(&Settings { mjpeg_q: Some(q), ..Default::default() })))
+        .map(|(d, r)| (d.clone(), r.settings.merged(&Settings { mjpeg_q: q, ..Default::default() })))
         .collect();
     let ws = run_all(&jobs, width, height, fps, seconds);
     let mut problems = Vec::new();
     for w in &ws {
         let port = format!("port {}", port_no(&w.dev));
         if let Some(st) = &w.stats {
-            log(&format!("    {}: Q{} frames mean {:.0} KB, max {:.0} KB", port, q, st.kb_mean, st.kb_max));
+            let ql = q.map(|q| format!("Q{} ", q)).unwrap_or_default();
+            log(&format!("    {}: {}frames mean {:.0} KB, max {:.0} KB", port, ql, st.kb_mean, st.kb_max));
         }
         match (&w.error, &w.stats) {
             (Some(e), _) => problems.push(format!("{}: {}", port, e)),
