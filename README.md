@@ -81,6 +81,8 @@ Optical calibration wizard to achieve razor-sharp focus across all 3 Autodarts c
 * **Sharpness Score Meter**: Normalized 0–100 score gauge with real-time peak tracking and focus trend indicators.
 * **Audio Tone Guidance**: Modulates pitch dynamically as focus improves, allowing you to focus lenses while standing at the board without looking at the screen.
 
+Also in the browser, without installing anything: the [Camera Focus web tool](https://iterathor.github.io/SUIT/) (any computer with the cameras plugged in).
+
 ---
 
 ### 5. Camera Optimizer (HBV OV2710)
@@ -91,6 +93,7 @@ One-click image calibration for HBV OV2710 cameras (USB ID `0bdc:2710`), found u
 * **Stays applied**: the `suit-camera-keeper` user service writes the settings before Autodarts opens the cameras and re-applies them after restarts and standby. Nothing is flashed; settings live in camera RAM.
 * **Fine-tuning** afterwards on the **Camera Controls** page, with "Reset to calibrated" and a brightness check.
 * **Before and after** comparison per camera, and **Restore original settings** to undo everything.
+* **Try it first** in the browser: the [Camera Optimizer preview](https://iterathor.github.io/SUIT/camera-optimizer/) runs on three simulated cameras.
 
 Only cameras with the HBV USB ID and a verified firmware build are touched; you confirm once that you use HBV OV2710 cameras. Profiles live in `~/.config/hbvcal`.
 

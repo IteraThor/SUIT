@@ -5,7 +5,7 @@ use super::helpers::{alert, ask, esc, group, icon_button, page_shell, run_async,
 use super::hw_overlay_view::summarize_hw_overlay;
 use super::{Page, Win};
 use crate::core::i18n::{tr, trf};
-use crate::core::{boot, debloat, desktop, keyring, system, util};
+use crate::core::{boot, debloat, desktop, keyring, power, system, util};
 use adw::prelude::*;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -23,7 +23,7 @@ pub fn summarize_minimal_desktop(enabled: bool, relogin: bool) -> String {
 }
 
 struct Data {
-    status: system::RecommendedStatus,
+    status: power::Step1Status,
     keyring_blank: bool,
     bloat: Vec<String>,
     chromium: bool,
@@ -82,7 +82,7 @@ impl Page for SystemView {
         let m = self.clone();
         run_async(
             move || Data {
-                status: system::get_recommended_status(&user),
+                status: power::get_step1_status(&user),
                 keyring_blank: keyring::is_keyring_blank_or_unlocked(None).0,
                 bloat: debloat::get_installed_bloatware(None),
                 chromium: debloat::is_app_installed("chromium"),
@@ -417,7 +417,7 @@ impl SystemView {
         let m = self.clone();
         run_async(
             move || system::apply_all_system_and_apps(&user, touch, &|c, t, title, detail| *prog.lock().unwrap() = Some((c, t, title.into(), detail.into()))),
-            move |(_, summary, _)| {
+            move |(_, summary)| {
                 done.set(true);
                 m.overlay_box.set_visible(false);
                 m.btn_apply_all.set_sensitive(true);

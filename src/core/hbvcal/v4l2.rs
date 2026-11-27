@@ -11,7 +11,6 @@ pub const V4L2_MEMORY_MMAP: u32 = 1;
 pub const V4L2_FIELD_NONE: u32 = 1;
 
 pub const VIDIOC_S_FMT: u64 = 0xC0D05605;
-pub const VIDIOC_G_FMT: u64 = 0xC0D05604;
 pub const VIDIOC_REQBUFS: u64 = 0xC0145608;
 pub const VIDIOC_QUERYBUF: u64 = 0xC0585609;
 pub const VIDIOC_QBUF: u64 = 0xC058560F;
@@ -61,8 +60,6 @@ pub struct Frame {
     pub sequence: u32,
     /// driver timestamp, seconds (CLOCK_MONOTONIC)
     pub timestamp: f64,
-    /// host monotonic seconds at dequeue
-    pub t_host: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -101,7 +98,7 @@ fn get_i64(b: &[u8], off: usize) -> i64 {
     i64::from_le_bytes(b[off..off + 8].try_into().unwrap())
 }
 
-static T0: once_cell::sync::Lazy<Instant> = once_cell::sync::Lazy::new(Instant::now);
+static T0: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
 
 pub fn monotonic() -> f64 {
     T0.elapsed().as_secs_f64()
@@ -275,7 +272,6 @@ impl Camera {
         }
         let mut b = Self::buf(0);
         ioctl(self.fd, VIDIOC_DQBUF, b.as_mut_ptr())?;
-        let t_host = monotonic();
         let idx = get_u32(&b, 0) as usize;
         let used = get_u32(&b, 8) as usize;
         let sec = get_i64(&b, 24);
@@ -286,7 +282,7 @@ impl Camera {
             None => Vec::new(),
         };
         ioctl(self.fd, VIDIOC_QBUF, b.as_mut_ptr())?;
-        Ok(Frame { data, sequence: seq, timestamp: sec as f64 + usec as f64 * 1e-6, t_host })
+        Ok(Frame { data, sequence: seq, timestamp: sec as f64 + usec as f64 * 1e-6 })
     }
 }
 

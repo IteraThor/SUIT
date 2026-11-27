@@ -13,7 +13,8 @@ pub struct TailscaleStatus {
 }
 
 pub fn install_tailscale() -> (bool, String) {
-    let r = run_shell("curl -fsSL https://tailscale.com/install.sh | sudo -n sh", None);
+    // pipefail: a failed download fails; 10 minutes is plenty even on a slow line
+    let r = run_shell("set -o pipefail; curl -fsSL https://tailscale.com/install.sh | sudo -n sh", Some(600));
     if r.code != 0 {
         log::error!("Failed installing Tailscale: {}", r.stderr);
         return (false, trf("Failed installing Tailscale: {error}", &[("error", &r.stderr.trim())]));
@@ -72,18 +73,4 @@ pub fn disconnect_tailscale() -> (bool, String) {
         log::error!("Failed disconnecting Tailscale: {}", r.stderr);
         (false, trf("Failed disconnecting Tailscale: {error}", &[("error", &r.stderr.trim())]))
     }
-}
-
-pub fn connect_tailscale() -> (bool, String) {
-    let r = run(&["sudo", "-n", "tailscale", "up"], Some(5));
-    if r.ok() {
-        (true, "Tailscale connected.".into())
-    } else {
-        log::error!("Failed connecting Tailscale: {}", r.stderr);
-        (false, trf("Failed connecting Tailscale: {error}", &[("error", &r.stderr.trim())]))
-    }
-}
-
-pub fn launch_tailscale_up() -> bool {
-    get_tailscale_auth_url().is_some()
 }

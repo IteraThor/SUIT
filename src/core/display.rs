@@ -1,6 +1,6 @@
 //! Display rotation through Mutter's DisplayConfig D-Bus API, touch calibration through a udev
 //! LIBINPUT_CALIBRATION_MATRIX rule, and the boot autostart that keeps both.
-use super::util::{home, project_dir, read_trim, run, run_with_input, self_exe, spawn, write_file};
+use super::util::{home, project_dir, read_trim, run, self_exe, spawn, sudo_write, write_file};
 use gtk::gio;
 use gtk::gio::prelude::*;
 use gtk::glib::{self, prelude::ToVariant, Variant};
@@ -28,15 +28,6 @@ pub fn normalize_rotation(rot: &Value) -> i64 {
         },
         Value::Number(n) => n.as_i64().unwrap_or(0),
         _ => 0,
-    }
-}
-
-pub fn get_rotation_matrix(rot: i64) -> &'static str {
-    match rot {
-        1 => "0 -1 1 1 0 0 0 0 1",
-        2 => "-1 0 1 0 -1 1 0 0 1",
-        3 => "0 1 0 -1 0 1 0 0 1",
-        _ => "1 0 0 0 1 0 0 0 1",
     }
 }
 
@@ -215,8 +206,6 @@ pub struct MonitorView {
     pub res: String,
     pub w: i32,
     pub h: i32,
-    pub x: i32,
-    pub y: i32,
     pub is_primary: bool,
     pub rotation: u32,
 }
@@ -230,7 +219,7 @@ pub fn get_monitors() -> Vec<MonitorView> {
                 Some(m) => (m.w, m.h, format!("{}x{}", m.w, m.h)),
                 None => (0, 0, "Unknown".into()),
             };
-            out.push(MonitorView { name: name.clone(), res, w, h, x: lm.x, y: lm.y, is_primary: lm.primary, rotation: lm.trans });
+            out.push(MonitorView { name: name.clone(), res, w, h, is_primary: lm.primary, rotation: lm.trans });
         }
     }
     out
@@ -364,7 +353,7 @@ pub fn write_udev_rule(touch: Option<&str>, matrix: Option<&str>) -> bool {
                 "ACTION==\"add|change\", KERNEL==\"event*\", ATTRS{{name}}==\"{}\", ENV{{LIBINPUT_CALIBRATION_MATRIX}}=\"{}\"\n",
                 resolved, m
             );
-            let r = run_with_input(&["sudo", "-n", "tee", UDEV_RULE_PATH], &rule, Some(20)).ok()
+            let r = sudo_write(UDEV_RULE_PATH, &rule)
                 && ok(&["sudo", "-n", "udevadm", "control", "--reload-rules"])
                 && ok(&["sudo", "-n", "udevadm", "trigger", "--subsystem-match=input"]);
             if r {
@@ -422,11 +411,11 @@ pub fn rebind_usb_touch(name: &str) -> bool {
     };
     log::info!("Rebinding USB touch device {} to apply calibration matrix", b);
     let line = format!("{}\n", b);
-    if !run_with_input(&["sudo", "-n", "tee", "/sys/bus/usb/drivers/usb/unbind"], &line, Some(10)).ok() {
+    if !sudo_write("/sys/bus/usb/drivers/usb/unbind", &line) {
         return false;
     }
     std::thread::sleep(std::time::Duration::from_secs(1));
-    run_with_input(&["sudo", "-n", "tee", "/sys/bus/usb/drivers/usb/bind"], &line, Some(10)).ok()
+    sudo_write("/sys/bus/usb/drivers/usb/bind", &line)
 }
 
 pub fn apply_touch_calibration(touch: &str, connector: &str, rotation: i64, prev_touch: Option<&str>) -> bool {

@@ -1320,5 +1320,8 @@
  "Removes AutoGlow Bridge from the browser and installs the latest version": "Entfernt AutoGlow Bridge aus dem Browser und installiert die neueste Version",
  "Reinstalling...": "Installiere neu …",
  "AutoGlow Bridge {version} is installed the next time the browser starts.": "AutoGlow Bridge {version} wird beim nächsten Browserstart installiert.",
- "AutoGlow Bridge is reinstalled. The browser adds version {version} within a few seconds.": "AutoGlow Bridge wird neu installiert. Der Browser fügt Version {version} in wenigen Sekunden hinzu."
+ "AutoGlow Bridge is reinstalled. The browser adds version {version} within a few seconds.": "AutoGlow Bridge wird neu installiert. Der Browser fügt Version {version} in wenigen Sekunden hinzu.",
+ "Could not set the Sunshine login.": "Die Sunshine-Anmeldung konnte nicht gesetzt werden.",
+ "Update stopped: this copy of SUIT has local changes ({files}). Commit or undo them, then update again.": "Aktualisierung gestoppt: Diese SUIT-Kopie hat lokale Änderungen ({files}). Übernimm oder verwirf sie und aktualisiere dann erneut.",
+ "Autodarts could not be removed completely.": "Autodarts konnte nicht vollständig entfernt werden."
 }

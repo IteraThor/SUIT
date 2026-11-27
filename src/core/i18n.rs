@@ -1,7 +1,7 @@
 //! UI language. Source strings are English; `tr()` looks them up in the German table.
 //!
 //! The choice is kept in ~/.config/suit/settings.json. English is the default.
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::RwLock;
@@ -9,8 +9,8 @@ use std::sync::RwLock;
 pub const LANGUAGES: [&str; 2] = ["en", "de"];
 pub const DEFAULT_LANGUAGE: &str = "en";
 
-static DE: Lazy<HashMap<String, String>> =
-    Lazy::new(|| serde_json::from_str(include_str!("../../data/i18n_de.json")).unwrap_or_default());
+static DE: LazyLock<HashMap<String, String>> =
+    LazyLock::new(|| serde_json::from_str(include_str!("../../data/i18n_de.json")).unwrap_or_default());
 
 static LANGUAGE: RwLock<Option<String>> = RwLock::new(None);
 

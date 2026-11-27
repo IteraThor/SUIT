@@ -8,16 +8,10 @@ pub struct Step1Status {
     pub profile_ok: bool,
     pub power_ok: bool,
     pub autologin_ok: bool,
-    pub all_ok: bool,
-    pub user: String,
 }
 
 pub fn set_screen_blanking(disable_blanking: bool) -> bool {
     set_power_and_sleep(disable_blanking)
-}
-
-pub fn is_blanking_disabled() -> bool {
-    is_power_and_sleep_optimized()
 }
 
 pub fn is_performance_profile_active(profile: &str) -> bool {
@@ -122,16 +116,7 @@ pub fn get_step1_status(user: &str) -> Step1Status {
         profile_ok,
         power_ok,
         autologin_ok,
-        all_ok: profile_ok && power_ok && autologin_ok,
-        user: if active_user.is_empty() { user.to_string() } else { active_user },
     }
-}
-
-pub fn apply_all_system_energy_and_login(user: &str) -> bool {
-    let ok1 = set_performance_profile("throughput-performance");
-    let ok2 = set_power_and_sleep(true);
-    let ok3 = set_auto_login(true, user, None);
-    ok1 && ok2 && ok3
 }
 
 pub fn set_auto_login(enabled: bool, user: &str, config_path: Option<&Path>) -> bool {

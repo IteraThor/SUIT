@@ -10,6 +10,15 @@ fn fmt_named_and_specs() {
 }
 
 #[test]
+fn big_input_does_not_block() {
+    // `cat` echoes its input like `tee` does: 1 MB is far more than a pipe buffer
+    let big = "x".repeat(1 << 20);
+    let r = util::run_with_input(&["cat"], &big, Some(10));
+    assert!(r.ok() && !r.timed_out);
+    assert_eq!(r.stdout.len(), big.len());
+}
+
+#[test]
 fn strv_roundtrip() {
     let v = util::parse_strv("['a.desktop', 'b.desktop']").unwrap();
     assert_eq!(v, vec!["a.desktop", "b.desktop"]);
@@ -78,8 +87,7 @@ fn gdm_config() {
 }
 
 #[test]
-fn camera_labels() {
-    assert_eq!(autodarts::format_short_camera_label("USB Camera: USB Camera", "usb-0000:00:14.0-2", ""), "USB Cam (2)");
+fn camera_device_path() {
     assert_eq!(autodarts::parse_cam_device("3"), "/dev/video3");
 }
 
@@ -251,7 +259,7 @@ fn sunshine_conf_merge() {
     assert!(new.contains("encoder = software"), "user lines stay");
     assert!(new.contains("sunshine_name = autodarts") && !new.contains("sunshine_name = old"));
     assert!(new.contains("max_bitrate = 15000") && !new.contains("max_bitrate = 1\n"));
-    for k in ["capture = kms", "sw_tune = zerolatency", "upnp = disabled", "origin_web_ui_allowed = lan", "csrf_allowed_origins = https://192.168.2.110:47990"] {
+    for k in ["capture = kms", "sw_tune = zerolatency", "upnp = disabled", "origin_web_ui_allowed = pc", "csrf_allowed_origins = https://192.168.2.110:47990"] {
         assert!(new.contains(k), "{}", k);
     }
     assert_eq!(new.matches("# Written by SUIT").count(), 1);

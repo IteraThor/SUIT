@@ -1,7 +1,7 @@
 //! Fast Boot: individually toggleable boot-time tweaks, each recording its changes for an exact revert,
 //! plus a firmware (BIOS) analysis with a vendor-specific guide.
 use super::i18n::{tr, trf};
-use super::util::{home, read_trim, run, run_with_input, Output};
+use super::util::{home, read_trim, run, sudo_write, Output};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -339,10 +339,6 @@ pub fn applied_count() -> usize {
     load_state().len()
 }
 
-pub fn is_fast_boot_enabled() -> bool {
-    applied_count() > 0
-}
-
 /// (applied, total) Fast Boot tweaks, cheap enough for the System page row.
 pub fn get_boot_tweak_counts() -> (usize, usize) {
     (applied_count(), TWEAKS.len())
@@ -561,7 +557,7 @@ fn apply(t: &Tweak, e: &mut Value) -> Vec<String> {
     }
     if t.kind == Kind::Dracut && !e["dracut_conf"].as_bool().unwrap_or(false) {
         let (conf, text) = dracut_target(t);
-        let wrote = run_with_input(&["sudo", "-n", "tee", conf], &text, Some(20)).code == 0;
+        let wrote = sudo_write(conf, &text);
         if wrote && r(&["sudo", "-n", "dracut", "-f"]).code == 0 {
             e["dracut_conf"] = json!(true);
         } else {
@@ -570,7 +566,7 @@ fn apply(t: &Tweak, e: &mut Value) -> Vec<String> {
         }
     }
     if t.kind == Kind::UnitOverride && !e["unit_override"].as_bool().unwrap_or(false) {
-        let wrote = user_sessions_text().map(|tx| run_with_input(&["sudo", "-n", "tee", USER_SESSIONS_OVERRIDE], &tx, Some(20)).code == 0).unwrap_or(false);
+        let wrote = user_sessions_text().map(|tx| sudo_write(USER_SESSIONS_OVERRIDE, &tx)).unwrap_or(false);
         if wrote && r(&["sudo", "-n", "systemctl", "daemon-reload"]).code == 0 {
             e["unit_override"] = json!(true);
         } else {
@@ -720,7 +716,6 @@ pub struct FirmwareAnalysis {
     pub vendor: String,
     pub model: String,
     pub setup_key: String,
-    pub is_efi: bool,
     pub findings: Vec<String>,
     pub steps: Vec<BiosStep>,
 }
@@ -778,7 +773,6 @@ pub fn analyze_firmware(report: Option<&HashMap<String, f64>>) -> FirmwareAnalys
         vendor,
         model,
         setup_key: SETUP_KEYS.iter().find(|(k, _)| *k == vkey).map(|(_, v)| v.to_string()).unwrap_or_else(|| "Del or F2".into()),
-        is_efi,
         findings,
         steps,
     }

@@ -116,18 +116,8 @@ pub fn is_touch_scaling_enabled() -> bool {
     css && factor > 1.05
 }
 
-pub fn is_osk_enabled() -> bool {
-    gsettings_get("org.gnome.desktop.a11y.applications", "screen-keyboard-enabled").to_lowercase().contains("true")
-}
-
 pub fn set_osk(enabled: bool) {
     gsettings_set("org.gnome.desktop.a11y.applications", "screen-keyboard-enabled", if enabled { "true" } else { "false" });
-}
-
-pub fn get_button_layout() -> String {
-    let s = gsettings_get("org.gnome.desktop.wm.preferences", "button-layout");
-    let s = s.trim_matches(|c| c == '\'' || c == '"').to_string();
-    if s.is_empty() { "appmenu:close".into() } else { s }
 }
 
 pub fn set_button_layout(layout: &str) {
@@ -433,9 +423,6 @@ pub fn save_hw_overlay_config(cfg: &Value) -> Value {
 
 #[derive(Debug, Clone, Default)]
 pub struct VisualsStatus {
-    pub dark_mode: bool,
-    pub wallpaper: bool,
-    pub app_grid: bool,
     pub all_ok: bool,
 }
 
@@ -443,7 +430,7 @@ pub fn get_visuals_status() -> VisualsStatus {
     let dm = is_dark_mode_enabled();
     let wp = is_suit_wallpaper_set() || is_map_wallpaper_set();
     let grid = is_system_app_folder_configured();
-    VisualsStatus { dark_mode: dm, wallpaper: wp, app_grid: grid, all_ok: dm && wp && grid }
+    VisualsStatus { all_ok: dm && wp && grid }
 }
 
 pub fn apply_desktop_visuals() -> (bool, String) {

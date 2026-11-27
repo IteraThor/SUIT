@@ -162,15 +162,6 @@ pub fn set_remote_control(enabled: bool) -> (bool, String) {
     }
 }
 
-pub fn set_remote_credentials(username: &str, password: &str) -> (bool, String) {
-    let r = run(&["grdctl", "rdp", "set-credentials", username, password], Some(20));
-    if r.code == -1 {
-        return (false, trf("Failed setting credentials: {error}", &[("error", &r.stderr)]));
-    }
-    log::info!("RDP credentials updated for user '{}'", username);
-    (true, trf("RDP credentials set for '{username}'.", &[("username", &username)]))
-}
-
 pub fn open_gnome_sharing_settings() -> bool {
     spawn(&["gnome-control-center", "system", "remote-desktop"]) || spawn(&["gnome-control-center", "sharing"])
 }

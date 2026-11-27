@@ -24,11 +24,6 @@ where
     });
 }
 
-/// Fire-and-forget background work.
-pub fn run_bg<F: FnOnce() + Send + 'static>(f: F) {
-    std::thread::spawn(f);
-}
-
 /// Repeat `f` every `ms` on the main loop while it returns true.
 pub fn every<F: FnMut() -> bool + 'static>(ms: u64, mut f: F) -> glib::SourceId {
     glib::timeout_add_local(std::time::Duration::from_millis(ms), move || if f() { glib::ControlFlow::Continue } else { glib::ControlFlow::Break })
@@ -202,11 +197,6 @@ pub fn mat_texture(m: &opencv::core::Mat) -> Option<gdk::Texture> {
     Some(rgb_texture(w, h, d))
 }
 
-/// JPEG/PNG bytes -> texture.
-pub fn bytes_texture(data: &[u8]) -> Option<gdk::Texture> {
-    gdk::Texture::from_bytes(&glib::Bytes::from(data)).ok()
-}
-
 /// Open a URL in the browser, with Wayland flags for Chromium-based browsers.
 pub fn open_browser_url(url: &str) -> bool {
     if url.is_empty() {
@@ -269,11 +259,6 @@ pub fn ask<F: Fn(&str) + 'static>(parent: &impl IsA<gtk::Widget>, d: adw::AlertD
     d.present(Some(parent));
 }
 
-/// Simple OK message.
-pub fn message(parent: &impl IsA<gtk::Widget>, heading: &str, body: &str) {
-    alert(heading, body, &[("ok", &tr("OK"))], None, None).present(Some(parent));
-}
-
 /// Remove all children of a box-like container.
 pub fn clear_box(b: &gtk::Box) {
     while let Some(c) = b.first_child() {
@@ -286,10 +271,6 @@ pub fn clear_rows(g: &adw::PreferencesGroup, rows: &mut Vec<gtk::Widget>) {
     for r in rows.drain(..) {
         g.remove(&r);
     }
-}
-
-pub fn spinner() -> adw::Spinner {
-    adw::Spinner::new()
 }
 
 /// Warning card with an icon and wrapped text.
@@ -346,11 +327,6 @@ impl BadgeOrButton {
         self.widget.append(&self.button);
     }
 
-    pub fn show_both(&self) {
-        clear_box(&self.widget);
-        self.widget.append(&self.badge);
-        self.widget.append(&self.button);
-    }
 }
 
 pub fn switch_row(title: &str, subtitle: &str) -> adw::SwitchRow {

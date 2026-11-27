@@ -231,7 +231,7 @@ impl Job {
 }
 
 /// the one optimize/apply/restore job of this process; pages poll it, it outlives them
-pub static JOB: once_cell::sync::Lazy<Arc<Job>> = once_cell::sync::Lazy::new(|| Arc::new(Job::default()));
+pub static JOB: std::sync::LazyLock<Arc<Job>> = std::sync::LazyLock::new(|| Arc::new(Job::default()));
 
 fn wait(cond: impl Fn() -> bool, timeout: f64, poll: f64) -> bool {
     let end = std::time::Instant::now() + std::time::Duration::from_secs_f64(timeout);

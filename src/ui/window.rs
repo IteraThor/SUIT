@@ -1,6 +1,6 @@
 //! Main application window: header bar with back button, navigation view, toasts, page cache, first-run
 //! privileges prompt, background heal and the post-upgrade repair offer.
-use super::helpers::{alert, ask, message, once, run_async, run_bg};
+use super::helpers::{alert, ask, once, run_async};
 use super::Page;
 use crate::core::i18n::{set_language, tr, trf};
 use crate::core::{privileges, update, upgrade, util};
@@ -527,7 +527,4 @@ impl Win {
         }
     }
 
-    pub fn error_dialog(&self, heading: &str, body: &str) {
-        message(&self.window, heading, body);
-    }
 }

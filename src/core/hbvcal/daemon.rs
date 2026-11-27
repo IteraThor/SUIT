@@ -74,7 +74,6 @@ fn fmt_diff(d: &BTreeMap<String, (i64, i64)>) -> String {
 
 #[derive(Default)]
 pub struct Tracker {
-    pub dev: String,
     pub inode: Option<u64>,
     pub applies: u32,
     /// standard controls this camera refused: not retried every tick
@@ -89,7 +88,7 @@ fn inode(dev: &str) -> Option<u64> {
 
 impl Tracker {
     fn new(dev: &str) -> Tracker {
-        Tracker { dev: dev.into(), inode: inode(dev), ..Default::default() }
+        Tracker { inode: inode(dev), ..Default::default() }
     }
 }
 

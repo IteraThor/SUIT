@@ -184,9 +184,6 @@ pub fn start_unit(unit: &str) -> bool {
 pub fn stop_unit(unit: &str) -> bool {
     unit_action("stop", unit, "replace", Scope::Auto)
 }
-pub fn restart_unit(unit: &str) -> bool {
-    unit_action("restart", unit, "replace", Scope::Auto)
-}
 pub fn start_unit_scoped(unit: &str, scope: Scope) -> bool {
     unit_action("start", unit, "replace", scope)
 }

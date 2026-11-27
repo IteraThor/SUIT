@@ -3,7 +3,7 @@
 //! The automated Darts Scorer installer lives in a private module that the public SUIT does not ship, so
 //! here (as in the public Python build) it reports itself unavailable and Aurora Store is the way in.
 use super::i18n::trf;
-use super::util::{has_cmd, home, run, run_shell, run_with_input, spawn, write_file};
+use super::util::{has_cmd, home, run, run_with_input, spawn, write_file};
 use std::path::{Path, PathBuf};
 
 pub const AURORA_APK_URL: &str = "https://gitlab.com/-/project/6922885/uploads/b9f5d827145461a2195699660545160a/AuroraStore-4.8.3.apk";
@@ -11,11 +11,7 @@ pub const AURORA_APK_URL: &str = "https://gitlab.com/-/project/6922885/uploads/b
 #[derive(Debug, Clone, Default)]
 pub struct WaydroidStatus {
     pub installed: bool,
-    pub initialized: bool,
-    pub aurora: bool,
     pub darts_scorer: bool,
-    pub arm_translation: bool,
-    pub ready: bool,
 }
 
 pub fn is_waydroid_installed() -> bool {
@@ -45,25 +41,10 @@ pub fn is_darts_scorer_installed() -> bool {
     apps_dir().join("waydroid.de.muetzner.dartsscorer.desktop").exists()
 }
 
-pub fn is_arm_translation_installed() -> bool {
-    if Path::new("/var/lib/waydroid/overlay/system/lib/libndk_translation.so").exists() {
-        return true;
-    }
-    run(&["sudo", "-n", "lxc-attach", "-P", "/var/lib/waydroid/lxc", "-n", "waydroid", "--", "getprop", "ro.product.cpu.abilist"], Some(3))
-        .stdout
-        .to_lowercase()
-        .contains("arm")
-}
-
 pub fn get_waydroid_status() -> WaydroidStatus {
     let installed = is_waydroid_installed();
-    let initialized = installed && is_waydroid_initialized();
-    if !initialized {
-        return WaydroidStatus { installed, ..Default::default() };
-    }
-    let aurora = is_aurora_store_installed();
-    let ds = is_darts_scorer_installed();
-    WaydroidStatus { installed, initialized, aurora, darts_scorer: ds, arm_translation: is_arm_translation_installed(), ready: ds || aurora }
+    let darts_scorer = installed && is_waydroid_initialized() && is_darts_scorer_installed();
+    WaydroidStatus { installed, darts_scorer }
 }
 
 pub fn get_system_locale() -> String {
@@ -83,24 +64,6 @@ pub fn get_system_locale() -> String {
 fn session_running() -> bool {
     let s = run(&["waydroid", "status"], Some(10)).stdout;
     s.contains("Session:\tRUNNING") || s.contains("Session: RUNNING")
-}
-
-pub fn install_waydroid(locale: Option<&str>) -> (bool, String) {
-    let loc = locale.map(String::from).unwrap_or_else(get_system_locale);
-    for c in [
-        vec!["sudo", "-n", "dnf", "install", "-y", "waydroid"],
-        vec!["sudo", "-n", "systemctl", "enable", "--now", "waydroid-container"],
-        vec!["sudo", "-n", "waydroid", "init", "-s", "VANILLA", "-c", "https://ota.waydro.id/system", "-v", "https://ota.waydro.id/vendor"],
-    ] {
-        let r = run(&c, None);
-        if !r.ok() {
-            log::error!("Failed installing Waydroid: {:?}: {}", c, r.stderr);
-            return (false, trf("Failed installing Waydroid: {error}", &[("error", &r.stderr.trim())]));
-        }
-    }
-    run(&["sudo", "-n", "waydroid", "prop", "set", "persist.sys.locale", &loc], Some(30));
-    log::info!("Waydroid installed and initialized with locale {}", loc);
-    (true, trf("Waydroid installed and initialized ({loc}).", &[("loc", &loc)]))
 }
 
 pub fn waydroid_debloat_and_seamless() -> (bool, String) {
@@ -180,53 +143,6 @@ pub fn install_aurora_store() -> (bool, String) {
             (false, trf("Failed installing Aurora Store: {error}", &[("error", &e)]))
         }
     }
-}
-
-pub fn full_waydroid_setup() -> (bool, String) {
-    let (ok, msg) = install_waydroid(None);
-    if !ok {
-        return (false, msg);
-    }
-    waydroid_debloat_and_seamless();
-    install_aurora_store();
-    (true, "Waydroid, seamless mode, and Aurora Store installed successfully.".into())
-}
-
-pub fn install_libndk() -> (bool, String) {
-    log::info!("Installing libndk ARM translation layer for Waydroid...");
-    run(&["waydroid", "session", "stop"], Some(30));
-    let dir = std::env::temp_dir().join("waydroid_script");
-    let _ = std::fs::remove_dir_all(&dir);
-    let d = dir.to_string_lossy().to_string();
-    let steps: Vec<Vec<String>> = vec![
-        vec!["git".into(), "clone".into(), "--depth=1".into(), "https://github.com/casualsnek/waydroid_script".into(), d.clone()],
-        vec!["python3".into(), "-m".into(), "venv".into(), format!("{}/venv", d)],
-        vec![format!("{}/venv/bin/pip", d), "install".into(), "-r".into(), format!("{}/requirements.txt", d)],
-        vec!["sudo".into(), "-n".into(), format!("{}/venv/bin/python", d), format!("{}/main.py", d), "install".into(), "libndk".into()],
-    ];
-    for s in &steps {
-        let r = super::util::run_owned(s, Some(1800));
-        if !r.ok() {
-            log::error!("Failed installing libndk ARM translation: {:?}: {}", s, r.stderr);
-            return (false, trf("Failed installing ARM translation: {error}", &[("error", &r.stderr.trim())]));
-        }
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-    run_shell(&format!("sudo -n rm -rf /tmp/libndkunpack {}", home().join(".cache/waydroid-script").display()), Some(60));
-    let r = run(&["sudo", "-n", "systemctl", "restart", "waydroid-container"], Some(120));
-    if !r.ok() {
-        return (false, trf("Failed installing ARM translation: {error}", &[("error", &r.stderr.trim())]));
-    }
-    log::info!("libndk ARM translation installed successfully");
-    (true, "ARM translation (libndk) installed.".into())
-}
-
-pub fn install_darts_scorer(_progress: &dyn Fn(&str, f64)) -> (bool, String) {
-    (false, "Darts Scorer automated installer is not available.".into())
-}
-
-pub fn full_darts_scorer_setup(_progress: &dyn Fn(&str, f64)) -> (bool, String) {
-    (false, "Darts Scorer automated setup is not available.".into())
 }
 
 pub fn ensure_darts_scorer_launcher() -> Option<PathBuf> {

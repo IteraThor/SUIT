@@ -81,15 +81,6 @@ pub fn get_bytes(path: &str, timeout: f64) -> Option<Vec<u8>> {
     r.body_mut().with_config().limit(32 * 1024 * 1024).read_to_vec().ok()
 }
 
-/// POST without body; true when Autodarts answered with a 2xx status.
-pub fn post(path: &str, timeout: f64) -> bool {
-    agent(timeout)
-        .post(&format!("{}{}", AUTODARTS_API, path))
-        .send_empty()
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
-}
-
 /// Start Autodarts' automatic board calibration (it needs one per resolution). True if Autodarts took it.
 pub fn calibrate_board() -> bool {
     agent(4.0).post(&format!("{}/api/config/calibration/auto", AUTODARTS_API)).send_empty().is_ok()

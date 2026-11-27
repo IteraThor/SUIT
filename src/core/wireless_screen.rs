@@ -19,11 +19,14 @@ const DRACUT_CONF: &str = "/etc/dracut.conf.d/90-suit-wireless-screen.conf";
 const COPR_REPO: &str = "/etc/yum.repos.d/_copr:copr.fedorainfracloud.org:lizardbyte:stable.repo";
 const COPR_TEXT: &str = "[copr:copr.fedorainfracloud.org:lizardbyte:stable]\nname=Copr repo for stable owned by lizardbyte\nbaseurl=https://download.copr.fedorainfracloud.org/results/lizardbyte/stable/fedora-$releasever-$basearch/\ntype=rpm-md\nskip_if_unavailable=True\ngpgcheck=1\ngpgkey=https://download.copr.fedorainfracloud.org/results/lizardbyte/stable/pubkey.gpg\nrepo_gpgcheck=0\nenabled=1\nenabled_metadata=1\n";
 const SUNSHINE_UNIT: &str = "app-dev.lizardbyte.app.Sunshine.service";
-const PORTS: [&str; 8] = ["47984/tcp", "47989/tcp", "47990/tcp", "48010/tcp", "47998/udp", "47999/udp", "48000/udp", "48002/udp"];
+/// What Moonlight needs. Not 47990: Sunshine's web UI stays on this PC, where only SUIT uses it.
+const PORTS: [&str; 7] = ["47984/tcp", "47989/tcp", "48010/tcp", "47998/udp", "47999/udp", "48000/udp", "48002/udp"];
+/// Opened by older SUIT versions for the web UI; closed again.
+const OLD_PORTS: [&str; 1] = ["47990/tcp"];
 const API: &str = "https://localhost:47990";
-/// Login of Sunshine's web UI, set by SUIT (local network only).
-pub const WEB_USER: &str = "suit";
-pub const WEB_PASS: &str = "suit";
+/// Login of Sunshine's web UI. The password is random per PC (`web_pass`); older SUIT versions used "suit".
+const WEB_USER: &str = "suit";
+const OLD_WEB_PASS: &str = "suit";
 pub const MOONLIGHT_IOS: &str = "https://apps.apple.com/app/moonlight-game-streaming/id1000551566";
 pub const MOONLIGHT_ANDROID: &str = "https://play.google.com/store/apps/details?id=com.limelight";
 
@@ -487,7 +490,8 @@ fn ports_open() -> bool {
         return true;
     }
     let open = sudo(&["firewall-cmd", "--list-ports"], 10).stdout;
-    PORTS.iter().all(|p| open.split_whitespace().any(|o| o == *p))
+    let is_open = |p: &&str| open.split_whitespace().any(|o| o == *p);
+    PORTS.iter().all(is_open) && !OLD_PORTS.iter().any(is_open)
 }
 
 /// "Check my setup": every part the tablet needs.
@@ -528,6 +532,9 @@ pub fn fix(id: &str, step: &(dyn Fn(&str) + Sync)) -> (bool, String) {
         "sunshine" if !super::util::has_cmd("sunshine") => install_sunshine(step),
         "sunshine" => {
             apply_settings();
+            if web_pass().is_none() {
+                set_web_login();
+            }
             run(&["systemctl", "--user", "enable", SUNSHINE_UNIT], Some(30));
             let ok = user_unit("restart").ok();
             (ok, tr(if ok { "Sunshine restarted." } else { "Sunshine does not start." }))
@@ -558,6 +565,13 @@ pub fn fix(id: &str, step: &(dyn Fn(&str) + Sync)) -> (bool, String) {
 /// Quiet repairs whenever the wizard opens: Sunshine and the watcher run, an old autostart moves to the service.
 pub fn self_repair() {
     let s = status();
+    // older SUIT versions left the web UI open to the network with the login suit/suit
+    if s.sunshine_installed && web_pass().is_none() {
+        log::info!("Wireless Screen: Sunshine's web UI only on this PC, with its own password");
+        apply_settings();
+        firewall_ports(true);
+        set_web_login();
+    }
     if s.sunshine_installed && !unit_enabled(SUNSHINE_UNIT) {
         log::info!("Wireless Screen: enabling Sunshine for the next login");
         user_unit("enable");
@@ -772,7 +786,8 @@ pub fn write_virtual_screen(cfg: &Config) -> (bool, String) {
         log::error!("Wireless Screen setup failed at {}: {}", what, detail);
         (false, trf("Setting up the virtual screen failed: {error}", &[("error", &detail)]))
     };
-    let tmp = std::env::temp_dir().join(EDID_FILE);
+    // private to this user: in the shared /tmp another account could swap the file before sudo copies it
+    let tmp = glib::user_runtime_dir().join(EDID_FILE);
     if let Err(e) = std::fs::write(&tmp, build_edid(cfg.width, cfg.height, cfg.refresh)) {
         return fail("edid", e.to_string());
     }
@@ -824,7 +839,49 @@ fn firewall_ports(add: bool) {
     for p in PORTS {
         sudo(&["firewall-cmd", "--permanent", &format!("--{}-port={}", if add { "add" } else { "remove" }, p)], 20);
     }
+    for p in OLD_PORTS {
+        sudo(&["firewall-cmd", "--permanent", &format!("--remove-port={}", p)], 20);
+    }
     sudo(&["firewall-cmd", "--reload"], 30);
+}
+
+fn web_pass_path() -> PathBuf {
+    home().join(".config/suit/sunshine-web-login")
+}
+
+/// The web UI password SUIT set on this PC (None before SUIT set one).
+fn web_pass() -> Option<String> {
+    read_trim(web_pass_path()).filter(|p| !p.is_empty())
+}
+
+/// Give Sunshine's web UI a new random password that only SUIT knows. Sunshine is stopped meanwhile: it keeps
+/// the login in memory. Paired tablets stay paired.
+fn set_web_login() -> bool {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let pass = super::util::random_password();
+    let was_running = unit_running(SUNSHINE_UNIT);
+    user_unit("stop");
+    let r = run(&["sunshine", "--creds", WEB_USER, &pass], Some(60));
+    let path = web_pass_path();
+    let saved = r.ok()
+        && path.parent().is_some_and(|d| std::fs::create_dir_all(d).is_ok())
+        && std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .and_then(|mut f| f.write_all(pass.as_bytes()))
+            .is_ok();
+    if was_running {
+        user_unit("start");
+    }
+    log::info!("Sunshine web login set: {}", if saved { "ok" } else { "failed" });
+    if !r.ok() {
+        log::error!("sunshine --creds failed: {}", last_line(&r));
+    }
+    saved
 }
 
 fn user_unit(action: &str) -> Output {
@@ -842,7 +899,7 @@ pub fn bitrate(sharp: bool) -> u32 {
 
 /// SUIT's Sunshine settings: KMS capture (GNOME screen sharing waits for a prompt nobody can click on a
 /// tablet), the name Moonlight shows, software x264 tuned for low latency on the LAN, no UPnP, the web UI
-/// only on the LAN, and debug logging so the size the tablet asks for shows in the log.
+/// only on this PC (SUIT pairs through it), and debug logging so the size the tablet asks for shows in the log.
 pub fn sunshine_settings(name: &str, ip: &str, sharp: bool) -> Vec<(&'static str, String)> {
     vec![
         ("capture", "kms".into()),
@@ -852,7 +909,7 @@ pub fn sunshine_settings(name: &str, ip: &str, sharp: bool) -> Vec<(&'static str
         ("sw_tune", "zerolatency".into()),
         ("max_bitrate", bitrate(sharp).to_string()),
         ("upnp", "disabled".into()),
-        ("origin_web_ui_allowed", "lan".into()),
+        ("origin_web_ui_allowed", "pc".into()),
         ("min_log_level", "debug".into()),
     ]
 }
@@ -913,13 +970,9 @@ pub fn install_sunshine(step: &(dyn Fn(&str) + Sync)) -> (bool, String) {
         return fail(sunshine_dir().join("sunshine.conf").display().to_string());
     }
     user_unit("stop");
-    // only a first install sets the web login; the state file also holds the identity tablets paired with
-    let state = std::fs::read_to_string(sunshine_dir().join("sunshine_state.json")).unwrap_or_default();
-    if !state.contains("\"username\"") {
-        let r = run(&["sunshine", "--creds", WEB_USER, WEB_PASS], Some(60));
-        if !r.ok() {
-            return fail(last_line(&r));
-        }
+    // a reinstall keeps the login SUIT already set
+    if web_pass().is_none() && !set_web_login() {
+        return fail(tr("Could not set the Sunshine login."));
     }
     step("Opening the network ports...");
     firewall_ports(true);
@@ -942,12 +995,13 @@ fn api(args: &[&str]) -> serde_json::Value {
 
 /// Like `api`, with a longer wait: Sunshine answers a wrong PIN only after Moonlight gave up (about 15 s).
 fn api_wait(secs: u64, args: &[&str]) -> serde_json::Value {
-    let auth = format!("{}:{}", WEB_USER, WEB_PASS);
+    // the login goes in on stdin: command lines are readable by every account on the PC
+    let auth = format!("user = \"{}:{}\"\n", WEB_USER, web_pass().unwrap_or_else(|| OLD_WEB_PASS.into()));
     let origin = format!("Origin: {}", API);
     let m = secs.to_string();
-    let mut a = vec!["curl", "-sk", "-m", m.as_str(), "-u", &auth, "-H", &origin];
+    let mut a = vec!["curl", "-sk", "-m", m.as_str(), "-K", "-", "-H", &origin];
     a.extend_from_slice(args);
-    serde_json::from_str(&run(&a, Some(secs + 5)).stdout).unwrap_or_default()
+    serde_json::from_str(&super::util::run_with_input(&a, &auth, Some(secs + 5)).stdout).unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1044,6 +1098,7 @@ pub fn remove_everything() -> (bool, String) {
     set_hide_cursor(false);
     let _ = std::fs::remove_dir_all(sunshine_dir());
     let _ = std::fs::remove_file(home().join(".config/suit/cursor-theme.prev"));
+    let _ = std::fs::remove_file(web_pass_path());
     // an enable link left behind when the package went first
     for l in glob::glob(&home().join(".config/systemd/user/*/").join(SUNSHINE_UNIT).to_string_lossy()).map(|g| g.flatten().collect::<Vec<_>>()).unwrap_or_default() {
         let _ = std::fs::remove_file(l);

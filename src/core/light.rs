@@ -1,6 +1,5 @@
 //! Dartboard light control: WLED, Tasmota smart plugs and Shelly relays over their local HTTP APIs.
 use super::http;
-use super::i18n::trf;
 use super::util::{home, read_json, write_file};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -233,49 +232,5 @@ pub fn toggle_light(cfg: Option<&LightConfig>, timeout: f64) -> (bool, bool, Str
             }
         }
         t => (false, false, format!("Unsupported device type: {}", t)),
-    }
-}
-
-/// Reachability and model / version info. (success, message)
-pub fn test_connection(ip: &str, device_type: &str, port: u16, timeout: f64) -> (bool, String) {
-    let ip = ip.trim();
-    if ip.is_empty() {
-        return (false, "IP address cannot be empty".into());
-    }
-    let b = base(ip, port);
-    match device_type {
-        "wled" => match get(&format!("{}/json/info", b), timeout) {
-            Ok(d) => {
-                let mut extra = format!(" ({}, v{}", d["name"].as_str().unwrap_or("WLED"), d["ver"].as_str().unwrap_or(""));
-                if let Some(n) = d["leds"]["count"].as_i64() {
-                    extra += &format!(", {} LEDs", n);
-                }
-                extra += ")";
-                (true, trf("Connected to WLED successfully{extra}", &[("extra", &extra)]))
-            }
-            Err(e) => (false, trf("Connection failed: {error}", &[("error", &e)])),
-        },
-        "tasmota" | "smart_plug" => match get(&format!("{}/cm?cmnd=Status%202", b), timeout) {
-            Ok(d) => {
-                let v = d["StatusFWR"]["Version"].as_str().unwrap_or("");
-                let vs = if v.is_empty() { String::new() } else { format!(" (v{})", v) };
-                (true, trf("Connected to Tasmota Smart Plug{ver_str}", &[("ver_str", &vs)]))
-            }
-            Err(_) => match get(&format!("{}/cm?cmnd=Status", b), timeout) {
-                Ok(d) => {
-                    let n = d["Status"]["DeviceName"].as_str().unwrap_or("Tasmota").to_string();
-                    (true, trf("Connected to {dev_name} Smart Plug", &[("dev_name", &n)]))
-                }
-                Err(e) => (false, trf("Connection failed: {error}", &[("error", &e)])),
-            },
-        },
-        "shelly" => match get(&format!("{}/shelly", b), timeout) {
-            Ok(d) => {
-                let m = d["type"].as_str().unwrap_or("Shelly").to_string();
-                (true, trf("Connected to {model} Smart Plug", &[("model", &m)]))
-            }
-            Err(e) => (false, trf("Connection failed: {error}", &[("error", &e)])),
-        },
-        t => (false, trf("Unsupported device type: {device_type}", &[("device_type", &t)])),
     }
 }

@@ -4,7 +4,6 @@ use super::i18n::{tr, trf};
 use super::util::{has_cmd, home, run, run_with_input, spawn};
 use anyhow::{anyhow, bail, Result};
 use gtk::gio;
-use gtk::gio::prelude::*;
 use gtk::glib::{self, prelude::ToVariant, variant::ObjectPath, Variant, VariantTy};
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
@@ -269,13 +268,6 @@ fn verify_after_restart() -> bool {
     restart_oo7().is_ok() && oo7_login_locked() == Some(false)
 }
 
-fn random_password() -> String {
-    use rand::Rng;
-    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut r = rand::rng();
-    (0..43).map(|_| A[r.random_range(0..A.len())] as char).collect()
-}
-
 /// Make oo7 unlock the login keyring at boot without a typed password (copying items into a fresh keyring
 /// when it cannot simply be switched; the old file is kept in keyrings/suit-backup/).
 pub fn setup_oo7_autounlock() -> (bool, String) {
@@ -299,7 +291,7 @@ fn setup_oo7_inner() -> Result<(bool, String)> {
     let password = match read_oo7_credential() {
         Some(p) => p,
         None => {
-            let p = random_password();
+            let p = super::util::random_password();
             write_oo7_credential(&p)?;
             log::info!("Stored a new keyring password in {}", credential_path().display());
             p

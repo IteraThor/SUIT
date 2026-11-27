@@ -412,8 +412,8 @@ impl Live {
     }
 }
 
-static LIVE: once_cell::sync::Lazy<Mutex<HashMap<String, Arc<Live>>>> =
-    once_cell::sync::Lazy::new(|| Mutex::new(HashMap::new()));
+static LIVE: std::sync::LazyLock<Mutex<HashMap<String, Arc<Live>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn live(dev: &str) -> Arc<Live> {
     LIVE.lock().unwrap().entry(dev.to_string()).or_insert_with(|| Arc::new(Live::new(dev))).clone()

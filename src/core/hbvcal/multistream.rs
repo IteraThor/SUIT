@@ -15,12 +15,9 @@ pub struct WorkerStats {
     pub fps: f64,
     pub dropped: u64,
     pub broken: usize,
-    pub gap_max_ms: f64,
     pub gaps_over_1_5x: usize,
     pub kb_mean: f64,
     pub kb_max: f64,
-    pub mbps: f64,
-    pub frames: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -78,12 +75,9 @@ pub fn run_worker(dev: &str, s: &Settings, w: u32, h: u32, fps: u32, seconds: f6
             fps: (ts.len() - 1) as f64 / span,
             dropped: dropped(&seqs),
             broken: bad,
-            gap_max_ms: dt.iter().cloned().fold(0.0, f64::max) * 1000.0,
             gaps_over_1_5x: dt.iter().filter(|&&d| d > 1.5 / fps as f64).count(),
             kb_mean: mean / 1024.0,
             kb_max: sizes.iter().cloned().fold(0.0, f64::max) / 1024.0,
-            mbps: mean * 8.0 / 1e6 * ts.len() as f64 / span,
-            frames: ts.len(),
         })
     })();
     if !waited {

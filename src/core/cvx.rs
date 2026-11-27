@@ -52,22 +52,6 @@ pub fn project(m: &M3, x: f64, y: f64) -> (f64, f64) {
     (v[0] / v[2], v[1] / v[2])
 }
 
-pub fn m3_to_mat(m: &M3) -> R<Mat> {
-    Mat::from_slice_2d(m)
-}
-
-pub fn mat_to_m3(m: &Mat) -> Option<M3> {
-    let mut d = Mat::default();
-    m.convert_to_def(&mut d, cvc::CV_64F).ok()?;
-    let mut r = [[0.0; 3]; 3];
-    for (i, row) in r.iter_mut().enumerate() {
-        for (j, v) in row.iter_mut().enumerate() {
-            *v = *d.at_2d::<f64>(i as i32, j as i32).ok()?;
-        }
-    }
-    Some(r)
-}
-
 pub fn gray(m: &Mat) -> R<Mat> {
     if m.channels() == 3 {
         let mut g = Mat::default();
@@ -76,12 +60,6 @@ pub fn gray(m: &Mat) -> R<Mat> {
     } else {
         m.try_clone()
     }
-}
-
-pub fn bgr_of_gray(m: &Mat) -> R<Mat> {
-    let mut o = Mat::default();
-    imgproc::cvt_color_def(m, &mut o, imgproc::COLOR_GRAY2BGR)?;
-    Ok(o)
 }
 
 pub fn hsv(m: &Mat) -> R<Mat> {
@@ -168,61 +146,12 @@ pub fn sobel_mag(m: &Mat) -> R<Mat> {
     Ok(mag)
 }
 
-pub fn kernel_ellipse(k: i32) -> R<Mat> {
-    imgproc::get_structuring_element_def(imgproc::MORPH_ELLIPSE, Size::new(k, k))
-}
-
-pub fn dilate(m: &Mat, k: &Mat, it: i32) -> R<Mat> {
-    let mut o = Mat::default();
-    imgproc::dilate(m, &mut o, k, Point::new(-1, -1), it, cvc::BORDER_CONSTANT, imgproc::morphology_default_border_value()?)?;
-    Ok(o)
-}
-
-pub fn erode(m: &Mat, k: &Mat, it: i32) -> R<Mat> {
-    let mut o = Mat::default();
-    imgproc::erode(m, &mut o, k, Point::new(-1, -1), it, cvc::BORDER_CONSTANT, imgproc::morphology_default_border_value()?)?;
-    Ok(o)
-}
-
-pub fn morph(m: &Mat, op: i32, k: &Mat) -> R<Mat> {
-    let mut o = Mat::default();
-    imgproc::morphology_ex_def(m, &mut o, op, k)?;
-    Ok(o)
-}
-
-pub fn circle(m: &mut Mat, c: (i32, i32), r: i32, color: Scalar, thickness: i32) -> R<()> {
-    imgproc::circle(m, Point::new(c.0, c.1), r.max(0), color, thickness, imgproc::LINE_8, 0)
-}
-
 pub fn line(m: &mut Mat, a: (i32, i32), b: (i32, i32), color: Scalar, thickness: i32) -> R<()> {
     imgproc::line(m, Point::new(a.0, a.1), Point::new(b.0, b.1), color, thickness, imgproc::LINE_8, 0)
 }
 
 pub fn rect(m: &mut Mat, x: i32, y: i32, w: i32, h: i32, color: Scalar, thickness: i32, aa: bool) -> R<()> {
     imgproc::rectangle(m, Rect::new(x, y, w, h), color, thickness, if aa { imgproc::LINE_AA } else { imgproc::LINE_8 }, 0)
-}
-
-pub fn marker(m: &mut Mat, c: (i32, i32), color: Scalar, size: i32, thickness: i32, aa: bool) -> R<()> {
-    imgproc::draw_marker(
-        m,
-        Point::new(c.0, c.1),
-        color,
-        imgproc::MARKER_CROSS,
-        size,
-        thickness,
-        if aa { imgproc::LINE_AA } else { imgproc::LINE_8 },
-    )
-}
-
-pub fn text(m: &mut Mat, s: &str, org: (i32, i32), scale: f64, color: Scalar, thickness: i32) -> R<()> {
-    imgproc::put_text(m, s, Point::new(org.0, org.1), imgproc::FONT_HERSHEY_SIMPLEX, scale, color, thickness, imgproc::LINE_AA, false)
-}
-
-pub fn text_size(s: &str, scale: f64, thickness: i32) -> (i32, i32) {
-    let mut base = 0;
-    imgproc::get_text_size(s, imgproc::FONT_HERSHEY_SIMPLEX, scale, thickness, &mut base)
-        .map(|z| (z.width, z.height))
-        .unwrap_or((0, 0))
 }
 
 pub fn bgr(b: f64, g: f64, r: f64) -> Scalar {
@@ -232,12 +161,6 @@ pub fn bgr(b: f64, g: f64, r: f64) -> Scalar {
 pub fn add_weighted(a: &Mat, wa: f64, b: &Mat, wb: f64) -> R<Mat> {
     let mut o = Mat::default();
     cvc::add_weighted(a, wa, b, wb, 0.0, &mut o, -1)?;
-    Ok(o)
-}
-
-pub fn color_map(m: &Mat, map: i32) -> R<Mat> {
-    let mut o = Mat::default();
-    imgproc::apply_color_map(m, &mut o, map)?;
     Ok(o)
 }
 
@@ -282,44 +205,14 @@ pub fn values_f32(m: &Mat) -> R<Vec<f32>> {
     Ok(c.data_typed::<f32>()?.to_vec())
 }
 
-/// Values selected by a mask (non-zero).
-pub fn masked_values(m: &Mat, mask: &Mat) -> R<Vec<f32>> {
-    let v = values_f32(m)?;
-    let mk = if mask.is_continuous() { mask.clone() } else { mask.try_clone()? };
-    let b = mk.data_bytes()?;
-    Ok(v.into_iter().zip(b.iter()).filter(|(_, &k)| k > 0).map(|(v, _)| v).collect())
-}
-
 pub fn percentile(v: &[f32], p: f64) -> f64 {
     let mut s = v.to_vec();
     crate::core::hbvcal::autocal::percentile(&mut s, p)
 }
 
-pub fn mean(v: &[f32]) -> f64 {
-    if v.is_empty() {
-        return 0.0;
-    }
-    v.iter().map(|&x| x as f64).sum::<f64>() / v.len() as f64
-}
-
-pub fn var(v: &[f32]) -> f64 {
-    let m = mean(v);
-    if v.is_empty() {
-        return 0.0;
-    }
-    v.iter().map(|&x| (x as f64 - m).powi(2)).sum::<f64>() / v.len() as f64
-}
-
 pub fn decode_jpeg(data: &[u8]) -> Option<Mat> {
     let m = opencv::imgcodecs::imdecode(&Vector::<u8>::from_slice(data), opencv::imgcodecs::IMREAD_COLOR).ok()?;
     if m.empty() { None } else { Some(m) }
-}
-
-pub fn encode_jpeg(m: &Mat, quality: i32) -> Option<Vec<u8>> {
-    let mut buf = Vector::<u8>::new();
-    let params = Vector::<i32>::from_slice(&[opencv::imgcodecs::IMWRITE_JPEG_QUALITY, quality]);
-    opencv::imgcodecs::imencode(".jpg", m, &mut buf, &params).ok()?;
-    Some(buf.to_vec())
 }
 
 /// BGR mat -> tightly packed RGB bytes (for GdkTexture).

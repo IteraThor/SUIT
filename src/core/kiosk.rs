@@ -314,7 +314,3 @@ pub fn set_autostart(enabled: bool, url: &str, browser: &str, enable_controls: b
 pub fn is_autostart_enabled() -> bool {
     autostart_file().exists()
 }
-
-pub fn is_power_controls_enabled() -> bool {
-    std::fs::read_to_string(autostart_file()).map(|c| c.contains("--load-extension")).unwrap_or(true)
-}

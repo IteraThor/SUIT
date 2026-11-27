@@ -6,8 +6,6 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Default)]
 pub struct UpdateInfo {
     pub has_update: bool,
-    pub current_commit: String,
-    pub remote_commit: String,
     pub commits_behind: u32,
     pub latest_message: String,
     pub error: Option<String>,
@@ -49,7 +47,7 @@ pub fn check_update(project: Option<&Path>) -> UpdateInfo {
         let local = git(&["rev-parse", "--short", "HEAD"])?;
         let remote = git(&["rev-parse", "--short", &remote_ref])?;
         if local == remote {
-            return Ok(UpdateInfo { current_commit: local, remote_commit: remote, ..Default::default() });
+            return Ok(UpdateInfo::default());
         }
         let behind: u32 = git(&["rev-list", "--count", &format!("HEAD..{}", remote_ref)])?.parse().unwrap_or(1);
         // SUIT itself: offer a new commit once CI has published its binary, so the update takes seconds instead
@@ -60,14 +58,12 @@ pub fn check_update(project: Option<&Path>) -> UpdateInfo {
             let published = run_in(&dir, &["bash", "fetch-binary.sh", "--exists", &full], Some(15)).ok();
             if !published && age.map(|a| a < 3600).unwrap_or(false) {
                 log::info!("Update {} waits for its prebuilt binary", remote);
-                return Ok(UpdateInfo { current_commit: local, remote_commit: remote, ..Default::default() });
+                return Ok(UpdateInfo::default());
             }
         }
         let msg = git(&["log", "-1", "--pretty=format:%s", &remote_ref])?;
         Ok(UpdateInfo {
             has_update: behind > 0,
-            current_commit: local,
-            remote_commit: remote,
             commits_behind: behind,
             latest_message: msg,
             error: None,
@@ -106,6 +102,13 @@ pub fn apply_update(project: Option<&Path>) -> (bool, String) {
     // Fast-forward pull with hard reset fallback for rewritten history
     let p = run_in(&dir, &["git", "pull", "--ff-only", "origin", &br], Some(15));
     if !p.ok() {
+        // a hard reset would throw away edits made in this checkout
+        let dirty = run_in(&dir, &["git", "status", "--porcelain", "--untracked-files=no"], Some(10));
+        let files: Vec<&str> = dirty.stdout.lines().filter_map(|l| l.get(3..)).collect();
+        if !dirty.ok() || !files.is_empty() {
+            log::warn!("Update stopped, local changes: {:?} ({})", files, p.stderr.trim());
+            return (false, trf("Update stopped: this copy of SUIT has local changes ({files}). Commit or undo them, then update again.", &[("files", &files.join(", "))]));
+        }
         log::warn!("Fast-forward pull failed, attempting hard reset: {}", p.stderr.trim());
         let r = run_in(&dir, &["git", "reset", "--hard", &format!("origin/{}", br)], Some(15));
         if !r.ok() {

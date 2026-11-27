@@ -27,12 +27,25 @@ fn spawn_failed(e: std::io::Error) -> Output {
 }
 
 /// Run a command and capture its output. `timeout` kills the child when exceeded.
-pub fn run_cmd(mut cmd: Command, timeout: Option<Duration>) -> Output {
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+pub fn run_cmd(cmd: Command, timeout: Option<Duration>) -> Output {
+    run_fed(cmd, None, timeout)
+}
+
+/// [`run_cmd`] with stdin fed from `input`. Feeding and reading run in their own threads, so a child that
+/// writes a lot before it has read all of its input (`tee`) cannot block either side.
+fn run_fed(mut cmd: Command, input: Option<Vec<u8>>, timeout: Option<Duration>) -> Output {
+    use std::io::Write;
+    cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return spawn_failed(e),
     };
+    if let (Some(mut stdin), Some(data)) = (child.stdin.take(), input) {
+        // closing stdin when done tells the child the input has ended
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&data);
+        });
+    }
     let mut out_pipe = child.stdout.take();
     let mut err_pipe = child.stderr.take();
     let out_t = std::thread::spawn(move || {
@@ -83,12 +96,6 @@ pub fn run(args: &[&str], timeout_s: Option<u64>) -> Output {
     run_cmd(c, timeout_s.map(Duration::from_secs))
 }
 
-/// Same as [`run`] with owned arguments.
-pub fn run_owned(args: &[String], timeout_s: Option<u64>) -> Output {
-    let v: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run(&v, timeout_s)
-}
-
 /// Run in a working directory.
 pub fn run_in(dir: &Path, args: &[&str], timeout_s: Option<u64>) -> Output {
     let mut c = Command::new(args[0]);
@@ -103,47 +110,9 @@ pub fn run_shell(script: &str, timeout_s: Option<u64>) -> Output {
 
 /// Run with stdin fed from `input`.
 pub fn run_with_input(args: &[&str], input: &str, timeout_s: Option<u64>) -> Output {
-    use std::io::Write;
     let mut c = Command::new(args[0]);
-    c.args(&args[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = match c.spawn() {
-        Ok(c) => c,
-        Err(e) => return spawn_failed(e),
-    };
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(input.as_bytes());
-    }
-    let deadline = timeout_s.map(|t| Instant::now() + Duration::from_secs(t));
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if deadline.map(|d| Instant::now() >= d).unwrap_or(false) {
-                    let _ = child.kill();
-                    let o = child.wait_with_output();
-                    return o
-                        .map(|o| Output {
-                            code: -1,
-                            stdout: String::from_utf8_lossy(&o.stdout).into(),
-                            stderr: String::from_utf8_lossy(&o.stderr).into(),
-                            timed_out: true,
-                        })
-                        .unwrap_or_else(spawn_failed);
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(_) => break,
-        }
-    }
-    match child.wait_with_output() {
-        Ok(o) => Output {
-            code: o.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&o.stdout).into(),
-            stderr: String::from_utf8_lossy(&o.stderr).into(),
-            timed_out: false,
-        },
-        Err(e) => spawn_failed(e),
-    }
+    c.args(&args[1..]);
+    run_fed(c, Some(input.as_bytes().to_vec()), timeout_s.map(Duration::from_secs))
 }
 
 /// Fire and forget (`subprocess.Popen`).
@@ -221,8 +190,12 @@ pub fn sudo_write(path: &str, content: &str) -> bool {
     run_with_input(&["sudo", "-n", "tee", path], content, Some(20)).ok()
 }
 
-pub fn sleep_s(s: f64) {
-    std::thread::sleep(Duration::from_secs_f64(s.max(0.0)));
+/// 43 random characters from A-Z a-z 0-9 - _ (256 bits): safe in shell words and curl config strings.
+pub fn random_password() -> String {
+    use rand::Rng;
+    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut r = rand::rng();
+    (0..43).map(|_| A[r.random_range(0..A.len())] as char).collect()
 }
 
 pub fn now_s() -> f64 {
@@ -254,8 +227,8 @@ pub fn write_json(p: impl AsRef<Path>, v: &serde_json::Value) -> std::io::Result
 /// Python-style `str.format` with named fields: `fmt("{a} of {b}", &[("a", "1"), ("b", "2")])`.
 /// A Python format spec in the template (`{seconds:.1f}`) is ignored: callers pass the value pre-formatted.
 pub fn fmt(template: &str, args: &[(&str, &dyn std::fmt::Display)]) -> String {
-    static RE: once_cell::sync::Lazy<regex::Regex> =
-        once_cell::sync::Lazy::new(|| regex::Regex::new(r"\{(\w+)(?::[^{}]*)?\}").unwrap());
+    static RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\{(\w+)(?::[^{}]*)?\}").unwrap());
     RE.replace_all(template, |c: &regex::Captures| match args.iter().find(|(k, _)| *k == &c[1]) {
         Some((_, v)) => v.to_string(),
         None => c[0].to_string(),

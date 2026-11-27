@@ -169,11 +169,10 @@ impl Preview {
     }
 }
 
-pub static PREVIEW: once_cell::sync::Lazy<Preview> = once_cell::sync::Lazy::new(Preview::default);
+pub static PREVIEW: std::sync::LazyLock<Preview> = std::sync::LazyLock::new(Preview::default);
 
 #[derive(Debug, Clone)]
 pub struct CalResult {
-    pub device: String,
     pub settings: Settings,
     pub meta: Value,
 }
@@ -211,7 +210,6 @@ pub struct Session<'a> {
     pub homography: Option<Mat>,
     mask: Vec<bool>,
     pub q_before: i64,
-    pub q: i64,
 }
 
 impl<'a> Session<'a> {
@@ -221,7 +219,7 @@ impl<'a> Session<'a> {
         let hm = board::load_homography(device, width, height, None);
         xu.unlock()?;
         let q_before = xu.mem_read(q_addr(&xu, width)?, 1)?[0] as i64;
-        let q = start_clean(&mut cam, &xu, MEASURE_Q, width, height, fps, log)?;
+        start_clean(&mut cam, &xu, MEASURE_Q, width, height, fps, log)?;
         let mask = match &hm {
             Some(h) => {
                 let m = board::board_mask_image(h, height as i32, width as i32, board::BOARD_R)?;
@@ -239,7 +237,7 @@ impl<'a> Session<'a> {
                     .collect()
             }
         };
-        Ok(Session { device: device.into(), w: width, h: height, log, cam, xu, homography: hm, mask, q_before, q })
+        Ok(Session { device: device.into(), w: width, h: height, log, cam, xu, homography: hm, mask, q_before })
     }
 
     pub fn apply(&mut self, s: &Settings, settle: usize) -> io::Result<()> {
@@ -338,7 +336,7 @@ fn uvc_sensor(pairs: &[(&str, i64)], sensor: &[(u32, i64)]) -> Settings {
 
 /// Frame-mean variation at 1 ms exposure; if flickering, pick the mains period that cancels it.
 fn detect_flicker(ses: &mut Session, base: &Settings) -> Result<Value, CalError> {
-    let mut cv_at = |ses: &mut Session, exp: i64, gain: i64| -> Result<f64, CalError> {
+    let cv_at = |ses: &mut Session, exp: i64, gain: i64| -> Result<f64, CalError> {
         ses.apply(&base.merged(&uvc(&[("exposure_time_absolute", exp), ("gain", gain)])), 4)?;
         let fm = ses.frame_means(45)?;
         let mu = fm.iter().sum::<f64>() / fm.len() as f64;
@@ -472,7 +470,7 @@ pub fn calibrate(
         "previous": before.to_json(),
         "board_homography": has_h,
     });
-    Ok(CalResult { device: device.into(), settings: s, meta })
+    Ok(CalResult { settings: s, meta })
 }
 
 pub struct CalibrateAllOpts<'a> {

@@ -10,7 +10,6 @@ use super::xu::Xu;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io;
-use std::path::Path;
 
 /// Per-resolution MJPEG Q bytes in XDATA, per firmware build.
 pub fn q_addr_table(build: &str) -> Option<[(&'static str, u32); 3]> {
@@ -273,13 +272,4 @@ pub fn snapshot(cam: &Camera, xu: Option<&Xu>, width: u32) -> Settings {
         let _ = r;
     }
     s
-}
-
-pub fn save(s: &Settings, path: &Path) -> io::Result<()> {
-    std::fs::write(path, serde_json::to_string_pretty(&s.to_json()).unwrap())
-}
-
-pub fn load(path: &Path) -> io::Result<Settings> {
-    let v: Value = serde_json::from_str(&std::fs::read_to_string(path)?).map_err(io::Error::other)?;
-    Ok(Settings::from_json(&v))
 }

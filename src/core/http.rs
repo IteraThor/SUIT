@@ -58,15 +58,6 @@ pub fn get_json(url: &str, timeout: f64) -> Option<Value> {
     serde_json::from_slice(&get(url, timeout)?).ok()
 }
 
-pub fn get_text(url: &str, timeout: f64) -> Option<String> {
-    String::from_utf8(get(url, timeout)?).ok()
-}
-
-/// True on a 2xx answer.
-pub fn ok(method: &str, url: &str, body: Option<&[u8]>, content_type: Option<&str>, timeout: f64) -> bool {
-    matches!(request(method, url, body, content_type, timeout), Ok((s, _)) if (200..300).contains(&s))
-}
-
 pub fn send_json(method: &str, url: &str, v: &Value, timeout: f64) -> Result<(u16, Vec<u8>), String> {
     request(method, url, Some(v.to_string().as_bytes()), Some("application/json"), timeout)
 }

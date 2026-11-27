@@ -7,7 +7,6 @@ use crate::core::util::home;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
-pub const SHARED_SERIAL: &str = "HB2026070001";
 pub const HBV_USB_ID: &str = "0bdc:2710";
 
 pub type Profiles = Map<String, Value>;

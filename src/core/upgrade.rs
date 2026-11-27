@@ -9,7 +9,6 @@
 use super::i18n::{tr, trf};
 use super::util::{home, read_json, run, run_cmd, run_with_input, write_atomic};
 use gtk::gio;
-use gtk::gio::prelude::*;
 use gtk::glib::{prelude::ToVariant, VariantTy};
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
@@ -17,7 +16,6 @@ use std::process::Command;
 use std::sync::Arc;
 
 const SYSTEM_PYTHON: &str = "/usr/bin/python3";
-const VENV_BASE_PACKAGES: [&str; 3] = ["pip", "setuptools", "wheel"];
 
 fn state_path() -> PathBuf {
     home().join(".config/suit/system_versions.json")
@@ -173,54 +171,6 @@ pub fn venv_built_for(venv: &Path) -> Option<String> {
 pub fn venv_is_stale(venv: &Path) -> bool {
     let Some(b) = venv_built_for(venv) else { return false };
     interpreter_version(&venv.join("bin/python3")).map(|r| r != b).unwrap_or(true)
-}
-
-/// Names of the packages pip installed into a venv (any Python version folder).
-pub fn venv_packages(venv: &Path) -> Vec<String> {
-    let mut names: Vec<String> = glob::glob(&format!("{}/lib/python*/site-packages/*.dist-info", venv.display()))
-        .map(|g| g.flatten().collect::<Vec<_>>())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|i| std::fs::read_to_string(i.join("INSTALLER")).map(|s| s.trim() == "pip").unwrap_or(true))
-        .map(|i| {
-            let fallback = i.file_name().unwrap().to_string_lossy().split('-').next().unwrap_or("").to_string();
-            std::fs::read_to_string(i.join("METADATA"))
-                .ok()
-                .and_then(|m| regex::Regex::new(r"(?m)^Name:\s*(\S+)").unwrap().captures(&m).map(|c| c[1].to_string()))
-                .unwrap_or(fallback)
-        })
-        .filter(|n| !VENV_BASE_PACKAGES.contains(&n.to_lowercase().as_str()))
-        .collect();
-    names.sort_by_key(|n| n.to_lowercase());
-    names.dedup();
-    names
-}
-
-/// Recreate a venv for the current Python and reinstall the packages pip had put into it.
-pub fn rebuild_venv(venv: &Path) -> (bool, String) {
-    let system_site = std::fs::read_to_string(venv.join("pyvenv.cfg"))
-        .map(|c| regex::RegexBuilder::new(r"^include-system-site-packages\s*=\s*true").multi_line(true).case_insensitive(true).build().unwrap().is_match(&c))
-        .unwrap_or(true);
-    let pk = venv_packages(venv);
-    let vs = venv.to_string_lossy().to_string();
-    let mut cmd = vec![SYSTEM_PYTHON, "-m", "venv", "--clear"];
-    if system_site {
-        cmd.push("--system-site-packages");
-    }
-    cmd.push(&vs);
-    let r = run(&cmd, Some(300));
-    if r.code != 0 {
-        return (false, trf("Could not rebuild the Python environment: {error}", &[("error", &last_line(&r))]));
-    }
-    if !pk.is_empty() {
-        let py = venv.join("bin/python3").to_string_lossy().to_string();
-        let mut a = vec![py.as_str(), "-m", "pip", "install", "--quiet", "--disable-pip-version-check"];
-        a.extend(pk.iter().map(|s| s.as_str()));
-        if run(&a, Some(900)).code != 0 {
-            return (true, trf("Python environment rebuilt, but these packages could not be reinstalled: {pkgs}", &[("pkgs", &pk.join(", "))]));
-        }
-    }
-    (true, tr("Python environment rebuilt."))
 }
 
 // --- problem: AutoGlow 2's venv ---
@@ -435,7 +385,6 @@ pub fn find_problems() -> Vec<Problem> {
 pub struct StartupCheck {
     pub problems: Vec<Problem>,
     pub changes: Vec<String>,
-    pub current: Map<String, Value>,
 }
 
 /// Run at SUIT start (background thread). Records the versions when all is well.
@@ -458,7 +407,7 @@ pub fn startup_check() -> StartupCheck {
             problems.iter().map(|p| p.id.as_str()).collect::<Vec<_>>().join(", ")
         );
     }
-    StartupCheck { problems, changes, current }
+    StartupCheck { problems, changes }
 }
 
 pub fn mark_fixed() {

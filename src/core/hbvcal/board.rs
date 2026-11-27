@@ -7,8 +7,6 @@ use std::path::{Path, PathBuf};
 
 pub const BOARD_SIZE: i32 = 1000;
 pub const BOARD_CENTER: (f64, f64) = (500.0, 500.0);
-/// Outer edge of the double ring in the board view, measured on the warped image (px).
-pub const DOUBLE_OUTER_R: f64 = 335.0;
 /// Board area that matters for scoring: playing field plus a margin for darts hitting the double.
 pub const BOARD_R: f64 = 345.0;
 

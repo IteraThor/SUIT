@@ -45,7 +45,6 @@ pub fn friendly_name(pkg: &str) -> Option<(&'static str, &'static str, &'static 
 #[derive(Debug, Clone)]
 pub struct BloatApp {
     pub package: String,
-    pub base: String,
     pub title: String,
     pub description: String,
     pub icon: String,
@@ -83,7 +82,6 @@ pub fn get_installed_bloatware_details(include_all: bool) -> Vec<BloatApp> {
             };
             BloatApp {
                 package: full.iter().find(|f| matches(f, k)).cloned().unwrap_or_else(|| k.to_string()),
-                base: k.into(),
                 title,
                 description: desc,
                 icon,

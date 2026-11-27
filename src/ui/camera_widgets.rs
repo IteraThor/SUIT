@@ -2,7 +2,7 @@
 //! Autodarts status with start / restart / stop.
 use super::helpers::run_async;
 use super::Win;
-use crate::core::hbvcal::{live, oneclick, profiles};
+use crate::core::hbvcal::{oneclick, profiles};
 use crate::core::i18n::{tr, trf};
 use adw::prelude::*;
 use gtk::{gdk, glib, pango};
@@ -57,17 +57,6 @@ pub fn caption(text: &str, css: &[&str], wrap: bool) -> gtk::Label {
         l.add_css_class(c);
     }
     l
-}
-
-/// ● text, coloured by kind (ok / warn / bad / neutral).
-pub fn status_dot(text: &str, kind: &str) -> gtk::Box {
-    let b = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let d = gtk::Label::new(Some("●"));
-    d.add_css_class("camopt-dot");
-    d.add_css_class(&format!("camopt-{}", kind));
-    b.append(&d);
-    b.append(&caption(text, &[], false));
-    b
 }
 
 pub fn set_dot_kind(dot: &gtk::Label, kind: &str) {
@@ -245,10 +234,6 @@ impl CameraStrip {
             Some(s) if ports.contains(&s) => Some(s),
             _ => ports.first().cloned(),
         }
-    }
-
-    pub fn ports(&self) -> Vec<String> {
-        self.ports.borrow().clone()
     }
 
     /// Keeps the cards (and thumbnails) when unchanged.

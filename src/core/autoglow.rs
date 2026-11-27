@@ -727,8 +727,6 @@ fn check_release_update(dir: &Path) -> super::update::UpdateInfo {
         has_update: has,
         commits_behind: has as u32,
         latest_message: if has { format!("v{}", latest) } else { String::new() },
-        current_commit: current,
-        remote_commit: latest,
         error: None,
     }
 }

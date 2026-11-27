@@ -33,18 +33,12 @@ pub enum TargetMode {
 #[derive(Debug, Clone)]
 pub struct FocusAnalysis {
     pub score: f64,
-    pub raw_score: f64,
     pub peak_score: f64,
-    pub peak_raw: f64,
     pub trend: FocusTrend,
     pub target_roi: (i32, i32, i32, i32),
     pub target_name: String,
     pub target_mode: TargetMode,
-    pub bullseye: (i32, i32),
-    pub focal_line_y: i32,
-    pub lighting_state: LightingState,
     pub history: Vec<f64>,
-    pub peak_history_idx: i64,
     pub fps: f64,
 }
 
@@ -69,7 +63,6 @@ pub struct CameraFocusService {
     baseline_max: f64,
     peak_raw: f64,
     peak_norm: f64,
-    peak_history_idx: i64,
     last_sample: Option<Instant>,
     sample_interval: f64,
     fps_tracker: Vec<Instant>,
@@ -101,7 +94,6 @@ impl CameraFocusService {
             baseline_max: 0.0,
             peak_raw: 0.0,
             peak_norm: 0.0,
-            peak_history_idx: -1,
             last_sample: None,
             sample_interval: 0.10,
             fps_tracker: Vec::new(),
@@ -204,10 +196,6 @@ impl CameraFocusService {
         }
     }
 
-    pub fn is_open(&self) -> bool {
-        self.cap.lock().unwrap().is_some()
-    }
-
     /// Release hardware video capture locks.
     pub fn stop_camera(&mut self) {
         if let Some(mut c) = self.cap.lock().unwrap().take() {
@@ -226,18 +214,8 @@ impl CameraFocusService {
         self.baseline_max = 0.0;
         self.peak_raw = 0.0;
         self.peak_norm = 0.0;
-        self.peak_history_idx = -1;
         self.last_sample = None;
         self.accum_zoom = None;
-    }
-
-    /// Reset locked target ROI so the target can be re-selected.
-    pub fn unlock_target(&mut self) {
-        self.locked_target_roi = None;
-        self.custom_roi = None;
-        self.accum_zoom = None;
-        let d = self.current_device.clone();
-        self.detector.unlock_target(d.as_deref());
     }
 
     /// 2.5x magnified crop on the target ROI with temporal smoothing and optional focus peaking (BGR).
@@ -385,15 +363,6 @@ impl CameraFocusService {
             let span = (self.baseline_max - self.baseline_min).max(10.0);
             self.norm_history = self.raw_history.iter().map(|v| self.norm(*v, span)).collect();
             self.peak_norm = if self.baseline_max > self.baseline_min { self.norm(self.peak_raw, span) } else { 0.0 };
-            self.peak_history_idx = if !self.raw_history.is_empty() && self.peak_raw > 0.0 {
-                self.raw_history
-                    .iter()
-                    .position(|v| *v == self.peak_raw)
-                    .map(|i| i as i64)
-                    .unwrap_or(self.raw_history.len() as i64 - 1)
-            } else {
-                -1
-            };
         }
         let span = (self.baseline_max - self.baseline_min).max(10.0);
         let cur = if self.smoothed_raw > 0.0 { self.norm(self.smoothed_raw, span) } else { 0.0 };
@@ -406,18 +375,12 @@ impl CameraFocusService {
         };
         FocusAnalysis {
             score: r1(cur),
-            raw_score: r1(self.smoothed_raw),
             peak_score: r1(self.peak_norm),
-            peak_raw: r1(self.peak_raw),
             trend,
             target_roi: roi,
             target_name: self.target_name.clone(),
             target_mode: self.target_mode,
-            bullseye: bull,
-            focal_line_y: ry + rh / 2,
-            lighting_state: lighting,
             history: self.norm_history.clone(),
-            peak_history_idx: self.peak_history_idx,
             fps: r1(fps),
         }
     }

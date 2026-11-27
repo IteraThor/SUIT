@@ -37,12 +37,6 @@ pub fn score_to_interval(score: f64) -> f64 {
     ((0.80 - n * 0.68) * 1000.0).round() / 1000.0
 }
 
-/// Convert a 0–100 sharpness score into radar ping frequency (300–360 Hz).
-pub fn score_to_freq(score: f64) -> f64 {
-    let n = (score.clamp(40.0, 95.0) - 40.0) / 55.0;
-    ((300.0 + n * 60.0) * 10.0).round() / 10.0
-}
-
 struct Shared {
     muted: bool,
     score: f64,
@@ -115,11 +109,6 @@ impl AudioToneService {
     pub fn is_muted(&self) -> bool {
         self.shared.lock().unwrap().muted
     }
-    pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
-    }
-    /// Kept for API compatibility; the sweet spot plays the harmonic chord.
-    pub fn play_lock_chime(&self) {}
 
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);

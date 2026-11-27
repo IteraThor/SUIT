@@ -3,7 +3,6 @@ use super::http;
 use super::i18n::{tr, trf};
 use super::util::{has_cmd, home, run, run_shell, username, which};
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -81,10 +80,6 @@ pub fn port() -> u16 {
 
 pub fn base_url() -> String {
     format!("http://{}:{}", default_host(), port())
-}
-
-pub fn get_api_url() -> String {
-    format!("{}/api", base_url())
 }
 
 pub fn is_port_open(host: &str, port: u16, timeout: f64) -> bool {
@@ -169,17 +164,6 @@ pub fn save_stored_auth(board_id: &str, api_key: &str, refresh_token: &str) -> b
     true
 }
 
-pub fn unlink_stored_auth() -> bool {
-    if engine_online() {
-        for ep in ["/api/config/reset", "/api/config/auth/reset"] {
-            if http::request("POST", &format!("{}{}", base_url(), ep), Some(b""), None, 0.8).is_ok() {
-                break;
-            }
-        }
-    }
-    save_stored_auth("", "", "")
-}
-
 /// Find the path to the autodarts CLI binary ('ad' or 'autodarts').
 pub fn get_autodarts_cli_binary() -> Option<String> {
     for n in ["ad", "autodarts"] {
@@ -202,189 +186,8 @@ pub fn is_executable(p: &Path) -> bool {
     std::fs::metadata(p).map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0).unwrap_or(false)
 }
 
-// --- V2 Service & Detection Controls ---
-
-pub const SPEEDS: [&str; 5] = ["Very low", "Low", "Default", "High", "Very high"];
-
-pub fn speed_preset(speed: &str) -> Value {
-    let (dt, dk, mt, ms) = match speed {
-        "Very low" => (24, 7, 24, 2.0),
-        "Low" => (20, 5, 20, 3.0),
-        "High" => (12, 3, 12, 5.0),
-        "Very high" => (8, 3, 8, 6.0),
-        _ => (16, 5, 16, 4.0),
-    };
-    json!({"detection": {"threshold": dt, "kernel": dk}, "motion": {"threshold": mt, "scale": ms}})
-}
-
-/// Live patch detection speed sensitivity preset.
-pub fn set_detection_speed(speed: &str) -> bool {
-    patch_engine_config(&speed_preset(speed))
-}
-
-/// Live patch camera standby timeout.
-pub fn set_standby_minutes(minutes: i64) -> bool {
-    patch_engine_config(&json!({"motion": {"standby_minutes": minutes}}))
-}
-
-fn control(method: &str, ep: &str, what: &str) -> bool {
-    if !engine_online() {
-        return false;
-    }
-    match http::request(method, &format!("{}{}", base_url(), ep), Some(b""), None, 2.0) {
-        Ok(_) => true,
-        Err(e) => {
-            log::error!("Failed to {} Autodarts detection: {}", what, e);
-            false
-        }
-    }
-}
-
-pub fn control_detection_start() -> bool {
-    control("PUT", "/api/start", "start")
-}
-pub fn control_detection_stop() -> bool {
-    control("PUT", "/api/stop", "stop")
-}
-pub fn control_detection_reset() -> bool {
-    control("POST", "/api/reset", "reset")
-}
-
-/// Trigger POST /api/config/calibration/auto to run auto calibration across cameras.
-pub fn control_calibrate() -> (bool, String) {
-    if !engine_online() {
-        return (false, "Autodarts engine is offline.".into());
-    }
-    if let Some(sys) = http::get_json(&format!("{}/api/system", base_url()), 1.5) {
-        let blocker = sys["blocker"].as_str().unwrap_or("");
-        let connected = sys["state"]["connected"].as_bool().unwrap_or(false);
-        if blocker == "no-connection" || !connected {
-            return (false, "Board not connected to Autodarts. Re-link your board first.".into());
-        }
-    }
-    match http::request("POST", &format!("{}/api/config/calibration/auto", base_url()), Some(b""), None, 4.0) {
-        Ok((s, _)) if (200..300).contains(&s) => (true, "Calibration started.".into()),
-        Ok((s, b)) => {
-            let m = String::from_utf8_lossy(&b).trim().to_string();
-            (false, trf("Calibration failed: {error}", &[("error", &if m.is_empty() { format!("HTTP {}", s) } else { m })]))
-        }
-        Err(e) => {
-            log::error!("Failed triggering calibration: {}", e);
-            (false, trf("Calibration error: {error}", &[("error", &e)]))
-        }
-    }
-}
-
-// --- Telemetry & Status Parsing ---
-
-pub fn fetch_cams_stats() -> Value {
-    http::get_json(&format!("{}/api/cams/stats", base_url()), 0.8).unwrap_or_else(|| json!({}))
-}
-
 pub fn fetch_engine_config() -> Value {
     http::get_json(&format!("{}/api/config", base_url()), 1.0).unwrap_or_else(|| json!({}))
-}
-
-#[derive(Debug, Clone)]
-pub struct Telemetry {
-    pub online: bool,
-    pub version: String,
-    pub update_available: String,
-    pub state: String,
-    pub connected: bool,
-    pub running: bool,
-    pub event: String,
-    pub num_throws: i64,
-    pub fps: i64,
-    pub cpu_percent: f64,
-    pub memory_mb: f64,
-    pub resolution: String,
-    pub calibrated: bool,
-    pub calibrating: bool,
-    pub motion_state: String,
-    pub cams_count: usize,
-    pub board_id: String,
-    pub has_api_key: bool,
-    pub blocker: String,
-}
-
-/// Fetch live telemetry from Autodarts v2 engine (/api/system).
-pub fn fetch_system_telemetry() -> Telemetry {
-    let (b_id, a_key) = read_stored_auth(None);
-    let mut d = Telemetry {
-        online: false,
-        version: "v2.0.0".into(),
-        update_available: String::new(),
-        state: "Stopped".into(),
-        connected: false,
-        running: false,
-        event: String::new(),
-        num_throws: 0,
-        fps: 0,
-        cpu_percent: 0.0,
-        memory_mb: 0.0,
-        resolution: String::new(),
-        calibrated: false,
-        calibrating: false,
-        motion_state: "waiting".into(),
-        cams_count: 0,
-        board_id: b_id,
-        has_api_key: !a_key.is_empty(),
-        blocker: String::new(),
-    };
-    if !engine_online() {
-        return d;
-    }
-    let Some(s) = http::get_json(&format!("{}/api/system", base_url()), 1.0) else { return d };
-    d.online = true;
-    // 2.1.0+ nests these under "status"; 2.0.x has them at the top level
-    let st_info = &s["status"];
-    let ver = st_info["version"]
-        .as_str()
-        .or_else(|| s["version"].as_str())
-        .unwrap_or("2.0.0")
-        .to_string();
-    d.version = if ver.starts_with('v') { ver } else { format!("v{}", ver) };
-    d.update_available = st_info["updateAvailable"]
-        .as_str()
-        .or_else(|| s["updateAvailable"].as_str())
-        .unwrap_or("")
-        .to_string();
-    d.blocker = s["blocker"].as_str().unwrap_or("").into();
-    let st = &s["state"];
-    d.state = st["status"].as_str().unwrap_or("Running").into();
-    d.connected = st["connected"].as_bool().unwrap_or(false);
-    d.running = st["running"].as_bool().unwrap_or(false);
-    d.event = st["event"].as_str().unwrap_or("").into();
-    d.num_throws = st["numThrows"].as_i64().unwrap_or(0);
-    let stats = &s["stats"];
-    d.fps = stats["fps"].as_f64().unwrap_or(0.0).round() as i64;
-    d.cpu_percent = (stats["cpuPercent"].as_f64().unwrap_or(0.0) * 10.0).round() / 10.0;
-    d.memory_mb = (stats["memoryBytes"].as_f64().unwrap_or(0.0) / (1024.0 * 1024.0) * 10.0).round() / 10.0;
-    let res = &stats["resolution"];
-    if let (Some(w), Some(h)) = (res["width"].as_i64(), res["height"].as_i64()) {
-        if w > 0 && h > 0 {
-            d.resolution = format!("{}x{}", w, h);
-        }
-    }
-    d.calibrated = s["calibration"]["calibrated"].as_bool().unwrap_or(false) || s["calibrated"].as_bool().unwrap_or(false);
-    d.calibrating = s["calibratingCams"].as_i64().unwrap_or(0) > 0;
-    let m = &s["motion"];
-    let t = |k: &str| m[k].as_bool().unwrap_or(false);
-    d.motion_state = if t("isDart") {
-        "dart"
-    } else if t("isHand") {
-        "hand"
-    } else if t("isTakeoutFull") || t("isTakeoutPartial") {
-        "takeout"
-    } else if t("isStable") {
-        "stable"
-    } else {
-        "waiting"
-    }
-    .into();
-    d.cams_count = s["camStats"].as_array().map(|a| a.len()).unwrap_or(0);
-    d
 }
 
 // --- Configuration Reading & Writing ---
@@ -436,7 +239,6 @@ pub struct CamConfig {
     pub fps_max: i64,
     pub auto_distortion: bool,
     pub standby_minutes: i64,
-    pub detection_speed: String,
 }
 
 impl Default for CamConfig {
@@ -450,7 +252,6 @@ impl Default for CamConfig {
             fps_max: 30,
             auto_distortion: false,
             standby_minutes: 15,
-            detection_speed: "Default".into(),
         }
     }
 }
@@ -552,219 +353,6 @@ pub fn save_cam_config(cams: &[String], width: i64, height: i64, fps: i64, auto_
     true
 }
 
-// --- Camera Device & Resolution Discovery ---
-
-/// Format a clean, concise camera label for dropdown UI selectors.
-pub fn format_short_camera_label(card: &str, bus: &str, path: &str) -> String {
-    let mut name = if card.trim().is_empty() { "Camera".to_string() } else { card.trim().to_string() };
-    if name.starts_with("usb-") {
-        name = regex::Regex::new(r"-video-index[0-9]+$").unwrap().replace(&name, "").to_string();
-        name = name.replace("usb-", "").replace('_', " ");
-        name = regex::Regex::new(r"\s+").unwrap().replace_all(&name, " ").trim().to_string();
-    }
-    if name.contains(':') {
-        let parts: Vec<&str> = name.split(':').map(|p| p.trim()).collect();
-        if parts.len() == 2 && parts[0] == parts[1] {
-            name = parts[0].to_string();
-        }
-    }
-    let low = name.to_lowercase();
-    if ["usb camera", "usb 2.0 camera", "usb2.0 camera"].iter().any(|k| low.contains(k)) {
-        name = "USB Cam".into();
-    } else if low == "camera" {
-        name = "Cam".into();
-    } else if name.chars().count() > 18 {
-        name = name.chars().take(16).collect::<String>() + "…";
-    }
-    let mut short = String::new();
-    if !bus.is_empty() {
-        if let Some(m) = regex::Regex::new(r"-([0-9]+(?:\.[0-9]+)*)$").unwrap().captures(bus) {
-            short = m[1].to_string();
-        } else {
-            let b = bus.replace("usb-", "");
-            short = b.chars().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect();
-        }
-    } else if !path.is_empty() {
-        if let Some(m) = regex::Regex::new(r"(video[0-9]+)").unwrap().captures(path) {
-            short = m[1].to_string();
-        }
-    }
-    if short.is_empty() { name } else { format!("{} ({})", name, short) }
-}
-
-#[derive(Debug, Clone)]
-pub struct CamChoice {
-    pub path: String,
-    pub label: String,
-    pub full_name: String,
-}
-
-fn api_devices() -> Option<Vec<Value>> {
-    if !engine_online() {
-        return None;
-    }
-    http::get_json(&format!("{}/api/devices", base_url()), 0.8)?.as_array().cloned()
-}
-
-pub fn get_available_cameras() -> Vec<CamChoice> {
-    let mut cams = vec![CamChoice { path: String::new(), label: "- none -".into(), full_name: "Unassigned".into() }];
-    let mut seen: BTreeSet<String> = [String::new()].into_iter().collect();
-    // 1. Autodarts API /api/devices if online (authoritative source)
-    if let Some(devs) = api_devices() {
-        for d in devs {
-            let path = d["formats"][0]["path"].as_str().unwrap_or("").to_string();
-            let card = d["card"].as_str().unwrap_or("Camera");
-            let bus = d["bus"].as_str().unwrap_or("");
-            let label = format_short_camera_label(card, bus, &path);
-            let full = if bus.is_empty() { card.to_string() } else { format!("{} ({})", card, bus) };
-            if !path.is_empty() && seen.insert(path.clone()) {
-                cams.push(CamChoice { path, label, full_name: full });
-            }
-        }
-        if cams.len() > 1 {
-            return cams;
-        }
-    }
-    // 2. Fallback: system v4l devices when Autodarts is offline
-    for c in super::usb::get_camera_devices() {
-        let p = format!("/dev/{}", c.dev);
-        if seen.insert(p.clone()) {
-            cams.push(CamChoice {
-                label: format_short_camera_label(&c.name, "", &p),
-                full_name: format!("{} ({})", c.name, p),
-                path: p.clone(),
-            });
-            seen.insert(resolve(&p));
-        }
-    }
-    if let Ok(rd) = std::fs::read_dir("/dev/v4l/by-id") {
-        let mut links: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
-        links.sort();
-        for l in links {
-            let n = l.file_name().unwrap().to_string_lossy().to_string();
-            if n.contains("index0") || !["index1", "index2", "index3"].iter().any(|x| n.contains(x)) {
-                let target = resolve(&l.to_string_lossy());
-                let ls = l.to_string_lossy().to_string();
-                if !seen.contains(&target) && !seen.contains(&ls) {
-                    cams.push(CamChoice {
-                        label: format_short_camera_label(&n, "", &target),
-                        full_name: format!("{} ({})", n, target),
-                        path: ls.clone(),
-                    });
-                    seen.insert(ls);
-                    seen.insert(target);
-                }
-            }
-        }
-    }
-    cams
-}
-
-/// Query supported resolutions (w, h) >= 640x480 for a specific camera device.
-pub fn get_camera_supported_resolutions(cam_path: &str) -> BTreeSet<(i64, i64)> {
-    let mut set = BTreeSet::new();
-    if cam_path.trim().is_empty() {
-        return set;
-    }
-    let norm = parse_cam_device(cam_path);
-    let real = resolve(if norm.is_empty() { cam_path } else { &norm });
-    if let Some(devs) = api_devices() {
-        for d in devs {
-            for f in d["formats"].as_array().cloned().unwrap_or_default() {
-                let p = f["path"].as_str().unwrap_or("");
-                let pn = parse_cam_device(p);
-                let pr = resolve(if pn.is_empty() { p } else { &pn });
-                if p == cam_path || p == norm || (!real.is_empty() && (p == real || pr == real || pn == norm)) {
-                    for r in f["resolutions"].as_array().cloned().unwrap_or_default() {
-                        let (w, h) = (r["width"].as_i64().unwrap_or(0), r["height"].as_i64().unwrap_or(0));
-                        if w >= 640 && h >= 480 {
-                            set.insert((w, h));
-                        }
-                    }
-                    if !set.is_empty() {
-                        return set;
-                    }
-                }
-            }
-        }
-    }
-    // 2. direct V4L2 VIDIOC_ENUM_FRAMESIZES on the device
-    for p in [norm.as_str(), cam_path, real.as_str()] {
-        if !p.starts_with("/dev/") {
-            continue;
-        }
-        let Ok(c) = std::ffi::CString::new(p) else { continue };
-        let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_NONBLOCK) };
-        if fd < 0 {
-            continue;
-        }
-        for fmt in [0x47504a4du32, 0x56595559u32] {
-            let mut idx = 0u32;
-            loop {
-                let mut b = [0u8; 44];
-                b[0..4].copy_from_slice(&idx.to_le_bytes());
-                b[4..8].copy_from_slice(&fmt.to_le_bytes());
-                if super::hbvcal::v4l2::ioctl(fd, 0xc02c564a, b.as_mut_ptr()).is_err() {
-                    break;
-                }
-                let t = u32::from_le_bytes(b[8..12].try_into().unwrap());
-                if t == 1 {
-                    let w = u32::from_le_bytes(b[12..16].try_into().unwrap()) as i64;
-                    let h = u32::from_le_bytes(b[16..20].try_into().unwrap()) as i64;
-                    if w >= 640 && h >= 480 {
-                        set.insert((w, h));
-                    }
-                }
-                idx += 1;
-            }
-        }
-        unsafe { libc::close(fd) };
-        if !set.is_empty() {
-            break;
-        }
-    }
-    set
-}
-
-/// Sorted list (largest first) of common resolutions. With cam_paths, requires 3 distinct cameras and returns
-/// their intersection.
-pub fn get_supported_resolutions(cam_paths: Option<&[String]>) -> Vec<(i64, i64)> {
-    let check: Vec<String> = match cam_paths {
-        Some(paths) => {
-            let v: Vec<String> = paths.iter().map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
-            let uniq: BTreeSet<&String> = v.iter().collect();
-            if v.len() < 3 || uniq.len() < 3 {
-                return vec![];
-            }
-            v
-        }
-        None => get_available_cameras().into_iter().map(|c| c.path).filter(|p| !p.is_empty()).collect(),
-    };
-    let mut common: Option<BTreeSet<(i64, i64)>> = None;
-    for p in &check {
-        let s = get_camera_supported_resolutions(p);
-        if s.is_empty() {
-            if cam_paths.is_some() {
-                return vec![];
-            }
-            continue;
-        }
-        common = Some(match common {
-            None => s,
-            Some(c) => c.intersection(&s).cloned().collect(),
-        });
-    }
-    if let Some(c) = common.filter(|c| !c.is_empty()) {
-        return c.into_iter().rev().collect();
-    }
-    if cam_paths.is_some() {
-        return vec![];
-    }
-    let cur = read_cam_config();
-    let cands: BTreeSet<(i64, i64)> = [(cur.width, cur.height), (1920, 1080), (1280, 720), (640, 480)].into_iter().collect();
-    cands.into_iter().rev().collect()
-}
-
 // --- Systemd Service State & Installation ---
 
 pub fn is_service_enabled() -> bool {
@@ -859,11 +447,9 @@ pub fn install_autodarts() -> (bool, String) {
         }
         std::thread::sleep(Duration::from_millis(500));
     }
-    // 4. Run official installer
-    let r = run_shell(
-        &format!("curl -fsSL autodarts.sh | bash -s -- --headless && sudo -n usermod -aG video {} 2>/dev/null || true", user),
-        Some(120),
-    );
+    // 4. Run official installer (https: the script runs with sudo rights; pipefail: a failed download fails)
+    let r = run_shell("set -o pipefail; curl -fsSL https://autodarts.sh | bash -s -- --headless", Some(600));
+    run(&["sudo", "-n", "usermod", "-aG", "video", &user], Some(10));
     if r.code != 0 {
         log::warn!("Installer script returned {}: {}", r.code, r.stderr);
         let e = if r.stderr.trim().is_empty() { tr("Unknown error") } else { r.stderr.trim().to_string() };
@@ -920,7 +506,7 @@ pub fn install_autodarts() -> (bool, String) {
 
 /// Stop, disable service, remove systemd unit and local config/binaries.
 pub fn uninstall_autodarts() -> (bool, String) {
-    let h = home().display().to_string();
+    let h = super::util::shquote(&home().display().to_string());
     let cmd = format!(
         "systemctl --user stop autodarts.service 2>/dev/null || true; \
          systemctl --user disable autodarts.service 2>/dev/null || true; \
@@ -930,14 +516,21 @@ pub fn uninstall_autodarts() -> (bool, String) {
          sudo -n systemctl disable autodarts 2>/dev/null || true; \
          sudo -n rm -f /etc/systemd/system/autodarts.service /etc/systemd/system/autodartsupdater.service; \
          sudo -n systemctl daemon-reload 2>/dev/null || true; \
-         rm -rf {h}/.local/share/autodarts {h}/.local/opt/autodarts {h}/.local/bin/autodarts {h}/.local/bin/ad {h}/.config/autodarts {h}/.local/state/autodarts /usr/local/bin/autodarts /usr/bin/autodarts; \
+         rm -rf {h}/.local/share/autodarts {h}/.local/opt/autodarts {h}/.local/bin/autodarts {h}/.local/bin/ad {h}/.config/autodarts {h}/.local/state/autodarts; \
+         sudo -n rm -f /usr/local/bin/autodarts; \
+         rpm -qf /usr/bin/autodarts >/dev/null 2>&1 || sudo -n rm -f /usr/bin/autodarts; \
          pkill -9 -x autodarts 2>/dev/null || true",
         h = h
     );
-    let r = run_shell(&cmd, Some(15));
+    let r = run_shell(&cmd, Some(30));
     if r.timed_out {
         return (false, "timed out".into());
     }
+    // the steps above ignore their own errors: check what is left
+    if is_autodarts_installed() {
+        log::warn!("Autodarts uninstall left files behind: {}", r.stderr.trim());
+        return (false, tr("Autodarts could not be removed completely."));
+    }
     log::info!("Autodarts uninstallation completed");
-    (true, "Autodarts has been uninstalled.".into())
+    (true, tr("Autodarts has been uninstalled."))
 }
