@@ -9,7 +9,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 /// 5:3, so the German stripes land on whole pixels
-const FLAG_SIZE: (i32, i32) = (25, 15);
+const FLAG_SIZE: (i32, i32) = (20, 12);
 const FLAG_OVERSAMPLE: i32 = 4;
 
 pub struct MenuPage {
@@ -309,52 +309,40 @@ impl MenuPage {
     }
 }
 
-/// English / German flag toggles.
-fn language_switch(win: &Win) -> gtk::Box {
-    let bx = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    bx.set_valign(gtk::Align::Center);
-    bx.set_margin_end(-8); // sits right against the Community button
-    let flags = util::project_dir().join("assets/flags");
-    let mut first: Option<gtk::ToggleButton> = None;
-    for (lang, tip) in [("en", "English"), ("de", "Deutsch")] {
-        let b = gtk::ToggleButton::new();
-        b.add_css_class("flat");
-        b.add_css_class("lang-flag-btn");
-        b.set_valign(gtk::Align::Center);
-        b.set_tooltip_text(Some(tip));
-        // rendered at FLAG_OVERSAMPLE x its size and scaled down, so it stays crisp
-        if let Ok(pb) = gdk_pixbuf::Pixbuf::from_file_at_scale(
-            flags.join(format!("{}.svg", lang)),
-            FLAG_SIZE.0 * FLAG_OVERSAMPLE,
-            FLAG_SIZE.1 * FLAG_OVERSAMPLE,
-            false,
-        ) {
-            #[allow(deprecated)]
-            let tex = gdk::Texture::for_pixbuf(&pb);
-            let pic = gtk::Picture::for_paintable(&tex);
-            pic.set_can_shrink(true);
-            pic.set_size_request(FLAG_SIZE.0, FLAG_SIZE.1);
-            pic.set_halign(gtk::Align::Center);
-            pic.set_valign(gtk::Align::Center);
-            b.set_child(Some(&pic));
-        } else {
-            b.set_label(&lang.to_uppercase());
-        }
-        match &first {
-            Some(f) => b.set_group(Some(f)),
-            None => first = Some(b.clone()),
-        }
-        b.set_active(lang == get_language());
-        let w = win.clone();
-        b.connect_toggled(move |btn| {
-            if btn.is_active() && lang != get_language() {
-                log::info!("Switching UI language to {}", lang);
-                // Rebuild after the toggle signal returns: the rebuild replaces this page
-                let w2 = w.clone();
-                glib::idle_add_local_once(move || w2.set_language(lang));
-            }
-        });
-        bx.append(&b);
+/// One small flag: the language that is not set. Tapping it switches to that language.
+fn language_switch(win: &Win) -> gtk::Button {
+    let (lang, name) = if get_language() == "de" { ("en", "English") } else { ("de", "Deutsch") };
+    let b = gtk::Button::new();
+    b.add_css_class("flat");
+    b.add_css_class("lang-flag-btn");
+    b.set_valign(gtk::Align::Center);
+    b.set_margin_end(-4); // sits close to the Community button
+    b.set_tooltip_text(Some(name));
+    // rendered at FLAG_OVERSAMPLE x its size and scaled down, so it stays crisp
+    if let Ok(pb) = gdk_pixbuf::Pixbuf::from_file_at_scale(
+        util::project_dir().join(format!("assets/flags/{}.svg", lang)),
+        FLAG_SIZE.0 * FLAG_OVERSAMPLE,
+        FLAG_SIZE.1 * FLAG_OVERSAMPLE,
+        false,
+    ) {
+        #[allow(deprecated)]
+        let tex = gdk::Texture::for_pixbuf(&pb);
+        let pic = gtk::Picture::for_paintable(&tex);
+        pic.set_can_shrink(true);
+        pic.set_size_request(FLAG_SIZE.0, FLAG_SIZE.1);
+        // the texture is FLAG_OVERSAMPLE x too big: without the clamp the picture would take that size
+        let clamp = adw::Clamp::builder().maximum_size(FLAG_SIZE.0).tightening_threshold(FLAG_SIZE.0).child(&pic).build();
+        clamp.set_valign(gtk::Align::Center);
+        b.set_child(Some(&clamp));
+    } else {
+        b.set_label(&lang.to_uppercase());
     }
-    bx
+    let w = win.clone();
+    b.connect_clicked(move |_| {
+        log::info!("Switching UI language to {}", lang);
+        // Rebuild after the click signal returns: the rebuild replaces this page
+        let w2 = w.clone();
+        glib::idle_add_local_once(move || w2.set_language(lang));
+    });
+    b
 }

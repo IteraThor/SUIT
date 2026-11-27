@@ -409,21 +409,18 @@ button.update-available-btn {
 button.update-available-btn:hover { background: #f5c211; }
 
 
-/* Language switch flags in the main menu banner */
+/* Language switch in the main menu banner: one small flag of the other language */
 button.lang-flag-btn {
     min-height: 0;
     min-width: 0;
-    padding: 2px 3px;
+    padding: 4px 6px;
     border-radius: 4px;
     background: none;
 }
 button.lang-flag-btn picture {
     border-radius: 2px;
-    opacity: 0.3;
+    opacity: 0.7;
 }
 button.lang-flag-btn:hover picture {
-    opacity: 0.6;
-}
-button.lang-flag-btn:checked picture {
-    opacity: 0.9;
+    opacity: 1;
 }
